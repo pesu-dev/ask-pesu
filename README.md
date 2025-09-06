@@ -3,7 +3,7 @@ title: Ask PESU [DEV]
 short_description: "A RAG pipeline for question answering about PES University"
 emoji: 🦀
 colorFrom: blue
-colorTo: orange
+colorTo: indigo
 sdk: docker
 python_version: 3.12
 app_file: app/app.py
