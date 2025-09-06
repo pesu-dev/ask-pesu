@@ -76,7 +76,7 @@ class RetrievalAugmentedGenerator:
     @staticmethod
     def format_docs(docs: list[Document]) -> str:
         """Format the retrieved documents into a single string."""
-        return "\n\n".join(f"{doc.metatata['url']}\n{doc.page_content}" for doc in docs)
+        return "\n\n".join(f"{doc.metadata['url']}\n{doc.page_content}" for doc in docs)
 
     async def generate(self, query: str) -> str:
         """Generate a response for the given query using the RAG chain."""

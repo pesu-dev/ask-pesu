@@ -8,6 +8,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 import pytz
+import torch
 import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -18,10 +19,17 @@ from app.rag import RetrievalAugmentedGenerator
 
 
 @asynccontextmanager
-async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Lifespan event handler for startup and shutdown events."""
     # Startup
     logging.info("askPESU API startup")
+
+    # Initialize the RAG engine
+    global rag
+    config_path = getattr(app.state, "config_path", "conf/config.yaml")
+    rag = RetrievalAugmentedGenerator(config_path)
+    logging.info("RAG pipeline initialized...")
+
     yield
     # Shutdown
     logging.info("askPESU API shutdown.")
@@ -48,6 +56,8 @@ app = FastAPI(
         },
     ],
 )
+IST = pytz.timezone("Asia/Kolkata")  # Indian Standard Time timezone
+rag: RetrievalAugmentedGenerator | None = None  # Global variable to hold the RAG instance
 
 
 @app.exception_handler(Exception)
@@ -85,7 +95,7 @@ async def ask(payload: RequestModel) -> JSONResponse:
         timestamp=datetime.datetime.now(IST),
         latency=latency,
     )
-    return JSONResponse(status_code=200, content=response.model_dump(exclude_none=True))
+    return JSONResponse(status_code=200, content=response.model_dump(mode="json", exclude_none=True))
 
 
 @app.get(
@@ -138,10 +148,8 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    # Initialize the RAG engine
-    global rag
-    rag = RetrievalAugmentedGenerator(args.config)
-    logging.info("RAG pipeline initialized...")
+    # Store config path in app state for lifespan handler
+    app.state.config_path = args.config
 
     # Set up logging configuration
     logging_level = logging.DEBUG if args.debug else logging.INFO
@@ -156,6 +164,17 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    IST = pytz.timezone("Asia/Kolkata")  # Indian Standard Time timezone
-    rag: RetrievalAugmentedGenerator | None = None  # Global variable to hold the RAG instance
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    logging.info(f"Using device: {device}")
+    if device.type == "cuda":
+        logging.info(f"CUDA version: {torch.version.cuda}")
+        logging.info(f"Number of GPUs: {torch.cuda.device_count()}")
+        for i in range(torch.cuda.device_count()):
+            logging.info(f"GPU {i} name: {torch.cuda.get_device_name(i)}")
+            logging.info(f"\tGPU {i} memory: {torch.cuda.get_device_properties(i).total_memory / 1024**3:.2f} GB")
+            logging.info(f"\tGPU {i} memory allocated: {torch.cuda.memory_allocated(i) / 1024**3:.2f} GB")
+            logging.info(f"\tGPU {i} memory reserved: {torch.cuda.memory_reserved(i) / 1024**3:.2f} GB")
+        torch.set_float32_matmul_precision("high")
+    else:
+        logging.info("Running without GPU acceleration")
     main()
