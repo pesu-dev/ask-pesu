@@ -1,0 +1,46 @@
+name: Docker Image Build
+
+on:
+  push:
+    branches-ignore:
+      - main
+      - dev
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get short commit hash
+        id: vars
+        run: echo "tag=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Build the Docker image
+        run: docker build . --tag ask-pesu
+
+      - name: Spawn a container
+        run: docker run --name ask-pesu -d -p 7806:7806 ask-pesu
+
+      - name: Wait for the container to be ready
+        run: sleep 300
+
+      - name: Test container HTTP response
+        run: |
+          RESPONSE=$(curl --fail --max-time 10 http://localhost:7806/health || echo "fail")
+          if [ "$RESPONSE" = "fail" ]; then
+          echo "❌ Container did not respond."
+          docker logs ask-pesu
+          exit 1
+          fi
+          echo "✅ Container is responsive."
+
+      - name: Stop the container
+        run: |
+          docker stop ask-pesu
