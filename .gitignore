@@ -1,0 +1,15 @@
+.idea/
+.vscode/
+__pycache__/
+.pytest_cache/
+*.log
+.venv
+pyrightconfig.json
+*.bru
+bruno.json
+.coverage
+.env
+.uv/
+.ruff_cache/
+*.csv
+*.png
