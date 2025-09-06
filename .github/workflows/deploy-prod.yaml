@@ -61,7 +61,7 @@ jobs:
       - name: Push to hub
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        run: git push https://pesu-dev:$HF_TOKEN@huggingface.co/spaces/pesu-dev/ask-pesu-dev main
+        run: git push https://pesu-dev:$HF_TOKEN@huggingface.co/spaces/pesu-dev/askpesu-dev main
 
   # Deploy to Production
   deploy-production:
@@ -84,7 +84,7 @@ jobs:
       - name: Push to hub
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        run: git push https://pesu-dev:$HF_TOKEN@huggingface.co/spaces/pesu-dev/ask-pesu main
+        run: git push https://pesu-dev:$HF_TOKEN@huggingface.co/spaces/pesu-dev/askpesu main
 
       - name: Deployment Summary
         run: |
