@@ -6,11 +6,11 @@ import yaml
 from dotenv import load_dotenv
 from langchain.chat_models import init_chat_model
 from langchain.retrievers.multi_query import MultiQueryRetriever
-from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_core.documents.base import Document
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnablePassthrough
+from langchain_huggingface.embeddings import HuggingFaceEmbeddings
 from langchain_qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
 
