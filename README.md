@@ -33,20 +33,17 @@ tags:
 [![Lint](https://github.com/pesu-dev/ask-pesu/actions/workflows/lint.yaml/badge.svg)](https://github.com/pesu-dev/ask-pesu/actions/workflows/lint.yaml)
 [![Deploy](https://github.com/pesu-dev/ask-pesu/actions/workflows/deploy-prod.yaml/badge.svg)](https://github.com/pesu-dev/ask-pesu/actions/workflows/deploy-prod.yaml)
 
-[![Docker Automated build](https://img.shields.io/docker/automated/aditeyabaral/pesu-auth?logo=docker)](https://hub.docker.com/r/aditeyabaral/pesu-auth/builds)
-[![Docker Image Version (tag)](https://img.shields.io/docker/v/aditeyabaral/pesu-auth/latest?logo=docker&label=build%20commit)](https://hub.docker.com/r/aditeyabaral/pesu-auth/tags)
-[![Docker Image Size (tag)](https://img.shields.io/docker/image-size/aditeyabaral/pesu-auth/latest?logo=docker)](https://hub.docker.com/r/aditeyabaral/pesu-auth)
 
-A RAG Pipeline to answer questions based on PESU.
+A RAG Pipeline based API to answer questions based on PESU.
 
 The API is secure and protects user privacy by not storing any user credentials. It only validates credentials and
 returns the user's profile information. No personal data is stored.
 
-## AskPESU LIVE Deployment
+## AskPESU API LIVE Deployment
 
 * You can access the AskPESU API endpoints [here](https://huggingface.co/spaces/pesu-dev/askpesu-dev).
 
-## How to run AskPESU locally
+## How to run the AskPESU API locally
 
 Running AskPESU locally is simple. Clone the repository and follow the steps below to get started.
 
@@ -58,7 +55,7 @@ following commands to start the API.
 1. Build the Docker image either from the source code.
 
     ```bash
-    docker build . --tag ask-pesu
+    docker run --env-file .env -p 7860:7860 ask-pesu
     ```
 
 2. Access the API at `http://localhost:5000/`
@@ -83,83 +80,55 @@ dependencies.
 
 3. Access the API as previously mentioned on `http://localhost:7860/`
 
-## How to use the PESUAuth API
+## How to use the AskPESU API
 
-The API provides multiple endpoints for authentication, documentation, and monitoring.
+The API provides multiple endpoints for question answering and health checks.
 
-| **Endpoint**    | **Method** | **Description**                                        |
-|-----------------|------------|--------------------------------------------------------|
-| `/`             | `GET`      | Serves the interactive API documentation (Swagger UI). |
-| `/authenticate` | `POST`     | Authenticates a user using their PESU credentials.     |
-| `/health`       | `GET`      | A health check endpoint to monitor the API's status.   |
-| `/readme`       | `GET`      | Redirects to the project's official GitHub repository. |
 
-### `/authenticate`
+| **Endpoint** | **Method** | **Description** |
+|--------------|------------|------------------------------------------------|
+| `/` | `GET` | Serves the frontend |
+| `/ask` | `POST` | Answers questions about PES University using a RAG pipeline. |
+| `/health` | `GET` | A health check endpoint to monitor the API's status. |
 
-You can send a request to the `/authenticate` endpoint with the user's credentials and the API will return a JSON
-object, with the user's profile information if requested.
+### `/ask`
+
+You can send a request to the `/ask` endpoint with a user's query about PES University, and the API will return an answer generated using the RAG pipeline.
 
 #### Request Parameters
 
-| **Parameter** | **Optional** | **Type**    | **Default** | **Description**                                                                                 |
-|---------------|--------------|-------------|-------------|-------------------------------------------------------------------------------------------------|
-| `username`    | No           | `str`       |             | The user's SRN or PRN                                                                           |
-| `password`    | No           | `str`       |             | The user's password                                                                             |
-| `profile`     | Yes          | `boolean`   | `False`     | Whether to fetch profile information                                                            |
-| `fields`      | Yes          | `list[str]` | `None`      | Which fields to fetch from the profile information. If not provided, all fields will be fetched |
+| **Parameter** | **Optional** | **Type** | **Default** | **Description** |
+|---------------|--------------|----------|-------------|-----------------|
+| `query`       | No           | `str`    |             | The user's input question for the chatbot.              |
 
 #### Response Object
 
-On authentication, it returns the following parameters in a JSON object. If the authentication was successful and
-profile data was requested, the response's `profile` key will store a dictionary with a user's profile information.
-**On an unsuccessful sign-in, this field will not exist**.
+On success, returns the following parameters in a JSON object.
 
-| **Field**   | **Type**        | **Description**                                                          |
-|-------------|-----------------|--------------------------------------------------------------------------|
-| `status`    | `boolean`       | A flag indicating whether the overall request was successful             |
-| `profile`   | `ProfileObject` | A nested map storing the profile information, returned only if requested |
-| `message`   | `str`           | A message that provides information corresponding to the status          |
-| `timestamp` | `datetime`      | A timezone offset timestamp indicating the time of authentication        |
-
-##### `ProfileObject`
-
-This object contains the user's profile information, which is returned only if the `profile` parameter is set to `True`.
-If the authentication fails, this field will not be present in the response.
-
-| **Field**     | **Description**                                        |
-|---------------|--------------------------------------------------------|
-| `name`        | Name of the user                                       |
-| `prn`         | PRN of the user                                        |
-| `srn`         | SRN of the user                                        |
-| `program`     | Academic program that the user is enrolled into        |
-| `branch`      | Complete name of the branch that the user is pursuing  |
-| `semester`    | Current semester that the user is in                   |
-| `section`     | Section of the user                                    |
-| `email`       | Email address of the user registered with PESU         |
-| `phone`       | Phone number of the user registered with PESU          |
-| `campus_code` | The integer code of the campus (1 for RR and 2 for EC) |
-| `campus`      | Abbreviation of the user's campus name                 |
+| **Field**   | **Type**   | **Description**                                                        |
+|-------------|------------|------------------------------------------------------------------------|
+| `status`    | `boolean`  | A flag indicating whether the request was successful                   |
+| `message`   | `str`      | A message describing the result                                        |
+| `answer`    | `str`      | The answer generated for the user's query                              |
+| `timestamp` | `string`   | A timezone offset timestamp indicating when the answer was generated   |
+| `latency`   | `float`    | Time taken (in seconds) to generate the answer                        |
 
 ### `/health`
 
-This endpoint can be used to check the health of the API. It's useful for monitoring and uptime checks. This endpoint
-does not take any request parameters.
+This endpoint can be used to check the health of the API. It's useful for monitoring and uptime checks. This endpoint does not take any request parameters.
 
 #### Response Object
 
-| **Field** | **Type**   | **Description**                                                   |
-|-----------|------------|-------------------------------------------------------------------|
-| `status`  | `str`      | `true` if healthy, `false` if there was an error                  |
-| `message` | `str`      | "ok" if healthy, error message otherwise                          |
-| `timestamp` | `string` | A timezone offset timestamp indicating the time of authentication |
+| **Field**   | **Type**   | **Description**                                                   |
+|-------------|------------|-------------------------------------------------------------------|
+| `status`    | `boolean`  | `true` if healthy, `false` if there was an error                  |
+| `message`   | `str`      | "ok" if healthy, error message otherwise                          |
+| `timestamp` | `string`   | A timezone offset timestamp indicating the time of the health check|
 
-### `/readme`
 
-This endpoint redirects to the project's official GitHub repository. This endpoint does not take any request parameters.
+### Integrating your application with the AskPESU API
 
-### Integrating your application with the PESUAuth API
-
-Here are some examples of how you can integrate your application with the PESUAuth API using Python and cURL.
+Here are some examples of how you can integrate your application with the AskPESU API using Python and cURL.
 
 #### Python
 
@@ -169,12 +138,10 @@ Here are some examples of how you can integrate your application with the PESUAu
 import requests
 
 data = {
-    "username": "your SRN or PRN here",
-    "password": "your password here",
-    "profile": True,  # Optional, defaults to False
+    "query": "What is bootstrap at PES University?"
 }
 
-response = requests.post("http://localhost:5000/authenticate", json=data)
+response = requests.post("http://localhost:7860/ask", json=data)
 print(response.json())
 ```
 
@@ -183,21 +150,10 @@ print(response.json())
 ```json
 {
   "status": true,
-  "profile": {
-    "name": "Johnny Blaze",
-    "prn": "PES1201800001",
-    "srn": "PES1201800001",
-    "program": "Bachelor of Technology",
-    "branch": "Computer Science and Engineering",
-    "semester": "NA",
-    "section": "NA",
-    "email": "johnnyblaze@gmail.com",
-    "phone": "1234567890",
-    "campus_code": 1,
-    "campus": "RR"
-  },
-  "message": "Login successful.",
-  "timestamp": "2024-07-28 22:30:10.103368+05:30"
+  "message": "Answer generated successfully.",
+  "answer": "Bootstrap at PES University is a week-long (typically 5-day) series of activities for freshers, usually held before regular classes commence. Its main purpose is to help students socialize, make new friends, and network with batchmates and seniors. It also allows them to explore various academic branches through simple and engaging activities.",
+  "timestamp": "2024-07-28T22:30:10.103368+05:30",
+  "latency": 1.234
 }
 ```
 
@@ -206,25 +162,26 @@ print(response.json())
 ##### Request
 
 ```bash
-curl -X POST http://localhost:5000/authenticate \
+curl -X POST http://localhost:7860/ask \
 -H "Content-Type: application/json" \
 -d '{
-    "username": "your SRN or PRN here",
-    "password": "your password here"
+    "query": "What is bootstrap at PES University?"
 }'
 ```
 
-#### Response
+##### Response
 
 ```json
 {
   "status": true,
-  "message": "Login successful.",
-  "timestamp": "2024-07-28 22:30:10.103368+05:30"
+  "message": "Answer generated successfully.",
+  "answer": "Bootstrap at PES University is a week-long (typically 5-day) series of activities for freshers, usually held before regular classes commence. Its main purpose is to help students socialize, make new friends, and network with batchmates and seniors. It also allows them to explore various academic branches through simple and engaging activities.",
+  "timestamp": "2024-07-28T22:30:10.103368+05:30",
+  "latency": 1.234
 }
 ```
 
-## Contributing to PESUAuth
+## Contributing to AskPESU
 
 Made with ❤️ by
 
