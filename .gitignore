@@ -2,6 +2,7 @@
 .vscode/
 __pycache__/
 .pytest_cache/
+.DS_Store
 *.log
 .venv
 pyrightconfig.json
@@ -13,3 +14,4 @@ bruno.json
 .ruff_cache/
 *.csv
 *.png
+.next/
