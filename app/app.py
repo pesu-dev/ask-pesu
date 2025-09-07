@@ -11,7 +11,8 @@ import pytz
 import torch
 import uvicorn
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.docs import ask_docs, health_docs
 from app.models import RequestModel, ResponseModel
@@ -52,6 +53,11 @@ app = FastAPI(
         },
     ],
 )
+
+# These paths are relative to the app.py file
+DIST_DIR="/out"
+app.mount("/static", StaticFiles(directory=DIST_DIR), name="static")
+
 IST = pytz.timezone("Asia/Kolkata")  # Indian Standard Time timezone
 rag: RetrievalAugmentedGenerator | None = None  # Global variable to hold the RAG instance
 
@@ -68,6 +74,10 @@ async def unhandled_exception_handler(_request: Request, _exc: Exception) -> JSO
             "timestamp": datetime.datetime.now(IST).isoformat(),
         },
     )
+
+@app.get("/")
+async def homepage():
+    return FileResponse(f"{DIST_DIR}/index.html")
 
 
 @app.post(

@@ -1,25 +1,45 @@
+# =========================
+# Stage 1: Build frontend
+# =========================
+FROM node:24.5.0-alpine AS frontend-builder
+
+RUN mkdir /frontend
+
+# Copy package files and install dependencies
+COPY frontend/package*.json ./
+# RUN npm install
+
+# Copy the rest of the frontend source
+COPY frontend/ ./
+
+# Build the frontend (Next.js with output: "export")
+# RUN npm run build && ls -l out
+
+# Test
+RUN mkdir /frontend/testdir && echo "hello from testdir" > /frontend/testdir/hello.txt
+
+# =========================
+# Stage 2: Python backend
+# =========================
 FROM python:3.12-slim-bookworm
 
-# Copy the app and config files
+# Copy backend code and requirements
 COPY app /app
 COPY conf /conf
 COPY requirements.txt /requirements.txt
 
-# Copy .env if it exists
+# Copy .env if exists
 COPY .env* /.env
 
-# Set Hugging Face cache directory
-RUN mkdir -p /app/.cache/huggingface
-RUN chmod -R 777 /app/.cache
-ENV HF_HOME=/app/.cache/huggingface
+# Install Python dependencies
+# RUN pip install --no-cache-dir -r requirements.txt
 
-# Set Torch cache directory
-ENV TORCHINDUCTOR_CACHE_DIR=/tmp/torchinductor_cache
+# Copy the frontend build output from the frontend-builder stage into /out
+# COPY --from=frontend-builder /frontend/out/. /out/
+COPY --from=frontend-builder /frontend/testdir /testdir
 
-# Add fake user entry so getpass.getuser() works
-RUN echo "user:x:1000:1000:user:/home/user:/bin/bash" >> /etc/passwd
+# Expose port
+EXPOSE 7860
 
-# Install dependencies
-RUN pip install -r requirements.txt
-
+# Run FastAPI
 CMD ["python", "-m", "app.app"]
