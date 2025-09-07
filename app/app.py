@@ -47,10 +47,6 @@ app = FastAPI(
             "description": "Operations related to generating responses from the chatbot.",
         },
         {
-            "name": "Documentation",
-            "description": "Render the README and other developer-facing docs.",
-        },
-        {
             "name": "Monitoring",
             "description": "Health checks and other monitoring endpoints.",
         },
