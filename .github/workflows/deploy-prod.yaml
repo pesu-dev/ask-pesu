@@ -52,6 +52,7 @@ jobs:
         with:
           fetch-depth: 0
           lfs: true
+          ref: main
 
       - name: Set up git identity
         run: |
@@ -61,7 +62,7 @@ jobs:
       - name: Push to hub
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        run: git push https://pesu-dev:$HF_TOKEN@huggingface.co/spaces/pesu-dev/askpesu-dev main --force
+        run: git push https://pesu-dev:$HF_TOKEN@huggingface.co/spaces/pesu-dev/askpesu-dev main:main --force
 
   # Deploy to Production
   deploy-production:
@@ -75,6 +76,7 @@ jobs:
         with:
           fetch-depth: 0
           lfs: true
+          ref: main
 
       - name: Set up git identity
         run: |
@@ -84,7 +86,7 @@ jobs:
       - name: Push to hub
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        run: git push https://pesu-dev:$HF_TOKEN@huggingface.co/spaces/pesu-dev/askpesu main --force
+        run: git push https://pesu-dev:$HF_TOKEN@huggingface.co/spaces/pesu-dev/askpesu main:main --force
 
       - name: Deployment Summary
         run: |

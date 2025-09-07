@@ -23,6 +23,7 @@ jobs:
         with:
           fetch-depth: 0
           lfs: true
+          ref: dev
 
       - name: Set up git identity
         run: |
