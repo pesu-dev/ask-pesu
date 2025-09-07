@@ -1,0 +1,96 @@
+name: Deploy to Production
+
+on:
+  workflow_dispatch:
+
+jobs:
+  # Sync dev branch to main before deployment
+  sync-dev-to-main:
+    runs-on: ubuntu-latest
+    if: ${{ contains(fromJson(vars.PROD_DEPLOYMENT_ALLOWED_USERS), github.actor) }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch all branches
+        run: |
+          git fetch origin dev
+          git fetch origin main
+
+      - name: Checkout main branch
+        run: git checkout main
+
+      - name: Merge dev into main
+        run: |
+          git merge --ff-only origin/dev || {
+            echo "❌ Fast-forward merge failed. Manual conflict resolution required."
+            echo "Please ensure dev branch is ahead of main with no conflicts."
+            git merge --abort
+            exit 1
+          }
+
+      - name: Push updated main branch
+        run: git push origin main
+
+  # Deploy to staging environment
+  deploy-staging:
+    runs-on: ubuntu-latest
+    needs: [sync-dev-to-main]
+    if: ${{ contains(fromJson(vars.PROD_DEPLOYMENT_ALLOWED_USERS), github.actor) }}
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          lfs: true
+          ref: main
+
+      - name: Set up git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Push to hub
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: git push https://pesu-dev:$HF_TOKEN@huggingface.co/spaces/pesu-dev/askpesu-dev main:main --force
+
+  # Deploy to Production
+  deploy-production:
+    runs-on: ubuntu-latest
+    needs: [sync-dev-to-main, deploy-staging]
+    if: ${{ contains(fromJson(vars.PROD_DEPLOYMENT_ALLOWED_USERS), github.actor) }}
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          lfs: true
+          ref: main
+
+      - name: Set up git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Push to hub
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: git push https://pesu-dev:$HF_TOKEN@huggingface.co/spaces/pesu-dev/askpesu main:main --force
+
+      - name: Deployment Summary
+        run: |
+          echo "🎉 All deployments completed successfully!"
+          echo "✅ Branch sync: dev → main"
+          echo "✅ Staging: deployed"
+          echo "✅ Production: deployed"

@@ -1,0 +1,40 @@
+name: Docker Container Build
+
+on:
+  workflow_run:
+    workflows: [ "Pre-Commit Checks" ]
+    types:
+      - completed
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'dev' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Get short commit hash
+        id: vars
+        run: echo "tag=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Build the Docker image
+        run: docker build . --tag ask-pesu
+      - name: Spawn a container
+        run: |
+          docker run --name ask-pesu -d -p 7860:7860 \
+            -e QDRANT_API_KEY="${{ secrets.QDRANT_API_KEY }}" \
+            -e QDRANT_URL="${{ secrets.QDRANT_URL }}" \
+            -e GEMINI_API_KEY="${{ secrets.GEMINI_API_KEY }}" \
+            ask-pesu
+      - name: Wait for the container to be ready
+        run: |
+          for i in {1..60}; do
+            if curl --silent http://localhost:7860/health > /dev/null; then
+              echo "✅ Service is up!"
+              exit 0
+            fi
+            echo "⏳ Waiting for service..."
+            sleep 15
+          done
+          echo "❌ Service did not start in time."
+          exit 1
+      - name: Stop the container
+        run: docker stop ask-pesu
