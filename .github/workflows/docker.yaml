@@ -24,17 +24,17 @@ jobs:
             -e QDRANT_URL="${{ secrets.QDRANT_URL }}" \
             -e GEMINI_API_KEY="${{ secrets.GEMINI_API_KEY }}" \
             ask-pesu
-      # - name: Wait for the container to be ready
-      #   run: |
-      #     for i in {1..30}; do
-      #       if curl --silent http://localhost:7806/health > /dev/null; then
-      #         echo "✅ Service is up!"
-      #         exit 0
-      #       fi
-      #       echo "⏳ Waiting for service..."
-      #       sleep 10
-      #     done
-      #     echo "❌ Service did not start in time."
-      #     exit 1
-      # - name: Stop the container
-      #   run: docker stop ask-pesu
+      - name: Wait for the container to be ready
+        run: |
+          for i in {1..60}; do
+            if curl --silent http://localhost:7806/health > /dev/null; then
+              echo "✅ Service is up!"
+              exit 0
+            fi
+            echo "⏳ Waiting for service..."
+            sleep 15
+          done
+          echo "❌ Service did not start in time."
+          exit 1
+      - name: Stop the container
+        run: docker stop ask-pesu
