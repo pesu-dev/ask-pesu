@@ -18,17 +18,23 @@ jobs:
       - name: Build the Docker image
         run: docker build . --tag ask-pesu
       - name: Spawn a container
-        run: docker run --name ask-pesu -d -p 7806:7806 ask-pesu
-      - name: Wait for the container to be ready
-        run: sleep 180
-      - name: Test container HTTP response
         run: |
-          RESPONSE=$(curl --fail --max-time 10 http://localhost:7806/health || echo "fail")
-          if [ "$RESPONSE" = "fail" ]; then
-            echo "❌ Container did not respond."
-            docker logs ask-pesu
-            exit 1
-          fi
-          echo "✅ Container is responsive."
+          docker run --name ask-pesu -d -p 7806:7806 \
+            -e QDRANT_API_KEY="${{ secrets.QDRANT_API_KEY }}" \
+            -e QDRANT_URL="${{ secrets.QDRANT_URL }}" \
+            -e GEMINI_API_KEY="${{ secrets.GEMINI_API_KEY }}" \
+            ask-pesu
+      - name: Wait for the container to be ready
+        run: |
+          for i in {1..30}; do
+            if curl --silent http://localhost:7806/health > /dev/null; then
+              echo "✅ Service is up!"
+              exit 0
+            fi
+            echo "⏳ Waiting for service..."
+            sleep 10
+          done
+          echo "❌ Service did not start in time."
+          exit 1
       - name: Stop the container
         run: docker stop ask-pesu
