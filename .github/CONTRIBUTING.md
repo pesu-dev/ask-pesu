@@ -7,7 +7,7 @@ your development environment and contributing to the project.
 <details>
 <summary>📚 Table of Contents</summary>
 
-- [🤝 Contributing to askpesu](#-contributing-to-askpesu)
+- [🤝 Contributing to AskPESU](#-contributing-to-askpesu)
 - [🚧 Getting Started](#-getting-started)
 - [🛠️ Development Environment Setup](#-development-environment-setup)
     - [Prerequisites](#prerequisites)
@@ -39,6 +39,13 @@ your development environment and contributing to the project.
 
 We encourage developers to work on their own forks of the repository. This allows you to work on features or fixes
 without affecting the main codebase until your changes are ready to be merged.
+
+### 🌐 Deployment Environment
+
+We maintain two deployment environments:
+
+- **Staging**: https://pesu-dev-askpesu-dev.hf.space/docs
+- **Production**: https://pesu-dev-askpesu.hf.space/docs
 
 ### 🔄 Development Workflow
 
