@@ -6,7 +6,8 @@ colorFrom: yellow
 colorTo: red
 sdk: docker
 python_version: 3.12
-app_file: app/app.py
+app_build_command: npm install && npm run build
+app_file: dist/index.html
 app_port: 7860
 fullWidth: true
 header: mini
