@@ -114,11 +114,9 @@ pre-commit install
 
 ## 🧰 Running the Application
 
-You can run the application using the same instructions below
-
-### Running without Docker
-
-### Running with Docker
+You can run the application using the same instructions as in the [README.md](../README.md) file. To ensure parity with
+production, we recommend testing the app both locally and inside Docker. See the [README.md](../README.md) for Docker
+instructions.
 
 ## 🧪 Testing and Code Quality
 
