@@ -211,9 +211,9 @@ production which is manually trigerred by authorized maintainers.
 
 ## ❓ Need Help?
 
-If you get stuck or have questions:
+If you get stuck or have questiongits:
 
-1. Check the [README.md](../README.md) for setup and usage info.
+1. Check the [README.md](./README.md) for setup and usage info.
 2. Review [open issues](https://github.com/pesu-dev/ask-pesu/issues)
    or [pull requests](https://github.com/pesu-dev/ask-pesu/pulls) to see if someone else encountered the same problem.
 3. Reach out to the maintainers on PESU Discord.
