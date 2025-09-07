@@ -11,10 +11,10 @@ import pytz
 import torch
 import uvicorn
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.docs import ask_docs, health_docs
+from app.docs import ask_docs, health_docs, index_docs
 from app.models import RequestModel, ResponseModel
 from app.rag import RetrievalAugmentedGenerator
 
@@ -54,12 +54,13 @@ app = FastAPI(
     ],
 )
 
-# These paths are relative to the app.py file
-DIST_DIR="/out"
-app.mount("/static", StaticFiles(directory=DIST_DIR), name="static")
-
+# Initialize globals
+DIST_DIR = "/out"  # Directory for static files (built from frontend)
 IST = pytz.timezone("Asia/Kolkata")  # Indian Standard Time timezone
 rag: RetrievalAugmentedGenerator | None = None  # Global variable to hold the RAG instance
+
+# Mount static files
+app.mount("/static", StaticFiles(directory=DIST_DIR), name="static")
 
 
 @app.exception_handler(Exception)
@@ -75,8 +76,15 @@ async def unhandled_exception_handler(_request: Request, _exc: Exception) -> JSO
         },
     )
 
-@app.get("/")
-async def homepage():
+
+@app.get(
+    "/",
+    response_class=FileResponse,
+    tags=["Generation"],
+    responses=index_docs.response_examples,
+)
+async def index() -> FileResponse:
+    """Serve the main entrypoint (index.html) from the built static files."""
     return FileResponse(f"{DIST_DIR}/index.html")
 
 
