@@ -14,3 +14,4 @@ bruno.json
 .ruff_cache/
 *.csv
 *.png
+.next/
