@@ -42,7 +42,7 @@ ENV HF_HOME=/app/.cache/huggingface
 ENV TORCHINDUCTOR_CACHE_DIR=/tmp/torchinductor_cache
 
 # Add fake user entry so getpass.getuser() works
-RUN echo "user:x:1000<:1000:949931051222978600>user:/home/user:/bin/bash" >> /etc/passwd
+RUN echo "user:x:1000:1000:user:/home/user:/bin/bash" >> /etc/passwd && mkdir -p /home/user
 
 # Install dependencies
 RUN pip install -r requirements.txt
