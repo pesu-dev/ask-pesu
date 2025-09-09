@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input"
 import { ArrowUp } from "lucide-react"
 import Query from "./utils/query"
 import { toast } from "sonner"
+import ReactMarkdown from "react-markdown"
 
 export default function Home() {
 	const [query, setQuery] = useState("")
@@ -23,13 +24,20 @@ export default function Home() {
 		setInQueueQuery(query)
 
 		const data = await Query(query)
+		console.info(data)
 
 		setInQueueQuery("")
 		setQuery("")
 
 		if (data) {
 			setHistory((prev) => {
-				return [...prev, data]
+				return [
+					...prev,
+					{
+						query,
+						answer: data.answer,
+					},
+				]
 			})
 		}
 
@@ -45,7 +53,9 @@ export default function Home() {
 							<div className="bg-accent p-2 rounded-xl w-max my-10">
 								{row.query}
 							</div>
-							<div className="text-lg/relaxed">{row.answer}</div>
+							<div className="text-lg/relaxed text-md">
+								<ReactMarkdown>{row.answer}</ReactMarkdown>
+							</div>
 						</div>
 					)
 				})}
