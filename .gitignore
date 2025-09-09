@@ -13,3 +13,5 @@ bruno.json
 .ruff_cache/
 *.csv
 *.png
+frontend/node_modules/
+frontend/out/
