@@ -55,7 +55,7 @@ app = FastAPI(
 )
 
 # Initialize globals
-DIST_DIR = "/out"  # Directory for static files (built from frontend)
+DIST_DIR = "frontend/out"  # Directory for static files (built from frontend)
 IST = pytz.timezone("Asia/Kolkata")  # Indian Standard Time timezone
 rag: RetrievalAugmentedGenerator | None = None  # Global variable to hold the RAG instance
 
