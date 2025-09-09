@@ -14,11 +14,11 @@ export default function Home() {
 	const [inQueueQuery, setInQueueQuery] = useState(null)
 	const [loading, setLoading] = useState(false)
 
-  const inputRef = useRef(null)
-  const [highlight, setHighlight] = useState(false)
+	const inputRef = useRef(null)
+	const [highlight, setHighlight] = useState(false)
 
-  // Remove highlight on blur
-  const handleBlur = () => setHighlight(false)
+	// Remove highlight on blur
+	const handleBlur = () => setHighlight(false)
 
 	const handleQuery = useCallback(async () => {
 		if (!query.trim()) {
@@ -79,24 +79,24 @@ export default function Home() {
 			<div className="w-full h-[10vh] border-t-1 border-t-neutral-500">
 				<div className="m-auto w-[50vw] flex flex-nowrap pt-6">
 					<Input
-          disabled={loading}
-          ref={inputRef}
-          onBlur={handleBlur}
-          className="rounded-r-none focus:ring-2 focus:ring-sky-400"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          onKeyDown={e => {
-          if (e.key === "Enter") {
-            handleQuery();
-          }
-          }}
-          />
+						disabled={loading}
+						ref={inputRef}
+						onBlur={handleBlur}
+						className="rounded-r-none focus:ring-2 focus:ring-sky-400"
+						value={query}
+						onChange={(e) => setQuery(e.target.value)}
+						onKeyDown={(e) => {
+							if (e.key === "Enter") {
+								handleQuery()
+							}
+						}}
+					/>
 					<Button
 						disabled={loading}
 						className="rounded-l-none bg-sky-50/80 hover:bg-sky-100/80 cursor-pointer"
 						onClick={handleQuery}
 					>
-						<ArrowUp/>
+						<ArrowUp />
 					</Button>
 				</div>
 			</div>
