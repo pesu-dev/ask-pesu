@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useState } from "react"
+import { useCallback, useState, useRef, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ArrowUp } from "lucide-react"
@@ -13,6 +13,12 @@ export default function Home() {
 	const [history, setHistory] = useState([])
 	const [inQueueQuery, setInQueueQuery] = useState(null)
 	const [loading, setLoading] = useState(false)
+
+	const inputRef = useRef(null)
+	const [highlight, setHighlight] = useState(false)
+
+	// Remove highlight on blur
+	const handleBlur = () => setHighlight(false)
 
 	const handleQuery = useCallback(async () => {
 		if (!query.trim()) {
@@ -74,10 +80,15 @@ export default function Home() {
 				<div className="m-auto w-[50vw] flex flex-nowrap pt-6">
 					<Input
 						disabled={loading}
-						className="rounded-r-none"
+						ref={inputRef}
+						onBlur={handleBlur}
+						className="rounded-r-none focus:ring-2 focus:ring-sky-400"
 						value={query}
-						onChange={(e) => {
-							setQuery(e.target.value)
+						onChange={(e) => setQuery(e.target.value)}
+						onKeyDown={(e) => {
+							if (e.key === "Enter") {
+								handleQuery()
+							}
 						}}
             onKeyDown={e => {
             if (e.key === "Enter") {
