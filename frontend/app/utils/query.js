@@ -1,8 +1,9 @@
 import { toast } from "sonner"
 
 export default async function Query(question) {
+	const API_URL = process.env.NEXT_PUBLIC_API_URL || "/ask";
 	try {
-		const resp = await fetch("/ask", {
+		const resp = await fetch(`${API_URL}`, {
 			method: "POST",
 			headers: {
 				"Content-Type": "application/json",

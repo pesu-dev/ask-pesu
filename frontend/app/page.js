@@ -90,18 +90,13 @@ export default function Home() {
 								handleQuery()
 							}
 						}}
-            onKeyDown={e => {
-            if (e.key === "Enter") {
-              handleQuery();
-            }
-          }}
 					/>
 					<Button
 						disabled={loading}
 						className="rounded-l-none bg-sky-50/80 hover:bg-sky-100/80 cursor-pointer"
 						onClick={handleQuery}
 					>
-						<ArrowUp/>
+						<ArrowUp />
 					</Button>
 				</div>
 			</div>
