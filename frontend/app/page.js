@@ -87,6 +87,7 @@ export default function Home() {
 						onChange={(e) => setQuery(e.target.value)}
 						onKeyDown={(e) => {
 							if (e.key === "Enter") {
+								e.preventDefault()
 								handleQuery()
 							}
 						}}
