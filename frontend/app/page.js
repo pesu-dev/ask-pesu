@@ -52,7 +52,7 @@ export default function Home() {
 
 	return (
 		<div className="bg-background w-screen h-screen">
-			<div className="w-[75vw] h-[90vh] m-auto overflow-y-scroll hide-scrollbar">
+			<div className="w-[100vw] h-[90vh] px-[12.5vw] m-auto overflow-y-scroll hide-scrollbar">
 				{history.map((row, i) => {
 					return (
 						<div key={i}>
