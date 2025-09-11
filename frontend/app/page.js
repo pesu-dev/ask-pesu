@@ -23,6 +23,7 @@ export default function Home() {
 	const handleQuery = useCallback(async () => {
 		if (!query.trim()) {
 			toast.warning("You can't query an empty question.")
+			return
 		}
 
 		setLoading(true)
