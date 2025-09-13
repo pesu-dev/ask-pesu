@@ -7,9 +7,10 @@ from dotenv import load_dotenv
 from langchain.chat_models import init_chat_model
 from langchain.retrievers.multi_query import MultiQueryRetriever
 from langchain_core.documents.base import Document
+from langchain_core.language_models import BaseChatModel
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.runnables import RunnablePassthrough
+from langchain_core.runnables import RunnablePassthrough, RunnableSerializable
 from langchain_huggingface.embeddings import HuggingFaceEmbeddings
 from langchain_qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
@@ -42,17 +43,19 @@ class RetrievalAugmentedGenerator:
         )
 
         # Initialize LLM
-        self.llm = init_chat_model(
-            model=self.config["rag"]["llm"],
+        self.llm_primary = init_chat_model(
+            model=self.config["rag"]["llm"]["primary"],
             model_provider="google_genai",
             google_api_key=os.getenv("GEMINI_API_KEY"),
         )
-
-        # Initialize retriever
-        self.retriever = MultiQueryRetriever.from_llm(
-            retriever=self.vector_store.as_retriever(search_kwargs=self.config["rag"]["search_kwargs"]),
-            llm=self.llm,
-        )
+        # Initialize secondary LLM if specified
+        self.llm_thinking = None
+        if self.config["rag"]["llm"].get("thinking"):
+            self.llm_thinking = init_chat_model(
+                model=self.config["rag"]["llm"]["thinking"],
+                model_provider="google_genai",
+                google_api_key=os.getenv("GEMINI_API_KEY"),
+            )
 
         # Initialize the prompt template
         self.prompt = ChatPromptTemplate.from_messages(
@@ -62,14 +65,33 @@ class RetrievalAugmentedGenerator:
             ]
         )
 
+        # Build the RAG chains
+        self.retriever = self.vector_store.as_retriever(search_kwargs=self.config["rag"]["search_kwargs"])
+        self.rag_chain_primary = self._build_chain(self.llm_primary)
+        self.rag_chain_thinking = self._build_chain(self.llm_thinking) if self.llm_thinking else None
+
+    def _build_chain(self, llm: BaseChatModel) -> RunnableSerializable[str, str]:
+        """Build the RAG chain using the specified LLM.
+
+        Args:
+            llm: The language model to use in the RAG chain.
+
+        Returns:
+            RunnableSerializable: The constructed RAG chain.
+        """
+        # Initialize multiquery retriever
+        multiquery_retriever = MultiQueryRetriever.from_llm(
+            retriever=self.retriever,
+            llm=llm,
+        )
         # Initialize the RAG chain
-        self.rag_chain = (
+        return (
             {
-                "context": self.retriever | self.format_docs,
+                "context": multiquery_retriever | self.format_docs,
                 "question": RunnablePassthrough(),
             }
             | self.prompt
-            | self.llm
+            | llm
             | StrOutputParser()
         )
 
@@ -78,6 +100,17 @@ class RetrievalAugmentedGenerator:
         """Format the retrieved documents into a single string."""
         return "\n\n".join(f"{doc.metadata['url']}\n{doc.page_content}" for doc in docs)
 
-    async def generate(self, query: str) -> str:
-        """Generate a response for the given query using the RAG chain."""
-        return await self.rag_chain.ainvoke(query)
+    async def generate(self, query: str, thinking: bool) -> str:
+        """Generate a response for the given query using the RAG chain.
+
+        Args:
+            query (str): The input query.
+            thinking (bool): Flag to indicate if the model should 'think' before answering.
+
+        Returns:
+            str: The generated response.
+        """
+        rag_chain = (
+            self.rag_chain_thinking if thinking and self.rag_chain_thinking is not None else self.rag_chain_primary
+        )
+        return await rag_chain.ainvoke(query)
