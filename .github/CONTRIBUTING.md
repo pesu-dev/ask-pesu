@@ -1,3 +1,4 @@
+
 # 🤝 Contributing to AskPESU
 
 Thank you for your interest in contributing to AskPESU! This document provides guidelines and instructions for setting up
@@ -76,6 +77,7 @@ projects.
 ### Prerequisites
 
 - Python 3.11 or higher
+- NodeJS v22.19.0 or higher
 - Git
 - Docker
 
@@ -91,6 +93,19 @@ projects.
    ```bash
    uv sync --all-extras
    ```
+3. **Compile NextJS dynamic code to static HTML**
+	In the root directory of the project run
+	 ```bash
+	cd frontend
+	```
+	Next you can install all required packages using
+	```bash
+	npm install
+	```
+	Finally run this command to compile to static HTML
+	```bash
+	npm run build
+	```
 
 ### Set Up Environment Variables
 
