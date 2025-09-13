@@ -77,7 +77,7 @@ async def resource_exhausted_exception_handler(_request: Request, exc: ResourceE
     prefix = (
         "Quota exceeded."
         if THINKING_ENABLED
-        else f"Thinking mode disabled until {THINKING_DISABLED_UNTIL.strftime('%Y-%m-%d %H:%M:%S %Z')} "
+        else f"Thinking mode unavailable until {THINKING_DISABLED_UNTIL.strftime('%Y-%m-%d %H:%M:%S %Z')} "
         f"due to quota limits."
     )
     return JSONResponse(
@@ -138,9 +138,9 @@ async def ask(payload: RequestModel) -> JSONResponse:
 
     # Check if thinking mode is requested and enabled
     if payload.thinking and not THINKING_ENABLED:
-        logging.warning("Thinking mode was requested but currently disabled due to quota limits.")
+        logging.warning("Thinking mode was requested but currently unavailable due to quota limits.")
         raise ResourceExhausted(
-            "Thinking mode temporarily disabled due to quota limits. "
+            "Thinking mode temporarily unavailable due to quota limits. "
             "Please try again later, or disable 'thinking' mode if enabled."
         )
 
