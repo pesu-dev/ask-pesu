@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useState } from "react"
+import { useCallback, useState, useRef, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ArrowUp } from "lucide-react"
@@ -14,9 +14,16 @@ export default function Home() {
 	const [inQueueQuery, setInQueueQuery] = useState(null)
 	const [loading, setLoading] = useState(false)
 
+	const inputRef = useRef(null)
+	const [highlight, setHighlight] = useState(false)
+
+	// Remove highlight on blur
+	const handleBlur = () => setHighlight(false)
+
 	const handleQuery = useCallback(async () => {
 		if (!query.trim()) {
 			toast.warning("You can't query an empty question.")
+			return
 		}
 
 		setLoading(true)
@@ -46,7 +53,7 @@ export default function Home() {
 
 	return (
 		<div className="bg-background w-screen h-screen">
-			<div className="w-[75vw] h-[90vh] m-auto overflow-y-scroll hide-scrollbar">
+			<div className="w-[100vw] h-[90vh] px-[12.5vw] m-auto overflow-y-scroll hide-scrollbar">
 				{history.map((row, i) => {
 					return (
 						<div key={i}>
@@ -74,10 +81,16 @@ export default function Home() {
 				<div className="m-auto w-[50vw] flex flex-nowrap pt-6">
 					<Input
 						disabled={loading}
-						className="rounded-r-none"
+						ref={inputRef}
+						onBlur={handleBlur}
+						className="rounded-r-none focus:ring-2 focus:ring-sky-400"
 						value={query}
-						onChange={(e) => {
-							setQuery(e.target.value)
+						onChange={(e) => setQuery(e.target.value)}
+						onKeyDown={(e) => {
+							if (e.key === "Enter") {
+								e.preventDefault()
+								handleQuery()
+							}
 						}}
 					/>
 					<Button
