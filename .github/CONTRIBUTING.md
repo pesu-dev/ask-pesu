@@ -102,6 +102,7 @@ projects.
 2. **Configure your test credentials:**
    Open the `.env` file and replace all `<YOUR_..._HERE>` placeholders with your actual test user details. Each variable
    has been documented in the `.env.example` file for clarity.
+   Reach out to code owners for the development API keys.
 
 ### Pre-commit Hooks
 

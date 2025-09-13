@@ -28,7 +28,6 @@ tags:
 
 # Ask PESU
 
-[![Docker Image Build](https://github.com/pesu-dev/ask-pesu/actions/workflows/docker.yaml/badge.svg)](https://github.com/pesu-dev/ask-pesu/actions/workflows/docker.yaml)
 [![Pre-Commit Checks](https://github.com/pesu-dev/ask-pesu/actions/workflows/pre-commit.yaml/badge.svg)](https://github.com/pesu-dev/ask-pesu/actions/workflows/pre-commit.yaml)
 [![Lint](https://github.com/pesu-dev/ask-pesu/actions/workflows/lint.yaml/badge.svg)](https://github.com/pesu-dev/ask-pesu/actions/workflows/lint.yaml)
 [![Deploy](https://github.com/pesu-dev/ask-pesu/actions/workflows/deploy-prod.yaml/badge.svg)](https://github.com/pesu-dev/ask-pesu/actions/workflows/deploy-prod.yaml)
