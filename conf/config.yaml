@@ -1,7 +1,9 @@
 rag:
   embedding: "Alibaba-NLP/gte-modernbert-base"
   qdrant_collection: "ask-pesu"
-  llm: "gemini-2.5-flash-lite"
+  llm:
+    primary: "gemini-2.5-flash-lite"
+    thinking: "gemini-2.5-flash"
   search_kwargs:
     k: 5
     score_threshold: 0.3

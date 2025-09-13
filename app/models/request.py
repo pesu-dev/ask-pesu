@@ -14,3 +14,10 @@ class RequestModel(BaseModel):
         description="User's input query for the chatbot.",
         json_schema_extra={"example": "What is bootstrap?"},
     )
+
+    thinking: bool = Field(
+        False,
+        title="Thinking Mode",
+        description="Flag to indicate if the model should 'think' before answering to produce more accurate responses.",
+        json_schema_extra={"example": True},
+    )
