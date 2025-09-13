@@ -23,6 +23,7 @@ export default function Home() {
 	const handleQuery = useCallback(async () => {
 		if (!query.trim()) {
 			toast.warning("You can't query an empty question.")
+			return
 		}
 
 		setLoading(true)
@@ -52,7 +53,7 @@ export default function Home() {
 
 	return (
 		<div className="bg-background w-screen h-screen">
-			<div className="w-[75vw] h-[90vh] m-auto overflow-y-scroll hide-scrollbar">
+			<div className="w-[100vw] h-[90vh] px-[12.5vw] m-auto overflow-y-scroll hide-scrollbar">
 				{history.map((row, i) => {
 					return (
 						<div key={i}>
@@ -87,6 +88,7 @@ export default function Home() {
 						onChange={(e) => setQuery(e.target.value)}
 						onKeyDown={(e) => {
 							if (e.key === "Enter") {
+								e.preventDefault()
 								handleQuery()
 							}
 						}}
