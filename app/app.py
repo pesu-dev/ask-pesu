@@ -17,6 +17,7 @@ from google.api_core.exceptions import ResourceExhausted
 
 from app.docs import ask_docs, health_docs, index_docs
 from app.models import RequestModel, ResponseModel
+from app.quota import QuotaState
 from app.rag import RetrievalAugmentedGenerator
 
 
@@ -60,54 +61,35 @@ DIST_DIR = "/out"  # Directory for static files (built from frontend)
 IST = pytz.timezone("Asia/Kolkata")  # Indian Standard Time timezone
 rag: RetrievalAugmentedGenerator | None = None  # Global variable to hold the RAG instance
 
-# Global variables to manage quota
-THINKING_ENABLED = True  # Global flag to indicate if 'thinking' mode is enabled
-THINKING_DISABLED_UNTIL: datetime.datetime | None = (
-    None  # Global variable to hold the timestamp until which 'thinking' mode is disabled
-)
-THINKING_DISABLED_COOLDOWN_HOURS = 24  # Number of hours to disable 'thinking' mode after quota exhaustion
-
-PRIMARY_ENABLED = True  # Global flag to indicate if primary LLM is enabled
-PRIMARY_DISABLED_UNTIL: datetime.datetime | None = (
-    None  # Global variable to hold the timestamp until which primary LLM is disabled
-)
-PRIMARY_DISABLED_COOLDOWN_HOURS = 24  # Number of hours to disable primary LLM after quota exhaustion
+# Global state to track if 'thinking' mode is enabled
+THINKING_STATE = QuotaState(name="thinking", cooldown_hours=24)
+# Global state to track if primary LLM is enabled
+PRIMARY_STATE = QuotaState(name="primary", cooldown_hours=24)
 
 # Mount static files
-app.mount("/static", StaticFiles(directory=DIST_DIR), name="static")
+# app.mount("/static", StaticFiles(directory=DIST_DIR), name="static")
 
 
 def get_quota_status() -> dict:
     """Return quota availability for both LLMs."""
-    current_time = datetime.datetime.now(IST)
+    THINKING_STATE.refresh()
+    PRIMARY_STATE.refresh()
     return {
-        "thinking": {
-            "available": THINKING_ENABLED,
-            "next_available": (
-                THINKING_DISABLED_UNTIL.isoformat() if not THINKING_ENABLED and THINKING_DISABLED_UNTIL else None
-            ),
-        },
-        "primary": {
-            "available": PRIMARY_ENABLED,
-            "next_available": (
-                PRIMARY_DISABLED_UNTIL.isoformat() if not PRIMARY_ENABLED and PRIMARY_DISABLED_UNTIL else None
-            ),
-        },
-        "timestamp": current_time.isoformat(),
+        "thinking": THINKING_STATE.status(),
+        "primary": PRIMARY_STATE.status(),
     }
 
 
 @app.exception_handler(ResourceExhausted)
 async def resource_exhausted_exception_handler(_request: Request, exc: ResourceExhausted) -> JSONResponse:
     """Handler for resource exhausted exceptions."""
-    logging.exception(f"Quota exceeded: {exc}")
-    quota = get_quota_status()
+    logging.warning(f"Quota exceeded: {exc}")
     return JSONResponse(
         status_code=429,
         content={
             "status": False,
             "message": str(exc),
-            "quota": quota,
+            "quota": get_quota_status(),
             "timestamp": datetime.datetime.now(IST).isoformat(),
         },
     )
@@ -147,58 +129,40 @@ async def index() -> FileResponse:
     tags=["Generation"],
 )
 async def ask(payload: RequestModel) -> JSONResponse:
-    """Endpoint to handle question-answering requests."""
-    global THINKING_ENABLED, THINKING_DISABLED_UNTIL, THINKING_DISABLED_COOLDOWN_HOURS
-    global PRIMARY_ENABLED, PRIMARY_DISABLED_UNTIL, PRIMARY_DISABLED_COOLDOWN_HOURS
+    """Endpoint to handle question-answering requests.
+
+    Automatically manages LLM quota with cooldowns.
+    May raise 429 if 'thinking' or 'primary' mode is temporarily unavailable.
+    """
+    global THINKING_STATE, PRIMARY_STATE
     logging.debug(f"Received /ask question: {payload.query}")
     logging.debug(f"Thinking mode: {payload.thinking}")
     current_time = datetime.datetime.now(IST)
 
-    # Re-enable thinking mode if cooldown period has expired
-    if not THINKING_ENABLED and THINKING_DISABLED_UNTIL and current_time >= THINKING_DISABLED_UNTIL:
-        THINKING_ENABLED = True
-        THINKING_DISABLED_UNTIL = None
-        logging.info("Thinking mode cooldown expired, re-enabling thinking mode")
-
-    # Re-enable primary LLM if cooldown period has expired
-    if not PRIMARY_ENABLED and PRIMARY_DISABLED_UNTIL and current_time >= PRIMARY_DISABLED_UNTIL:
-        PRIMARY_ENABLED = True
-        PRIMARY_DISABLED_UNTIL = None
-        logging.info("Primary LLM cooldown expired, re-enabling primary LLM")
+    # Re-enable thinking mode and primary LLM if cooldown period has expired
+    THINKING_STATE.refresh()
+    PRIMARY_STATE.refresh()
 
     # Check if thinking mode is requested and enabled
-    if payload.thinking and not THINKING_ENABLED:
+    if payload.thinking and not THINKING_STATE.enabled:
         logging.warning("Thinking mode was requested but currently unavailable due to quota limits.")
         raise ResourceExhausted(
-            "Thinking mode temporarily unavailable due to quota limits. "
+            "Thinking mode is temporarily unavailable due to quota limits. "
             "Please try again later, or disable 'thinking' mode if enabled."
         )
 
     # Check if primary LLM is requested and enabled
-    if not payload.thinking and not PRIMARY_ENABLED:
+    if not payload.thinking and not PRIMARY_STATE.enabled:
         logging.warning("Primary LLM is currently unavailable due to quota limits.")
-        raise ResourceExhausted("Primary LLM temporarily unavailable due to quota limits. Please try again later.")
+        raise ResourceExhausted("Primary LLM is temporarily unavailable due to quota limits. Please try again later.")
 
     # Attempt to generate the answer
     start_time = time.perf_counter()
     try:
         answer = await rag.generate(query=payload.query, thinking=payload.thinking)
-    except ResourceExhausted as e:
-        llm_used = "primary" if not payload.thinking else "thinking"
-        if llm_used == "thinking":
-            # Disable thinking mode for the next THINKING_DISABLED_COOLDOWN_HOURS hours if quota exceeded
-            THINKING_ENABLED = False
-            THINKING_DISABLED_UNTIL = current_time + datetime.timedelta(hours=THINKING_DISABLED_COOLDOWN_HOURS)
-            logging.exception(
-                f"Quota exceeded on llm:{llm_used}: {e}. Thinking mode disabled until {THINKING_DISABLED_UNTIL}"
-            )
-        else:
-            # Disable primary LLM for the next PRIMARY_DISABLED_COOLDOWN_HOURS hours if quota exceeded
-            PRIMARY_ENABLED = False
-            PRIMARY_DISABLED_UNTIL = current_time + datetime.timedelta(hours=PRIMARY_DISABLED_COOLDOWN_HOURS)
-            logging.exception(
-                f"Quota exceeded on llm:{llm_used}: {e}. Primary LLM disabled until {PRIMARY_DISABLED_UNTIL}"
-            )
+    except ResourceExhausted:
+        llm_state = THINKING_STATE if payload.thinking else PRIMARY_STATE
+        llm_state.disable()
         raise
 
     latency = round(time.perf_counter() - start_time, 3)
@@ -234,7 +198,14 @@ async def health() -> JSONResponse:
 @app.get("/quota", response_class=JSONResponse, tags=["Monitoring"])
 async def quota() -> JSONResponse:
     """Quota status endpoint."""
-    return JSONResponse(status_code=200, content={"status": True, **get_quota_status()})
+    return JSONResponse(
+        status_code=200,
+        content={
+            "status": True,
+            "quota": get_quota_status(),
+            "timestamp": datetime.datetime.now(IST).isoformat(),
+        },
+    )
 
 
 def main() -> None:
