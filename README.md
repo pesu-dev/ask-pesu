@@ -33,7 +33,7 @@ tags:
 [![Deploy](https://github.com/pesu-dev/ask-pesu/actions/workflows/deploy-prod.yaml/badge.svg)](https://github.com/pesu-dev/ask-pesu/actions/workflows/deploy-prod.yaml)
 
 
-A RAG Pipeline based API to answer questions based on PESU.
+A RAG Pipeline based Q&A chatbot to answer questions based on PESU.
 
 The API is secure and protects user privacy by not storing any user credentials. It only validates credentials and
 returns the user's profile information. No personal data is stored.
@@ -57,7 +57,7 @@ following commands to start the API.
     docker run --env-file .env -p 7860:7860 ask-pesu
     ```
 
-2. Access the API at `http://localhost:5000/`
+2. Access the API at `http://localhost:3000/`
 
 ### Running without Docker
 
@@ -78,6 +78,14 @@ dependencies.
     ```
 
 3. Access the API as previously mentioned on `http://localhost:7860/`
+
+4. To run the application with frontend code, run below command inside the `frontend` directory -
+
+  ```bash
+  npm run dev
+  ```
+
+However this only runs the frontend only, to run
 
 ## How to use the AskPESU API
 

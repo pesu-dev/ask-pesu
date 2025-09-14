@@ -9,7 +9,7 @@ We actively maintain security patches for the current stable version of AskPESU.
 If you discover a security vulnerability in AskPESU, please follow these guidelines to report it responsibly:
 
 - **Do NOT open a public issue** to report security problems.
-- Instead, send a confidential email to the maintainers on the PESU Deverloper Group channel (`#pesu-dev`) on [PESU Discord](https://discord.gg/eZ3uFs2), or email the maintainers.
+- Instead, send a confidential email to the maintainers on the PESU Deverloper Group channel (`#pesu-dev`) on [PESU Discord](https://discord.gg/eZ3uFs2), or email the maintainers at [pesudev@gmail.com](mailto:pesudev@gmail.com).
 - Include as much detail as possible:
   - Steps to reproduce the issue
   - Impact of the vulnerability

@@ -1,4 +1,3 @@
-
 # 🤝 Contributing to AskPESU
 
 Thank you for your interest in contributing to AskPESU! This document provides guidelines and instructions for setting up
@@ -60,7 +59,7 @@ The standard workflow for contributing is as follows:
 6. Wait for review and feedback from the maintainers, address any comments or suggestions.
 7. Once approved, your changes will be merged into the `dev` branch and deployed to staging for testing.
 8. After all pre-commit checks pass, deployment to staging is triggered automatically.
-9. Production deployment is performed manually by authorized maintainers after successful staging validation.
+9. Production deployment is performed manually by authorized maintainers after successful validation of changes made in the staging environment.
 
 > [!WARNING]
 > Please note that you will not be able to push directly to either the `dev` or `main` branches of the repository. All
@@ -144,9 +143,9 @@ suite automatically before every commit.
 The following checks are enforced:
 
 * ✅ `ruff` for linting and formatting (with auto-fix)
-* ✅ `blacken-docs` to format code blocks inside Markdown files
-* ✅ `pyupgrade` to upgrade syntax to Python 3.9+
+* ✅ `ruff-format` for code formatting
 * ✅ `end-of-file-fixer`, `trailing-whitespace`, `check-yaml`, `check-toml`, `requirements-txt-fixer` for formatting
+* ✅ `check-added-large-files` to prevent committing large files
 * ✅ `name-tests-test` to enforce test naming conventions
 * ✅ `debug-statements` to prevent committed `print()` or `pdb`
 * ✅ A local `pytest` hook that runs the full test suite
