@@ -1,10 +1,10 @@
-"""Model representing a request."""
+"""Model representing a request made to the /ask route."""
 
 from pydantic import BaseModel, ConfigDict, Field
 
 
-class RequestModel(BaseModel):
-    """Model representing a request."""
+class AskRequestModel(BaseModel):
+    """Model representing a request made to the /ask route."""
 
     model_config = ConfigDict(strict=True)
 

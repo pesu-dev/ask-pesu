@@ -1,4 +1,4 @@
-"""This module defines the class for API documentation purposes across different endpoints."""
+"""This module defines the class for API documentation purposes across different routes."""
 
 from dataclasses import dataclass
 

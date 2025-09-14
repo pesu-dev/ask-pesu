@@ -1,12 +1,12 @@
-"""Model representing the response for a request."""
+"""Model representing the response for the /ask route."""
 
 from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
 
-class ResponseModel(BaseModel):
-    """Model representing the response for a request."""
+class AskResponseModel(BaseModel):
+    """Model representing the response for the /ask route."""
 
     model_config = ConfigDict(strict=True)
 
