@@ -79,14 +79,6 @@ dependencies.
 
 3. Access the API as previously mentioned on `http://localhost:7860/`
 
-4. To run the application with frontend code, run below command inside the `frontend` directory -
-
-  ```bash
-  npm run dev
-  ```
-
-However this only runs the frontend only, to run
-
 ## How to use the AskPESU API
 
 The API provides multiple endpoints for question answering and health checks.
