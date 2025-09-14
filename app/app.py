@@ -25,7 +25,7 @@ from app.rag import RetrievalAugmentedGenerator
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Lifespan event handler for startup and shutdown events."""
     # Startup
-    logging.info("askPESU API startup")
+    logging.info("AskPESU API startup")
 
     # Initialize the RAG engine
     global rag
@@ -35,7 +35,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     yield
     # Shutdown
-    logging.info("askPESU API shutdown.")
+    logging.info("AskPESU API shutdown.")
 
 
 app = FastAPI(
@@ -187,14 +187,12 @@ async def ask(payload: AskRequestModel) -> JSONResponse:
 async def health() -> JSONResponse:
     """Health check endpoint."""
     logging.debug("Health check requested.")
-    return JSONResponse(
-        status_code=200,
-        content={
-            "status": True,
-            "message": "ok",
-            "timestamp": datetime.datetime.now(IST).isoformat(),
-        },
+    response = HealthResponseModel(
+        status=True,
+        message="ok",
+        timestamp=datetime.datetime.now(IST),
     )
+    return JSONResponse(status_code=200, content=response.model_dump(mode="json", exclude_none=True))
 
 
 @app.get(
@@ -207,14 +205,13 @@ async def health() -> JSONResponse:
 )
 async def quota() -> JSONResponse:
     """Quota status endpoint."""
-    return JSONResponse(
-        status_code=200,
-        content={
-            "status": True,
-            "quota": get_quota_status(),
-            "timestamp": datetime.datetime.now(IST).isoformat(),
-        },
+    logging.debug("Quota status requested.")
+    response = QuotaResponseModel(
+        status=True,
+        quota=get_quota_status(),
+        timestamp=datetime.datetime.now(IST),
     )
+    return JSONResponse(status_code=200, content=response.model_dump(mode="json", exclude_none=True))
 
 
 def main() -> None:

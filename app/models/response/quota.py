@@ -3,6 +3,7 @@
 from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
+from typing import Optional
 
 
 class QuotaItemModel(BaseModel):
@@ -17,10 +18,10 @@ class QuotaItemModel(BaseModel):
         json_schema_extra={"example": True},
     )
 
-    next_available: datetime | None = Field(
+    next_available: Optional[datetime] = Field(
         None,
         title="Next Availability",
-        description="Timestamp when this LLM will next be available. Null if already available.",
+        description="Timestamp when this LLM will next be available. Returned only if 'available' is False.",
         json_schema_extra={"example": "2025-09-15T00:42:19+05:30"},
     )
 
@@ -37,16 +38,21 @@ class QuotaResponseModel(BaseModel):
         json_schema_extra={"example": True},
     )
 
-    thinking: QuotaItemModel = Field(
+    quota: dict[str, QuotaItemModel] = Field(
         ...,
-        title="Thinking Mode Quota",
-        description="Quota state for the Thinking LLM.",
-    )
-
-    primary: QuotaItemModel = Field(
-        ...,
-        title="Primary Mode Quota",
-        description="Quota state for the Primary LLM.",
+        title="Quota States",
+        description="Dictionary containing the quota states for all LLMs, keyed by mode ('thinking' or 'primary').",
+        json_schema_extra={
+            "example": {
+                "thinking": {
+                    "available": False,
+                    "next_available": "2025-09-14T12:00:00+05:30"
+                },
+                "primary": {
+                    "available": True,
+                }
+            }
+        },
     )
 
     timestamp: datetime = Field(
