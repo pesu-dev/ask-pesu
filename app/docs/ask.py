@@ -1,15 +1,22 @@
-"""Custom docs for the /ask endpoint."""
+"""Custom docs for the /ask route."""
 
 from app.docs.base import ApiDocs
-from app.models import ResponseModel
+from app.models import AskResponseModel
 
 ask_docs = ApiDocs(
     request_examples={
         "requestBody": {
             "content": {
                 "application/json": {
-                    "example": {
-                        "query": "What is bootstrap at PES University?",
+                    "examples": {
+                        "without_thinking": {
+                            "summary": "Standard LLM request",
+                            "value": {"query": "What is bootstrap at PES University?", "thinking": False},
+                        },
+                        "with_thinking": {
+                            "summary": "LLM Request with 'thinking' mode",
+                            "value": {"query": "What is bootstrap at PES University?", "thinking": True},
+                        },
                     }
                 }
             }
@@ -18,7 +25,7 @@ ask_docs = ApiDocs(
     response_examples={
         200: {
             "description": "Successful Question Answering",
-            "model": ResponseModel,
+            "model": AskResponseModel,
             "content": {
                 "application/json": {
                     "example": {
@@ -37,9 +44,22 @@ ask_docs = ApiDocs(
                 }
             },
         },
+        429: {
+            "description": "Quota Exceeded",
+            "model": AskResponseModel,
+            "content": {
+                "application/json": {
+                    "example": {
+                        "status": False,
+                        "message": "Thinking mode temporarily unavailable due to quota limits. Please try again later.",
+                        "timestamp": "2024-07-28T22:35:10.103368+05:30",
+                    }
+                }
+            },
+        },
         500: {
             "description": "Internal Server Error",
-            "model": ResponseModel,
+            "model": AskResponseModel,
             "content": {
                 "application/json": {
                     "example": {

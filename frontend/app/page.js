@@ -23,6 +23,12 @@ export default function Home() {
 		setQuery(query)
 	}, [])
 
+	const inputRef = useRef(null)
+	const [highlight, setHighlight] = useState(false)
+
+	// Remove highlight on blur
+	const handleBlur = () => setHighlight(false)
+
 	const handleQuery = useCallback(async () => {
 		if (!query.trim()) {
 			toast.warning("You can't query an empty question.")
