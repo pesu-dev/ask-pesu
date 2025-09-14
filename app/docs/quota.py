@@ -13,8 +13,10 @@ quota_docs = ApiDocs(
                 "application/json": {
                     "example": {
                         "status": True,
-                        "thinking": {"available": False, "next_available": "2025-09-14T12:00:00+05:30"},
-                        "primary": {"available": True},
+                        "quota": {
+                            "thinking": {"available": False, "next_available": "2025-09-14T12:00:00+05:30"},
+                            "primary": {"available": True},
+                        },
                         "timestamp": "2025-09-14T00:42:19+05:30",
                     }
                 }
