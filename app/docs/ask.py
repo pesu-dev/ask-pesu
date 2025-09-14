@@ -11,17 +11,11 @@ ask_docs = ApiDocs(
                     "examples": {
                         "without_thinking": {
                             "summary": "Standard LLM request",
-                            "value": {
-                                "query": "What is bootstrap at PES University?",
-                                "thinking": False
-                            },
+                            "value": {"query": "What is bootstrap at PES University?", "thinking": False},
                         },
                         "with_thinking": {
                             "summary": "LLM Request with 'thinking' mode",
-                            "value": {
-                                "query": "What is bootstrap at PES University?",
-                                "thinking": True
-                            },
+                            "value": {"query": "What is bootstrap at PES University?", "thinking": True},
                         },
                     }
                 }

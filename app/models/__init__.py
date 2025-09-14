@@ -5,9 +5,4 @@ from .response.ask import AskResponseModel
 from .response.health import HealthResponseModel
 from .response.quota import QuotaResponseModel
 
-__all__ = [
-    "AskRequestModel",
-    "AskResponseModel",
-    "HealthResponseModel",
-    "QuotaResponseModel"
-]
+__all__ = ["AskRequestModel", "AskResponseModel", "HealthResponseModel", "QuotaResponseModel"]

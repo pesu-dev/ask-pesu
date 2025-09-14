@@ -203,7 +203,7 @@ async def health() -> JSONResponse:
     response_class=JSONResponse,
     openapi_extra=quota_docs.request_examples,
     responses=quota_docs.response_examples,
-    tags=["Monitoring"]
+    tags=["Monitoring"],
 )
 async def quota() -> JSONResponse:
     """Quota status endpoint."""
