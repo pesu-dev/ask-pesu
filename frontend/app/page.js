@@ -1,93 +1,95 @@
 "use client"
 
-import { useCallback, useState } from "react"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { ArrowUp } from "lucide-react"
+import { useState, useEffect, useRef, useCallback } from "react"
+import UserPrompt from "@/components/custom_ui/user_prompt"
+import QueryInput from "@/components/custom_ui/query_input"
+import LlmResponse from "@/components/custom_ui/llm_response"
 import Query from "./utils/query"
 import { toast } from "sonner"
-import ReactMarkdown from "react-markdown"
 
 export default function Home() {
 	const [query, setQuery] = useState("")
 	const [history, setHistory] = useState([])
-	const [inQueueQuery, setInQueueQuery] = useState(null)
+	const [inQueueQuery, setInQueueQuery] = useState("")
 	const [loading, setLoading] = useState(false)
+	const chatEndRef = useRef(null)
+
+	// Auto-scroll to bottom on new message
+	useEffect(() => {
+		chatEndRef.current?.scrollIntoView({ behavior: "smooth" })
+	}, [history, inQueueQuery, chatEndRef])
+
+	const handleEditQuery = useCallback((query) => {
+		setQuery(query)
+	}, [])
 
 	const handleQuery = useCallback(async () => {
 		if (!query.trim()) {
 			toast.warning("You can't query an empty question.")
+			return
 		}
 
 		setLoading(true)
-
 		setInQueueQuery(query)
 
 		const data = await Query(query)
 		console.info(data)
 
-		setInQueueQuery("")
+		setInQueueQuery(null)
 		setQuery("")
 
 		if (data) {
-			setHistory((prev) => {
-				return [
-					...prev,
-					{
-						query,
-						answer: data.answer,
-					},
-				]
-			})
+			setHistory((prev) => [
+				...prev,
+				{
+					query,
+					answer: data.answer,
+				},
+			])
 		}
 
 		setLoading(false)
-	}, [query])
+	}, [query, setLoading, setInQueueQuery, setHistory, setQuery])
 
 	return (
-		<div className="bg-background w-screen h-screen">
-			<div className="w-[75vw] h-[90vh] m-auto overflow-y-scroll hide-scrollbar">
-				{history.map((row, i) => {
-					return (
-						<div key={i}>
-							<div className="bg-accent p-2 rounded-xl w-max my-10">
-								{row.query}
+		<div className="relative bg-background w-screen h-screen flex flex-col">
+			{/* Chat Window */}
+			<div className="flex-1 w-full max-w-5xl mx-auto px-4 py-6 overflow-y-auto hide-scrollbar">
+				{/* Past Queries */}
+				{history.map((row, i) => (
+					<div key={i} className="mb-6">
+						<UserPrompt
+							query={row.query}
+							handleEditQuery={handleEditQuery}
+						/>
+						<LlmResponse answer={row.answer} />
+					</div>
+				))}
+
+				{/* Pending Query */}
+				{inQueueQuery && (
+					<div className="mb-6">
+						<UserPrompt query={inQueueQuery} />
+
+						<div className="flex justify-start mt-3">
+							<div className="bg-muted px-4 py-3 rounded-2xl max-w-[75%] text-neutral-500 shadow">
+								Thinking...
 							</div>
-							<div className="text-lg/relaxed text-md">
-								<ReactMarkdown>{row.answer}</ReactMarkdown>
-							</div>
-						</div>
-					)
-				})}
-				{inQueueQuery ? (
-					<div>
-						<div className="bg-accent p-2 rounded-xl w-max my-10">
-							{inQueueQuery}
-						</div>
-						<div className="text-lg/relaxed text-neutral-500">
-							Thinking...
 						</div>
 					</div>
-				) : null}
+				)}
+
+				<div ref={chatEndRef} className="mb-[10vh]" />
 			</div>
-			<div className="w-full h-[10vh] border-t-1 border-t-neutral-500">
-				<div className="m-auto w-[50vw] flex flex-nowrap pt-6">
-					<Input
-						disabled={loading}
-						className="rounded-r-none"
-						value={query}
-						onChange={(e) => {
-							setQuery(e.target.value)
-						}}
-					/>
-					<Button
-						disabled={loading}
-						className="rounded-l-none bg-sky-50/80 hover:bg-sky-100/80 cursor-pointer"
-						onClick={handleQuery}
-					>
-						<ArrowUp />
-					</Button>
-				</div>
+
+			{/* Input Box For New Queries */}
+			<div className="absolute bottom-10 w-full ">
+				<QueryInput
+					query={query}
+					setQuery={setQuery}
+					loading={loading}
+					handleQuery={handleQuery}
+				/>
 			</div>
 		</div>
 	)
