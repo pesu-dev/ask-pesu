@@ -15,8 +15,8 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from google.api_core.exceptions import ResourceExhausted
 
-from app.docs import ask_docs, health_docs, index_docs
-from app.models import RequestModel, ResponseModel
+from app.docs import ask_docs, health_docs, index_docs, quota_docs
+from app.models import AskRequestModel, AskResponseModel, HealthResponseModel, QuotaResponseModel
 from app.quota import QuotaState
 from app.rag import RetrievalAugmentedGenerator
 
@@ -67,7 +67,7 @@ THINKING_STATE = QuotaState(name="thinking", cooldown_hours=24)
 PRIMARY_STATE = QuotaState(name="primary", cooldown_hours=24)
 
 # Mount static files
-# app.mount("/static", StaticFiles(directory=DIST_DIR), name="static")
+app.mount("/static", StaticFiles(directory=DIST_DIR), name="static")
 
 
 def get_quota_status() -> dict:
@@ -122,13 +122,13 @@ async def index() -> FileResponse:
 
 @app.post(
     "/ask",
-    response_model=ResponseModel,
+    response_model=AskResponseModel,
     response_class=JSONResponse,
     openapi_extra=ask_docs.request_examples,
     responses=ask_docs.response_examples,
     tags=["Generation"],
 )
-async def ask(payload: RequestModel) -> JSONResponse:
+async def ask(payload: AskRequestModel) -> JSONResponse:
     """Endpoint to handle question-answering requests.
 
     Automatically manages LLM quota with cooldowns.
@@ -166,7 +166,7 @@ async def ask(payload: RequestModel) -> JSONResponse:
         raise
 
     latency = round(time.perf_counter() - start_time, 3)
-    response = ResponseModel(
+    response = AskResponseModel(
         status=True,
         message="Answer generated successfully.",
         answer=answer,
@@ -178,7 +178,9 @@ async def ask(payload: RequestModel) -> JSONResponse:
 
 @app.get(
     "/health",
+    response_model=HealthResponseModel,
     response_class=JSONResponse,
+    openapi_extra=health_docs.request_examples,
     responses=health_docs.response_examples,
     tags=["Monitoring"],
 )
@@ -195,7 +197,14 @@ async def health() -> JSONResponse:
     )
 
 
-@app.get("/quota", response_class=JSONResponse, tags=["Monitoring"])
+@app.get(
+    "/quota",
+    response_model=QuotaResponseModel,
+    response_class=JSONResponse,
+    openapi_extra=quota_docs.request_examples,
+    responses=quota_docs.response_examples,
+    tags=["Monitoring"]
+)
 async def quota() -> JSONResponse:
     """Quota status endpoint."""
     return JSONResponse(

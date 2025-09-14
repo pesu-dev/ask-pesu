@@ -1,14 +1,14 @@
-"""Custom docs for the /health endpoint."""
+"""Custom docs for the /health route."""
 
 from app.docs.base import ApiDocs
-from app.models import ResponseModel
+from app.models import HealthResponseModel
 
 health_docs = ApiDocs(
     request_examples={},
     response_examples={
         200: {
             "description": "Successful Health Check.",
-            "model": ResponseModel,
+            "model": HealthResponseModel,
             "content": {
                 "application/json": {
                     "example": {
@@ -21,7 +21,7 @@ health_docs = ApiDocs(
         },
         500: {
             "description": "Internal Server Error.",
-            "model": ResponseModel,
+            "model": HealthResponseModel,
             "content": {
                 "application/json": {
                     "example": {
