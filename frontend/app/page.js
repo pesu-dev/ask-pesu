@@ -1,9 +1,9 @@
 "use client"
 
 import { useState, useEffect, useRef, useCallback } from "react"
-import UserPrompt from "@/components/custom_ui/user_prompt"
-import QueryInput from "@/components/custom_ui/query_input"
-import LlmResponse from "@/components/custom_ui/llm_response"
+import UserPrompt from "@/components/custom_ui/userPrompt"
+import QueryInput from "@/components/custom_ui/queryInput"
+import LlmResponse from "@/components/custom_ui/llmResponse"
 import Query from "./utils/query"
 import { toast } from "sonner"
 
