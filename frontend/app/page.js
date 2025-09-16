@@ -12,6 +12,7 @@ export default function Home() {
 	const [history, setHistory] = useState([])
 	const [inQueueQuery, setInQueueQuery] = useState("")
 	const [loading, setLoading] = useState(false)
+	const [thinkingMode, setThinkingMode] = useState(false)
 	const chatEndRef = useRef(null)
 
 	// Auto-scroll to bottom on new message
@@ -32,7 +33,7 @@ export default function Home() {
 		setLoading(true)
 		setInQueueQuery(query)
 
-		const data = await Query(query)
+		const data = await Query(query, thinkingMode)
 		console.info(data)
 
 		setInQueueQuery(null)
@@ -49,7 +50,7 @@ export default function Home() {
 		}
 
 		setLoading(false)
-	}, [query, setLoading, setInQueueQuery, setHistory, setQuery])
+	}, [query, setLoading, setInQueueQuery, setHistory, setQuery, thinkingMode])
 
 	return (
 		<div className="relative bg-background w-screen h-screen flex flex-col">
@@ -85,6 +86,8 @@ export default function Home() {
 			{/* Input Box For New Queries */}
 			<div className="absolute bottom-10 w-full ">
 				<QueryInput
+					thinkingMode={thinkingMode}
+					setThinkingMode={setThinkingMode}
 					query={query}
 					setQuery={setQuery}
 					loading={loading}

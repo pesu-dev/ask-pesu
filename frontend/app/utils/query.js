@@ -1,13 +1,13 @@
 import { toast } from "sonner"
 
-export default async function Query(question) {
+export default async function Query(question, thinkingMode = false) {
 	try {
 		const resp = await fetch("/ask", {
 			method: "POST",
 			headers: {
 				"Content-Type": "application/json",
 			},
-			body: JSON.stringify({ query: question }),
+			body: JSON.stringify({ query: question, thinking: thinkingMode }),
 		})
 
 		if (resp.ok) {

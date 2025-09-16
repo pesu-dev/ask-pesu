@@ -1,30 +1,53 @@
-import { SendHorizonal } from "lucide-react"
+import { Brain, BrainCircuit, Lightbulb, SendHorizonal } from "lucide-react"
 import { Button } from "../ui/button"
 
-export default function QueryInput({ query, setQuery, loading, handleQuery }) {
+export default function QueryInput({
+	thinkingMode,
+	setThinkingMode,
+	query,
+	setQuery,
+	loading,
+	handleQuery,
+}) {
 	return (
-		<div className="flex flex-nowrap gap-5 w-[90vw] max-w-4xl mx-auto pl-10 pr-4 py-2 bg-accent rounded-full border-4">
-			<textarea
-				rows={1}
-				cols={100}
-				disabled={loading}
-				className="w-full h-full outline-none m-auto text-lg"
-				placeholder="Ask me anything about PESU..."
-				value={query}
-				onChange={(e) => setQuery(e.target.value)}
-				onKeyDown={(e) => {
-					if (e.key === "Enter" && !e.shiftKey && !loading) {
-						handleQuery()
-					}
-				}}
-			/>
-			<Button
-				disabled={loading}
-				className="rounded-l-none rounded-full w-12 h-10"
-				onClick={handleQuery}
-			>
-				<SendHorizonal className="size-4" />
-			</Button>
+		<div className="w-[90vw] max-w-4xl mx-auto flex flex-col flex-nowrap gap-4">
+			<div className="flex flex-nowrap gap-5 px-4 py-2 bg-accent rounded-full border-4">
+				<Button
+					title={"Toggle Thinking Model"}
+					className={`rounded-full w-max m-auto transition-all ${
+						thinkingMode
+							? "bg-green-300/50 text-white ring-2 ring-green-300"
+							: "hover:ring-2 ring-green-300"
+					}`}
+					variant={thinkingMode ? "" : "outline"}
+					onClick={() => {
+						setThinkingMode((prev) => !prev)
+					}}
+				>
+					<Lightbulb />
+				</Button>
+				<textarea
+					rows={1}
+					cols={100}
+					disabled={loading}
+					className="w-full h-full outline-none m-auto text-lg"
+					placeholder="Ask me anything about PESU..."
+					value={query}
+					onChange={(e) => setQuery(e.target.value)}
+					onKeyDown={(e) => {
+						if (e.key === "Enter" && !e.shiftKey && !loading) {
+							handleQuery()
+						}
+					}}
+				/>
+				<Button
+					disabled={loading}
+					className="rounded-full w-12 h-10"
+					onClick={handleQuery}
+				>
+					<SendHorizonal className="size-4" />
+				</Button>
+			</div>
 		</div>
 	)
 }
