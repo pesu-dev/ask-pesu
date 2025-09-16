@@ -1,9 +1,9 @@
 "use client"
 
 import { useState, useEffect, useRef, useCallback } from "react"
-import UserPrompt from "@/components/custom_ui/userPrompt"
-import QueryInput from "@/components/custom_ui/queryInput"
-import LlmResponse from "@/components/custom_ui/llmResponse"
+import UserPrompt from "@/components/customUi/userPrompt"
+import QueryInput from "@/components/customUi/queryInput"
+import LlmResponse from "@/components/customUi/llmResponse"
 import Query from "./utils/query"
 import { toast } from "sonner"
 
@@ -22,12 +22,6 @@ export default function Home() {
 	const handleEditQuery = useCallback((query) => {
 		setQuery(query)
 	}, [])
-
-	const inputRef = useRef(null)
-	const [highlight, setHighlight] = useState(false)
-
-	// Remove highlight on blur
-	const handleBlur = () => setHighlight(false)
 
 	const handleQuery = useCallback(async () => {
 		if (!query.trim()) {
