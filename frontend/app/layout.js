@@ -1,16 +1,11 @@
-import { Space_Grotesk } from "next/font/google"
-import { Roboto } from "next/font/google"
+import { Ubuntu } from "next/font/google"
 import { Toaster } from "sonner"
 import "./globals.css"
 
-const spaceGrotesk = Space_Grotesk({
-	variable: "--font-space-grotesk",
+const font = Ubuntu({
+	variable: "--font-inter",
 	subsets: ["latin"],
-})
-
-const roboto = Roboto({
-	variable: "--font-roboto",
-	subsets: ["latin"],
+	weight: "400",
 })
 
 export const metadata = {
@@ -22,7 +17,7 @@ export const metadata = {
 export default function RootLayout({ children }) {
 	return (
 		<html lang="en">
-			<body className={`${roboto.className} antialiased dark`}>
+			<body className={`${font.className} antialiased dark`}>
 				{children}
 				<Toaster position="top-center" />
 			</body>
