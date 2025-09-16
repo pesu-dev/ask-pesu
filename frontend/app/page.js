@@ -1,9 +1,9 @@
 "use client"
 
 import { useState, useEffect, useRef, useCallback } from "react"
-import UserPrompt from "@/components/custom_ui/user_prompt"
-import QueryInput from "@/components/custom_ui/query_input"
-import LlmResponse from "@/components/custom_ui/llm_response"
+import UserPrompt from "@/components/customUi/userPrompt"
+import QueryInput from "@/components/customUi/queryInput"
+import LlmResponse from "@/components/customUi/llmResponse"
 import Query from "./utils/query"
 import { toast } from "sonner"
 
@@ -12,6 +12,7 @@ export default function Home() {
 	const [history, setHistory] = useState([])
 	const [inQueueQuery, setInQueueQuery] = useState("")
 	const [loading, setLoading] = useState(false)
+	const [thinkingMode, setThinkingMode] = useState(false)
 	const chatEndRef = useRef(null)
 
 	// Auto-scroll to bottom on new message
@@ -23,12 +24,6 @@ export default function Home() {
 		setQuery(query)
 	}, [])
 
-	const inputRef = useRef(null)
-	const [highlight, setHighlight] = useState(false)
-
-	// Remove highlight on blur
-	const handleBlur = () => setHighlight(false)
-
 	const handleQuery = useCallback(async () => {
 		if (!query.trim()) {
 			toast.warning("You can't query an empty question.")
@@ -38,7 +33,7 @@ export default function Home() {
 		setLoading(true)
 		setInQueueQuery(query)
 
-		const data = await Query(query)
+		const data = await Query(query, thinkingMode)
 		console.info(data)
 
 		setInQueueQuery(null)
@@ -55,7 +50,7 @@ export default function Home() {
 		}
 
 		setLoading(false)
-	}, [query, setLoading, setInQueueQuery, setHistory, setQuery])
+	}, [query, setLoading, setInQueueQuery, setHistory, setQuery, thinkingMode])
 
 	return (
 		<div className="relative bg-background w-screen h-screen flex flex-col">
@@ -91,6 +86,8 @@ export default function Home() {
 			{/* Input Box For New Queries */}
 			<div className="absolute bottom-10 w-full ">
 				<QueryInput
+					thinkingMode={thinkingMode}
+					setThinkingMode={setThinkingMode}
 					query={query}
 					setQuery={setQuery}
 					loading={loading}

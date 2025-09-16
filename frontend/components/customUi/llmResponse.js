@@ -24,15 +24,6 @@ export default function LlmResponse({ answer }) {
 						<Clipboard />
 					</Button>
 				</div>
-				<div className="flex gap-4">
-					<Button
-						className="rounded-4xl"
-						variant={"outline"}
-						disabled
-					>
-						Think longer for a better answer
-					</Button>
-				</div>
 			</div>
 		</motion.div>
 	)
