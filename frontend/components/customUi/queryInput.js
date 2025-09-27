@@ -32,7 +32,7 @@ export default function QueryInput({
 						minHeight: "40px",
 						maxHeight: "120px", // 5 lines
 						resize: "none",
-						lineHeight: "1.7",
+						lineHeight: "1.9",
 						overflow: query.trim() ? "auto" : "hidden",
 					}}
 					onInput={(e) => {
