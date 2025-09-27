@@ -28,9 +28,21 @@ export default function QueryInput({
 				</Button>
 				<textarea
 					rows={1}
+					style={{
+						minHeight: "40px",
+						maxHeight: "120px", // 5 lines
+						resize: "none",
+						lineHeight: "1.7",
+						overflow: query.trim() ? "auto" : "hidden",
+					}}
+					onInput={(e) => {
+						e.target.style.height = "auto"
+						e.target.style.height =
+							Math.min(e.target.scrollHeight, 120) + "px"
+					}}
 					cols={100}
 					disabled={loading}
-					className="w-full h-full outline-none m-auto text-lg"
+					className="w-full h-full outline-none m-auto text-lg placeholder:text-left"
 					placeholder="Ask me anything about PESU..."
 					value={query}
 					onChange={(e) => setQuery(e.target.value)}
