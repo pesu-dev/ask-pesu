@@ -1,9 +1,9 @@
-import { Bot, Clipboard } from "lucide-react"
+import { Bot, Clipboard, BrainCircuit } from "lucide-react"
 import { motion } from "motion/react"
 import ReactMarkdown from "react-markdown"
 import { Button } from "../ui/button"
 
-export default function LlmResponse({ answer }) {
+export default function LlmResponse({ answer, query, onThinkingMode }) {
 	return (
 		<motion.div
 			initial={{ opacity: 0, x: -30 }}
@@ -22,6 +22,14 @@ export default function LlmResponse({ answer }) {
 						}}
 					>
 						<Clipboard />
+					</Button>
+					<Button
+						className="rounded-2xl text-blue-500"
+						variant={"outline"}
+						onClick={() => onThinkingMode(query)}
+					>
+						<BrainCircuit className="mr-2 h-4 w-4" />
+						Think longer for a better answer
 					</Button>
 				</div>
 			</div>

@@ -12,7 +12,7 @@ export default function Home() {
 	const [history, setHistory] = useState([])
 	const [inQueueQuery, setInQueueQuery] = useState("")
 	const [loading, setLoading] = useState(false)
-	const [thinkingMode, setThinkingMode] = useState(false)
+	//const [thinkingMode, setThinkingMode] = useState(false)
 	const chatEndRef = useRef(null)
 
 	// Auto-scroll to bottom on new message
@@ -24,6 +24,28 @@ export default function Home() {
 		setQuery(query)
 	}, [])
 
+	const handleThinkingMode = useCallback(async (queryText) => {
+        setLoading(true)
+        setInQueueQuery(queryText)
+
+        const data = await Query(queryText, true) // Use thinking mode
+        console.info(data)
+
+        setInQueueQuery(null)
+
+        if (data) {
+            setHistory((prev) => [
+                ...prev,
+                {
+                    query: queryText,
+                    answer: data.answer,
+                },
+            ])
+        }
+
+        setLoading(false)
+    }, [])
+
 	const handleQuery = useCallback(async () => {
 		if (!query.trim()) {
 			toast.warning("You can't query an empty question.")
@@ -33,7 +55,7 @@ export default function Home() {
 		setLoading(true)
 		setInQueueQuery(query)
 
-		const data = await Query(query, thinkingMode)
+		const data = await Query(query, false)
 		console.info(data)
 
 		setInQueueQuery(null)
@@ -50,7 +72,7 @@ export default function Home() {
 		}
 
 		setLoading(false)
-	}, [query, setLoading, setInQueueQuery, setHistory, setQuery, thinkingMode])
+	}, [query, setLoading, setInQueueQuery, setHistory, setQuery])
 
 	return (
 		<div className="relative bg-background w-screen h-screen flex flex-col">
@@ -63,7 +85,10 @@ export default function Home() {
 							query={row.query}
 							handleEditQuery={handleEditQuery}
 						/>
-						<LlmResponse answer={row.answer} />
+						<LlmResponse answer={row.answer}
+						query={row.query}
+						onThinkingMode={handleThinkingMode}
+						/>
 					</div>
 				))}
 
@@ -86,8 +111,6 @@ export default function Home() {
 			{/* Input Box For New Queries */}
 			<div className="absolute bottom-10 w-full ">
 				<QueryInput
-					thinkingMode={thinkingMode}
-					setThinkingMode={setThinkingMode}
 					query={query}
 					setQuery={setQuery}
 					loading={loading}
