@@ -3,8 +3,8 @@ import { Button } from "../ui/button"
 
 export default function QueryInput({ query, setQuery, loading, handleQuery }) {
 	return (
-		<div className="w-[90vw] max-w-4xl mx-auto flex flex-col flex-nowrap gap-4">
-			<div className="flex flex-nowrap gap-5 px-4 py-2 bg-accent rounded-full border-4">
+		<div className="w-full max-w-6xl mx-auto flex flex-col flex-nowrap gap-4">
+			<div className="flex flex-nowrap gap-5 px-6 py-4 bg-accent rounded-2xl border-4">
 				<textarea
 					rows={1}
 					style={{

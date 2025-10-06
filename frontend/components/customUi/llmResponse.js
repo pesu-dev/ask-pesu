@@ -45,7 +45,7 @@ export default function LlmResponse({
 					<ReactMarkdown>{answer}</ReactMarkdown>
 					<div className="flex gap-3 mt-4">
 						<Button
-							className="rounded-2xl text-accent"
+							className="rounded-2xl text-accent hover:text-accent"
 							variant={"outline"}
 							onClick={() => {
 								navigator.clipboard.writeText(answer)
