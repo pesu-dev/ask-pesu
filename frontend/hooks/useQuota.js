@@ -7,12 +7,9 @@ export default function useQuota() {
 	})
 	const [loading, setLoading] = useState(true)
 
-	const BASE = process.env.NEXT_PUBLIC_DEV_API_URL?.replace(/\/ask$/, "") || "";
-
-
 	const fetchQuota = useCallback(async () => {
 		try {
-			const response = await fetch(`${BASE}/quota`)
+			const response = await fetch(`/quota`)
 			if (response.ok) {
 				const data = await response.json()
 				if (data.status && data.quota) {
@@ -26,7 +23,7 @@ export default function useQuota() {
 		} finally {
 			setLoading(false)
 		}
-	}, [BASE])
+	}, [])
 
 	const refreshQuota = useCallback(() => {
 		fetchQuota()
