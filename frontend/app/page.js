@@ -1,11 +1,12 @@
 "use client"
 
 import { useState, useEffect, useRef, useCallback } from "react"
-import UserPrompt from "@/components/custom_ui/user_prompt"
-import QueryInput from "@/components/custom_ui/query_input"
-import LlmResponse from "@/components/custom_ui/llm_response"
+import UserPrompt from "@/components/customUi/userPrompt"
+import QueryInput from "@/components/customUi/queryInput"
+import LlmResponse from "@/components/customUi/llmResponse"
 import Query from "./utils/query"
 import { toast } from "sonner"
+import useQuota from "@/hooks/useQuota"
 
 export default function Home() {
 	const [query, setQuery] = useState("")
@@ -13,6 +14,15 @@ export default function Home() {
 	const [inQueueQuery, setInQueueQuery] = useState("")
 	const [loading, setLoading] = useState(false)
 	const chatEndRef = useRef(null)
+
+	const {
+		quotaStatus,
+		loading: quotaLoading,
+		refreshQuota,
+		getTimeRemaining,
+		isThinkingAvailable,
+		thinkingNextAvailable,
+	} = useQuota()
 
 	// Auto-scroll to bottom on new message
 	useEffect(() => {
@@ -23,11 +33,50 @@ export default function Home() {
 		setQuery(query)
 	}, [])
 
-	const inputRef = useRef(null)
-	const [highlight, setHighlight] = useState(false)
+	const handleThinkingMode = useCallback(
+		async (queryText) => {
+			if (!isThinkingAvailable) {
+				const timeRemaining = getTimeRemaining(thinkingNextAvailable)
+				toast.warning(
+					`Thinking mode is currently unavailable due to usage limits${
+						timeRemaining
+							? ` and will be back in ${timeRemaining}`
+							: ""
+					}.`
+				)
+				return
+			}
 
-	// Remove highlight on blur
-	const handleBlur = () => setHighlight(false)
+			setLoading(true)
+			setInQueueQuery(queryText)
+
+			const data = await Query(queryText, true)
+			console.info(data)
+
+			setInQueueQuery(null)
+
+			if (data) {
+				setHistory((prev) => [
+					...prev,
+					{
+						query: queryText,
+						answer: data.answer,
+					},
+				])
+			} else {
+				// If query failed, refresh quota to check if thinking mode went down
+				refreshQuota()
+			}
+
+			setLoading(false)
+		},
+		[
+			isThinkingAvailable,
+			thinkingNextAvailable,
+			getTimeRemaining,
+			refreshQuota,
+		]
+	)
 
 	const handleQuery = useCallback(async () => {
 		if (!query.trim()) {
@@ -38,7 +87,7 @@ export default function Home() {
 		setLoading(true)
 		setInQueueQuery(query)
 
-		const data = await Query(query)
+		const data = await Query(query, false)
 		console.info(data)
 
 		setInQueueQuery(null)
@@ -68,7 +117,15 @@ export default function Home() {
 							query={row.query}
 							handleEditQuery={handleEditQuery}
 						/>
-						<LlmResponse answer={row.answer} />
+						<LlmResponse
+							answer={row.answer}
+							query={row.query}
+							onThinkingMode={handleThinkingMode}
+							isThinkingAvailable={isThinkingAvailable}
+							thinkingNextAvailable={thinkingNextAvailable}
+							getTimeRemaining={getTimeRemaining}
+							quotaLoading={quotaLoading}
+						/>
 					</div>
 				))}
 
@@ -85,7 +142,7 @@ export default function Home() {
 					</div>
 				)}
 
-				<div ref={chatEndRef} className="mb-[10vh]" />
+				<div ref={chatEndRef} className="mb-[20vh]" />
 			</div>
 
 			{/* Input Box For New Queries */}
