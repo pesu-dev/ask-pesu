@@ -9,8 +9,30 @@ import { toast } from "sonner"
 import useQuota from "@/hooks/useQuota"
 
 export default function Home() {
+	const [modelChoice, setModelChoice] = useState("primary") // This can either be 'primary' or 'thinking'
 	const [query, setQuery] = useState("")
-	const [history, setHistory] = useState([])
+	const [history, setHistory] = useState([
+		{
+			query: "hi how are you doing?",
+			answer: "I'm doing well, thank you for asking! How can I help you today?",
+			model: "thinking",
+		},
+		{
+			query: "give me a detailed review on studying a B-Tech degree at PESU",
+			answer: "wait.",
+			model: "primary",
+		},
+		{
+			query: "hi how are you doing?",
+			answer: "I'm doing well, thank you for asking! How can I help you today?",
+			model: "thinking",
+		},
+		{
+			query: "give me a detailed review on studying a B-Tech degree at PESU",
+			answer: "wait.",
+			model: "primary",
+		},
+	])
 	const [inQueueQuery, setInQueueQuery] = useState("")
 	const [loading, setLoading] = useState(false)
 	const chatEndRef = useRef(null)
@@ -33,6 +55,7 @@ export default function Home() {
 		setQuery(query)
 	}, [])
 
+<<<<<<< Updated upstream
 	const handleThinkingMode = useCallback(
 		async (queryText) => {
 			if (!isThinkingAvailable) {
@@ -44,10 +67,17 @@ export default function Home() {
 							: ""
 					}.`
 				)
+=======
+	const handleQuery = useCallback(
+		async (overrideQuery, overrideModelChoice) => {
+			if (!query.trim() && !overrideQuery) {
+				toast.warning("You can't query an empty question.")
+>>>>>>> Stashed changes
 				return
 			}
 
 			setLoading(true)
+<<<<<<< Updated upstream
 			setInQueueQuery(queryText)
 
 			const data = await Query(queryText, true)
@@ -77,39 +107,44 @@ export default function Home() {
 			refreshQuota,
 		]
 	)
+=======
+			setInQueueQuery(overrideQuery || query)
+>>>>>>> Stashed changes
 
-	const handleQuery = useCallback(async () => {
-		if (!query.trim()) {
-			toast.warning("You can't query an empty question.")
-			return
-		}
+			const data = await Query(
+				overrideQuery || query,
+				overrideModelChoice === "thinking" || modelChoice === "thinking"
+			)
+			console.info(data)
 
-		setLoading(true)
-		setInQueueQuery(query)
+			setInQueueQuery(null)
+			setQuery("")
 
+<<<<<<< Updated upstream
 		const data = await Query(query, false)
 		console.info(data)
+=======
+			if (data) {
+				setHistory((prev) => [
+					...prev,
+					{
+						query: overrideQuery || query,
+						answer: data.answer,
+						model: overrideModelChoice || modelChoice,
+					},
+				])
+			}
+>>>>>>> Stashed changes
 
-		setInQueueQuery(null)
-		setQuery("")
-
-		if (data) {
-			setHistory((prev) => [
-				...prev,
-				{
-					query,
-					answer: data.answer,
-				},
-			])
-		}
-
-		setLoading(false)
-	}, [query, setLoading, setInQueueQuery, setHistory, setQuery])
+			setLoading(false)
+		},
+		[query, setLoading, setInQueueQuery, setHistory, setQuery, modelChoice]
+	)
 
 	return (
 		<div className="relative bg-background w-screen h-screen flex flex-col">
 			{/* Chat Window */}
-			<div className="flex-1 w-full max-w-5xl mx-auto px-4 py-6 overflow-y-auto hide-scrollbar">
+			<div className="flex-1 w-full max-w-5xl mx-auto px-4 py-6 pb-20 overflow-y-auto hide-scrollbar">
 				{/* Past Queries */}
 				{history.map((row, i) => (
 					<div key={i} className="mb-6">
@@ -119,12 +154,19 @@ export default function Home() {
 						/>
 						<LlmResponse
 							answer={row.answer}
+<<<<<<< Updated upstream
 							query={row.query}
 							onThinkingMode={handleThinkingMode}
 							isThinkingAvailable={isThinkingAvailable}
 							thinkingNextAvailable={thinkingNextAvailable}
 							getTimeRemaining={getTimeRemaining}
 							quotaLoading={quotaLoading}
+=======
+							handleThinkMore={() => {
+								handleQuery(row.query, "thinking")
+							}}
+							showThinkMoreOption={row.model === "thinking"}
+>>>>>>> Stashed changes
 						/>
 					</div>
 				))}
@@ -146,10 +188,12 @@ export default function Home() {
 			</div>
 
 			{/* Input Box For New Queries */}
-			<div className="absolute bottom-10 w-full ">
+			<div className="absolute bottom-10 w-full">
 				<QueryInput
 					query={query}
 					setQuery={setQuery}
+					modelChoice={modelChoice}
+					setModelChoice={setModelChoice}
 					loading={loading}
 					handleQuery={handleQuery}
 				/>
