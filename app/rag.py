@@ -144,7 +144,7 @@ class RetrievalAugmentedGenerator:
         chat_history = []
 
         for convo in history:
-            if query != convo.query:
+            if query != convo.query:  # Prevents repeating the same question when using the thinking model.
                 chat_history.append(HumanMessage(convo.query))
                 chat_history.append(AIMessage(convo.answer))
 
