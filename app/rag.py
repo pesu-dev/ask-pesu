@@ -11,6 +11,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnablePassthrough, RunnableSerializable
+from langchain_core.messages import HumanMessage, AIMessage
 from langchain_huggingface.embeddings import HuggingFaceEmbeddings
 from langchain_qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
@@ -65,6 +66,17 @@ class RetrievalAugmentedGenerator:
             ]
         )
 
+        self.frame_qn_prompt = ChatPromptTemplate.from_messages(
+            [
+                ("system",
+                "Rewrite the user's question into a standalone question using chat history. "
+                "Resolve pronouns like 'he', 'she', 'they', 'it'. Do NOT answer."
+                "Chat history:\n{chat_history}"
+                ),
+                ("human", "{input}")
+            ]
+        )
+
         # Build the RAG chains
         self.retriever = self.vector_store.as_retriever(search_kwargs=self.config["rag"]["search_kwargs"])
         self.rag_chain_primary = self._build_chain(self.llm_primary)
@@ -84,10 +96,22 @@ class RetrievalAugmentedGenerator:
             retriever=self.retriever,
             llm=llm,
         )
-        # Initialize the RAG chain
+        
+
+        history_aware_retriever = (
+            {
+                "input": RunnablePassthrough(),
+                "chat_history": RunnablePassthrough()
+            }
+            | self.frame_qn_prompt
+            | llm
+            | StrOutputParser()
+            | multiquery_retriever
+        )
+
         return (
             {
-                "context": multiquery_retriever | self.format_docs,
+                "context": history_aware_retriever | self.format_docs,
                 "question": RunnablePassthrough(),
             }
             | self.prompt
@@ -100,7 +124,7 @@ class RetrievalAugmentedGenerator:
         """Format the retrieved documents into a single string."""
         return "\n\n".join(f"{doc.metadata['url']}\n{doc.page_content}" for doc in docs)
 
-    async def generate(self, query: str, thinking: bool) -> str:
+    async def generate(self, query: str, thinking: bool, history: list) -> str:
         """Generate a response for the given query using the RAG chain.
 
         Args:
@@ -110,7 +134,23 @@ class RetrievalAugmentedGenerator:
         Returns:
             str: The generated response.
         """
+
+        chat_history = []
+        
+        for convo in history:
+            chat_history.append(HumanMessage(convo.query))
+            chat_history.append(AIMessage(convo.answer))
+
         rag_chain = (
             self.rag_chain_thinking if thinking and self.rag_chain_thinking is not None else self.rag_chain_primary
         )
-        return await rag_chain.ainvoke(query)
+
+        result = await rag_chain.ainvoke(
+            {
+            "input": query,
+            "question":query,
+            "chat_history": chat_history
+            }
+        )
+
+        return result
