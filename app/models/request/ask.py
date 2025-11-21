@@ -7,9 +7,7 @@ class HistoryItem(BaseModel):
     """Model representing an item in the chat history list."""
 
     query: str = Field(..., description="Past user query.")
-    answer: str = Field(
-        ..., description="Chatbot's answer to a prior query by the user."
-    )
+    answer: str = Field(..., description="Chatbot's answer to a prior query by the user.")
 
 
 class AskRequestModel(BaseModel):

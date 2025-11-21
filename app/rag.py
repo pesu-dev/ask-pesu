@@ -66,25 +66,26 @@ class RetrievalAugmentedGenerator:
             ]
         )
 
-        self.frame_qn_prompt = ChatPromptTemplate.from_messages([
-            ("system",
-            "You are a question rewriting assistant. Your job is to rewrite the user's "
-            "question into an independent, self-contained question.\n\n"
-
-            "Rewrite rules:\n"
-            "1. ONLY use the chat history if the user's question is ambiguous or refers to previous context "
-            "(e.g., pronouns like 'he', 'she', 'it', 'they', 'that').\n"
-            "2. If the question is clear on its own, return it EXACTLY as it is.\n"
-            "3. When resolving a follow-up question, ALWAYS prioritize the most recent topic in the chat history. "
-            "Do NOT pull context from older, unrelated parts of the conversation.\n"
-            "4. If the question could refer to multiple topics, choose the MOST RECENT plausible topic.\n"
-            "5. Do NOT invent or assume connections between unrelated topics.\n"
-            "6. Do NOT answer the question — only rewrite it.\n\n"
-
-            "Chat History:\n{chat_history}"
-            ),
-            ("human", "{input}")
-        ])
+        self.frame_qn_prompt = ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    "You are a question rewriting assistant. Your job is to rewrite the user's "
+                    "question into an independent, self-contained question.\n\n"
+                    "Rewrite rules:\n"
+                    "1. ONLY use the chat history if the user's question is ambiguous or refers to previous context "
+                    "(e.g., pronouns like 'he', 'she', 'it', 'they', 'that').\n"
+                    "2. If the question is clear on its own, return it EXACTLY as it is.\n"
+                    "3. When resolving a follow-up question, ALWAYS prioritize the most recent topic in the chat history. "
+                    "Do NOT pull context from older, unrelated parts of the conversation.\n"
+                    "4. If the question could refer to multiple topics, choose the MOST RECENT plausible topic.\n"
+                    "5. Do NOT invent or assume connections between unrelated topics.\n"
+                    "6. Do NOT answer the question — only rewrite it.\n\n"
+                    "Chat History:\n{chat_history}",
+                ),
+                ("human", "{input}"),
+            ]
+        )
 
         # Build the RAG chains
         self.retriever = self.vector_store.as_retriever(search_kwargs=self.config["rag"]["search_kwargs"])
@@ -106,12 +107,8 @@ class RetrievalAugmentedGenerator:
             llm=llm,
         )
 
-
         history_aware_retriever = (
-            {
-                "input": RunnablePassthrough(),
-                "chat_history": RunnablePassthrough()
-            }
+            {"input": RunnablePassthrough(), "chat_history": RunnablePassthrough()}
             | self.frame_qn_prompt
             | llm
             | StrOutputParser()
@@ -155,10 +152,4 @@ class RetrievalAugmentedGenerator:
             self.rag_chain_thinking if thinking and self.rag_chain_thinking is not None else self.rag_chain_primary
         )
 
-        return await rag_chain.ainvoke(
-            {
-            "input": query,
-            "question":query,
-            "chat_history": chat_history
-            }
-        )
+        return await rag_chain.ainvoke({"input": query, "question": query, "chat_history": chat_history})
