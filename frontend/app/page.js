@@ -37,15 +37,6 @@ export default function Home() {
 	const [loading, setLoading] = useState(false)
 	const chatEndRef = useRef(null)
 
-	const {
-		quotaStatus,
-		loading: quotaLoading,
-		refreshQuota,
-		getTimeRemaining,
-		isThinkingAvailable,
-		thinkingNextAvailable,
-	} = useQuota()
-
 	// Auto-scroll to bottom on new message
 	useEffect(() => {
 		chatEndRef.current?.scrollIntoView({ behavior: "smooth" })
@@ -55,88 +46,37 @@ export default function Home() {
 		setQuery(query)
 	}, [])
 
-<<<<<<< Updated upstream
-	const handleThinkingMode = useCallback(
-		async (queryText) => {
-			if (!isThinkingAvailable) {
-				const timeRemaining = getTimeRemaining(thinkingNextAvailable)
-				toast.warning(
-					`Thinking mode is currently unavailable due to usage limits${
-						timeRemaining
-							? ` and will be back in ${timeRemaining}`
-							: ""
-					}.`
-				)
-=======
 	const handleQuery = useCallback(
 		async (overrideQuery, overrideModelChoice) => {
 			if (!query.trim() && !overrideQuery) {
 				toast.warning("You can't query an empty question.")
->>>>>>> Stashed changes
-				return
+
+				setLoading(true)
+				setInQueueQuery(overrideQuery || query)
+
+				const data = await Query(
+					overrideQuery || query,
+					overrideModelChoice === "thinking" ||
+						modelChoice === "thinking"
+				)
+				console.info(data)
+
+				setInQueueQuery(null)
+				setQuery("")
+
+				if (data) {
+					setHistory((prev) => [
+						...prev,
+						{
+							query: overrideQuery || query,
+							answer: data.answer,
+							model: overrideModelChoice || modelChoice,
+						},
+					])
+				}
+
+				setLoading(false)
 			}
-
-			setLoading(true)
-<<<<<<< Updated upstream
-			setInQueueQuery(queryText)
-
-			const data = await Query(queryText, true)
-			console.info(data)
-
-			setInQueueQuery(null)
-
-			if (data) {
-				setHistory((prev) => [
-					...prev,
-					{
-						query: queryText,
-						answer: data.answer,
-					},
-				])
-			} else {
-				// If query failed, refresh quota to check if thinking mode went down
-				refreshQuota()
-			}
-
-			setLoading(false)
-		},
-		[
-			isThinkingAvailable,
-			thinkingNextAvailable,
-			getTimeRemaining,
-			refreshQuota,
-		]
-	)
-=======
-			setInQueueQuery(overrideQuery || query)
->>>>>>> Stashed changes
-
-			const data = await Query(
-				overrideQuery || query,
-				overrideModelChoice === "thinking" || modelChoice === "thinking"
-			)
-			console.info(data)
-
-			setInQueueQuery(null)
-			setQuery("")
-
-<<<<<<< Updated upstream
-		const data = await Query(query, false)
-		console.info(data)
-=======
-			if (data) {
-				setHistory((prev) => [
-					...prev,
-					{
-						query: overrideQuery || query,
-						answer: data.answer,
-						model: overrideModelChoice || modelChoice,
-					},
-				])
-			}
->>>>>>> Stashed changes
-
-			setLoading(false)
 		},
 		[query, setLoading, setInQueueQuery, setHistory, setQuery, modelChoice]
 	)
@@ -147,26 +87,17 @@ export default function Home() {
 			<div className="flex-1 w-full max-w-5xl mx-auto px-4 py-6 pb-20 overflow-y-auto hide-scrollbar">
 				{/* Past Queries */}
 				{history.map((row, i) => (
-					<div key={i} className="mb-6">
+					<div key={i} className="mb-30">
 						<UserPrompt
 							query={row.query}
 							handleEditQuery={handleEditQuery}
 						/>
 						<LlmResponse
 							answer={row.answer}
-<<<<<<< Updated upstream
-							query={row.query}
-							onThinkingMode={handleThinkingMode}
-							isThinkingAvailable={isThinkingAvailable}
-							thinkingNextAvailable={thinkingNextAvailable}
-							getTimeRemaining={getTimeRemaining}
-							quotaLoading={quotaLoading}
-=======
 							handleThinkMore={() => {
 								handleQuery(row.query, "thinking")
 							}}
 							showThinkMoreOption={row.model === "thinking"}
->>>>>>> Stashed changes
 						/>
 					</div>
 				))}

@@ -16,7 +16,7 @@ export default function UserPrompt({ query, handleEditQuery }) {
 			<div className="min-w-10 p-4 ring ring-accent bg-primary text-primary-foreground rounded-2xl">
 				<p>{query}</p>
 			</div>
-			<User className="ring-2 ring-ring/40 text-ring rounded-full p-2 size-10 min-w-10 min-h-10" />
+			<User className="ring-2 ring-ring/40 text-ring rounded-full p-2 min-w-10 min-h-10 hidden md:block" />
 		</div>
 	)
 }
