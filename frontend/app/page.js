@@ -50,7 +50,7 @@ export default function Home() {
 			setLoading(true)
 			setInQueueQuery(queryText)
 
-			const data = await Query(queryText, true)
+			const data = await Query(queryText, true, history)
 			console.info(data)
 
 			setInQueueQuery(null)
@@ -75,6 +75,7 @@ export default function Home() {
 			thinkingNextAvailable,
 			getTimeRemaining,
 			refreshQuota,
+			history,
 		]
 	)
 
@@ -87,7 +88,7 @@ export default function Home() {
 		setLoading(true)
 		setInQueueQuery(query)
 
-		const data = await Query(query, false)
+		const data = await Query(query, false, history)
 		console.info(data)
 
 		setInQueueQuery(null)
@@ -104,7 +105,7 @@ export default function Home() {
 		}
 
 		setLoading(false)
-	}, [query, setLoading, setInQueueQuery, setHistory, setQuery])
+	}, [query, setLoading, setInQueueQuery, setHistory, setQuery, history])
 
 	return (
 		<div className="relative bg-background w-screen h-screen flex flex-col">

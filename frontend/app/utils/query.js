@@ -1,13 +1,21 @@
 import { toast } from "sonner"
 
-export default async function Query(question, thinkingMode = false) {
+export default async function Query(
+	question,
+	thinkingMode = false,
+	chatHistory = []
+) {
 	try {
 		const resp = await fetch(`/ask`, {
 			method: "POST",
 			headers: {
 				"Content-Type": "application/json",
 			},
-			body: JSON.stringify({ query: question, thinking: thinkingMode }),
+			body: JSON.stringify({
+				query: question,
+				thinking: thinkingMode,
+				history: chatHistory,
+			}),
 		})
 
 		if (resp.ok) {
