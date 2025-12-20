@@ -1,15 +1,15 @@
 import { SendHorizonal } from "lucide-react"
 import { Button } from "../ui/button"
 import { CustomTextarea } from "./customTextarea"
-import {
-	Select,
-	SelectTrigger,
-	SelectValue,
-	SelectContent,
-	SelectLabel,
-	SelectGroup,
-	SelectItem,
-} from "../customUi/customSelect"
+// import {
+// 	Select,
+// 	SelectTrigger,
+// 	SelectValue,
+// 	SelectContent,
+// 	SelectLabel,
+// 	SelectGroup,
+// 	SelectItem,
+// } from "../customUi/customSelect"
 import useSWR from "swr"
 import { useEffect, useState } from "react"
 import { toast } from "sonner"
@@ -23,7 +23,8 @@ export default function QueryInput({
 	handleQuery,
 }) {
 	const fetcher = (...args) => fetch(...args).then((res) => res.json())
-	const { data, error, swrIsLoading } = useSWR("/quota", fetcher)
+	const API_URL = process.env.NEXT_PUBLIC_DEV_API_URL
+	const { data, error, swrIsLoading } = useSWR(`${API_URL}/quota`, fetcher)
 
 	const [thinkingAllowed, setThinkingAllowed] = useState(false)
 
@@ -68,6 +69,7 @@ export default function QueryInput({
 					onChange={(e) => setQuery(e.target.value)}
 					onKeyDown={(e) => {
 						if (e.key === "Enter" && !loading) {
+							e.preventDefault()
 							handleQuery()
 						}
 					}}
@@ -75,13 +77,13 @@ export default function QueryInput({
 				<Button
 					disabled={loading}
 					className="rounded-l-none rounded-full w-12 h-10"
-					onClick={handleQuery}
+					onClick={() => handleQuery()}
 				>
 					<SendHorizonal className="size-4" />
 				</Button>
 			</div>
 			<div>
-				<Select
+				{/* <Select
 					value={modelChoice}
 					onValueChange={(v) => {
 						setModelChoice(v)
@@ -102,7 +104,7 @@ export default function QueryInput({
 							</SelectItem>
 						</SelectGroup>
 					</SelectContent>
-				</Select>
+				</Select> */}
 			</div>
 		</div>
 	)

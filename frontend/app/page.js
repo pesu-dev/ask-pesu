@@ -7,6 +7,7 @@ import LlmResponse from "@/components/customUi/llmResponse"
 import Query from "./utils/query"
 import { toast } from "sonner"
 import useQuota from "@/hooks/useQuota"
+import ThinkingIndicator from "@/components/customUi/thinkinganimation"
 
 export default function Home() {
 	const [query, setQuery] = useState("")
@@ -14,6 +15,19 @@ export default function Home() {
 	const [inQueueQuery, setInQueueQuery] = useState("")
 	const [loading, setLoading] = useState(false)
 	const chatEndRef = useRef(null)
+	const {
+		quotaStatus,
+		loading: quotaLoading,
+		refreshQuota,
+		getTimeRemaining,
+		isThinkingAvailable,
+		thinkingNextAvailable,
+	} = useQuota()
+
+
+	// useEffect(() => {
+	// 	console.log("API URL:", process.env.NEXT_PUBLIC_DEV_API_URL)
+	// }, [])
 
 	const {
 		quotaStatus,
@@ -78,6 +92,7 @@ export default function Home() {
 			history,
 		]
 	)
+	console.log("Rendering Home component")
 
 	const handleQuery = useCallback(async () => {
 		if (!query.trim()) {
@@ -136,9 +151,7 @@ export default function Home() {
 						<UserPrompt query={inQueueQuery} />
 
 						<div className="flex justify-start mt-3">
-							<div className="bg-muted px-4 py-3 rounded-2xl max-w-[75%] text-neutral-500 shadow">
-								Thinking...
-							</div>
+							<ThinkingIndicator />
 						</div>
 					</div>
 				)}
