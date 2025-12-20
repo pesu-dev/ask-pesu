@@ -8,6 +8,7 @@ from langchain.chat_models import init_chat_model
 from langchain.retrievers.multi_query import MultiQueryRetriever
 from langchain_core.documents.base import Document
 from langchain_core.language_models import BaseChatModel
+from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnablePassthrough, RunnableSerializable
@@ -65,6 +66,27 @@ class RetrievalAugmentedGenerator:
             ]
         )
 
+        self.frame_qn_prompt = ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    "You are a question rewriting assistant. Your job is to rewrite the user's "
+                    "question into an independent, self-contained question.\n\n"
+                    "Rewrite rules:\n"
+                    "1.ONLY use the chat history if the user's question is ambiguous or refers to previous context "
+                    "(e.g., pronouns like 'he', 'she', 'it', 'they', 'that').\n"
+                    "2.If the question is clear on its own, return it EXACTLY as it is.\n"
+                    "3.When resolving a follow-up question, ALWAYS prioritize the most recent topic in the chat history"
+                    "Do NOT pull context from older, unrelated parts of the conversation.\n"
+                    "4.If the question could refer to multiple topics, choose the MOST RECENT plausible topic.\n"
+                    "5.Do NOT invent or assume connections between unrelated topics.\n"
+                    "6.Do NOT answer the question — only rewrite it.\n\n"
+                    "Chat History:\n{chat_history}",
+                ),
+                ("human", "{input}"),
+            ]
+        )
+
         # Build the RAG chains
         self.retriever = self.vector_store.as_retriever(search_kwargs=self.config["rag"]["search_kwargs"])
         self.rag_chain_primary = self._build_chain(self.llm_primary)
@@ -84,10 +106,18 @@ class RetrievalAugmentedGenerator:
             retriever=self.retriever,
             llm=llm,
         )
-        # Initialize the RAG chain
+
+        history_aware_retriever = (
+            {"input": RunnablePassthrough(), "chat_history": RunnablePassthrough()}
+            | self.frame_qn_prompt
+            | llm
+            | StrOutputParser()
+            | multiquery_retriever
+        )
+
         return (
             {
-                "context": multiquery_retriever | self.format_docs,
+                "context": history_aware_retriever | self.format_docs,
                 "question": RunnablePassthrough(),
             }
             | self.prompt
@@ -100,17 +130,26 @@ class RetrievalAugmentedGenerator:
         """Format the retrieved documents into a single string."""
         return "\n\n".join(f"{doc.metadata['url']}\n{doc.page_content}" for doc in docs)
 
-    async def generate(self, query: str, thinking: bool) -> str:
+    async def generate(self, query: str, thinking: bool, history: list) -> str:
         """Generate a response for the given query using the RAG chain.
 
         Args:
             query (str): The input query.
             thinking (bool): Flag to indicate if the model should 'think' before answering.
+            history (list): The entire chat history until the current query
 
         Returns:
             str: The generated response.
         """
+        chat_history = []
+
+        for convo in history:
+            if query != convo.query:  # Prevents repeating the same question when using the thinking model.
+                chat_history.append(HumanMessage(convo.query))
+                chat_history.append(AIMessage(convo.answer))
+
         rag_chain = (
             self.rag_chain_thinking if thinking and self.rag_chain_thinking is not None else self.rag_chain_primary
         )
-        return await rag_chain.ainvoke(query)
+
+        return await rag_chain.ainvoke({"input": query, "question": query, "chat_history": chat_history})

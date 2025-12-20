@@ -9,33 +9,20 @@ import { toast } from "sonner"
 import useQuota from "@/hooks/useQuota"
 
 export default function Home() {
-	const [modelChoice, setModelChoice] = useState("primary") // This can either be 'primary' or 'thinking'
 	const [query, setQuery] = useState("")
-	const [history, setHistory] = useState([
-		{
-			query: "hi how are you doing?",
-			answer: "I'm doing well, thank you for asking! How can I help you today?",
-			model: "thinking",
-		},
-		{
-			query: "give me a detailed review on studying a B-Tech degree at PESU",
-			answer: "wait.",
-			model: "primary",
-		},
-		{
-			query: "hi how are you doing?",
-			answer: "I'm doing well, thank you for asking! How can I help you today?",
-			model: "thinking",
-		},
-		{
-			query: "give me a detailed review on studying a B-Tech degree at PESU",
-			answer: "wait.",
-			model: "primary",
-		},
-	])
+	const [history, setHistory] = useState([])
 	const [inQueueQuery, setInQueueQuery] = useState("")
 	const [loading, setLoading] = useState(false)
 	const chatEndRef = useRef(null)
+
+	const {
+		quotaStatus,
+		loading: quotaLoading,
+		refreshQuota,
+		getTimeRemaining,
+		isThinkingAvailable,
+		thinkingNextAvailable,
+	} = useQuota()
 
 	// Auto-scroll to bottom on new message
 	useEffect(() => {
@@ -46,58 +33,99 @@ export default function Home() {
 		setQuery(query)
 	}, [])
 
-	const handleQuery = useCallback(
-		async (overrideQuery, overrideModelChoice) => {
-			if (!query.trim() && !overrideQuery) {
-				toast.warning("You can't query an empty question.")
-
-				setLoading(true)
-				setInQueueQuery(overrideQuery || query)
-
-				const data = await Query(
-					overrideQuery || query,
-					overrideModelChoice === "thinking" ||
-						modelChoice === "thinking"
+	const handleThinkingMode = useCallback(
+		async (queryText) => {
+			if (!isThinkingAvailable) {
+				const timeRemaining = getTimeRemaining(thinkingNextAvailable)
+				toast.warning(
+					`Thinking mode is currently unavailable due to usage limits${
+						timeRemaining
+							? ` and will be back in ${timeRemaining}`
+							: ""
+					}.`
 				)
-				console.info(data)
-
-				setInQueueQuery(null)
-				setQuery("")
-
-				if (data) {
-					setHistory((prev) => [
-						...prev,
-						{
-							query: overrideQuery || query,
-							answer: data.answer,
-							model: overrideModelChoice || modelChoice,
-						},
-					])
-				}
-
-				setLoading(false)
+				return
 			}
+
+			setLoading(true)
+			setInQueueQuery(queryText)
+
+			const data = await Query(queryText, true, history)
+			console.info(data)
+
+			setInQueueQuery(null)
+
+			if (data) {
+				setHistory((prev) => [
+					...prev,
+					{
+						query: queryText,
+						answer: data.answer,
+					},
+				])
+			} else {
+				// If query failed, refresh quota to check if thinking mode went down
+				refreshQuota()
+			}
+
+			setLoading(false)
 		},
-		[query, setLoading, setInQueueQuery, setHistory, setQuery, modelChoice]
+		[
+			isThinkingAvailable,
+			thinkingNextAvailable,
+			getTimeRemaining,
+			refreshQuota,
+			history,
+		]
 	)
+
+	const handleQuery = useCallback(async () => {
+		if (!query.trim()) {
+			toast.warning("You can't query an empty question.")
+			return
+		}
+
+		setLoading(true)
+		setInQueueQuery(query)
+
+		const data = await Query(query, false, history)
+		console.info(data)
+
+		setInQueueQuery(null)
+		setQuery("")
+
+		if (data) {
+			setHistory((prev) => [
+				...prev,
+				{
+					query,
+					answer: data.answer,
+				},
+			])
+		}
+
+		setLoading(false)
+	}, [query, setLoading, setInQueueQuery, setHistory, setQuery, history])
 
 	return (
 		<div className="relative bg-background w-screen h-screen flex flex-col">
 			{/* Chat Window */}
-			<div className="flex-1 w-full max-w-5xl mx-auto px-4 py-6 pb-20 overflow-y-auto hide-scrollbar">
+			<div className="flex-1 w-full max-w-5xl mx-auto px-4 py-6 overflow-y-auto hide-scrollbar">
 				{/* Past Queries */}
 				{history.map((row, i) => (
-					<div key={i} className="mb-30">
+					<div key={i} className="mb-6">
 						<UserPrompt
 							query={row.query}
 							handleEditQuery={handleEditQuery}
 						/>
 						<LlmResponse
 							answer={row.answer}
-							handleThinkMore={() => {
-								handleQuery(row.query, "thinking")
-							}}
-							showThinkMoreOption={row.model === "thinking"}
+							query={row.query}
+							onThinkingMode={handleThinkingMode}
+							isThinkingAvailable={isThinkingAvailable}
+							thinkingNextAvailable={thinkingNextAvailable}
+							getTimeRemaining={getTimeRemaining}
+							quotaLoading={quotaLoading}
 						/>
 					</div>
 				))}
@@ -119,12 +147,10 @@ export default function Home() {
 			</div>
 
 			{/* Input Box For New Queries */}
-			<div className="absolute bottom-10 w-full">
+			<div className="absolute bottom-10 w-full ">
 				<QueryInput
 					query={query}
 					setQuery={setQuery}
-					modelChoice={modelChoice}
-					setModelChoice={setModelChoice}
 					loading={loading}
 					handleQuery={handleQuery}
 				/>
