@@ -1,5 +1,3 @@
-import { toast } from "sonner"
-
 export default async function Query(
 	question,
 	thinkingMode = false,

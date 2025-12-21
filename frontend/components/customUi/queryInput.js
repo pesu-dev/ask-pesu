@@ -1,15 +1,6 @@
 import { SendHorizonal } from "lucide-react"
 import { Button } from "../ui/button"
 import { CustomTextarea } from "./customTextarea"
-// import {
-// 	Select,
-// 	SelectTrigger,
-// 	SelectValue,
-// 	SelectContent,
-// 	SelectLabel,
-// 	SelectGroup,
-// 	SelectItem,
-// } from "../customUi/customSelect"
 import useSWR from "swr"
 import { useEffect, useState } from "react"
 import { toast } from "sonner"
