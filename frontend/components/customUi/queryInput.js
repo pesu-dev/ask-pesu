@@ -14,8 +14,7 @@ export default function QueryInput({
 	handleQuery,
 }) {
 	const fetcher = (...args) => fetch(...args).then((res) => res.json())
-	const API_URL = process.env.NEXT_PUBLIC_DEV_API_URL
-	const { data, error, swrIsLoading } = useSWR(`${API_URL}/quota`, fetcher)
+	const { data, error, swrIsLoading } = useSWR(`/quota`, fetcher)
 
 	const [thinkingAllowed, setThinkingAllowed] = useState(false)
 
@@ -50,7 +49,7 @@ export default function QueryInput({
 	}, [thinkingAllowed, setModelChoice])
 
 	return (
-		<div className="flex flex-nowrap flex-col w-[90vw] max-w-4xl max-h-[50vh] overflow-y-scroll hide-scrollbar mx-auto bg-background px-4 py-2  ring-ring ring-2 rounded-2xl">
+		<div className="flex flex-nowrap flex-col w-[90vw] max-w-4xl max-h-[30vh] overflow-y-scroll hide-scrollbar mx-auto bg-background px-4 py-2  ring-ring ring-2 rounded-2xl">
 			<div className="flex flex-nowrap gap-5">
 				<CustomTextarea
 					disabled={loading}
