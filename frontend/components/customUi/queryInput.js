@@ -1,43 +1,100 @@
-import { Brain, BrainCircuit, Lightbulb, SendHorizonal } from "lucide-react"
+import { SendHorizonal } from "lucide-react"
 import { Button } from "../ui/button"
+import { CustomTextarea } from "./customTextarea"
+import useSWR from "swr"
+import { useEffect, useState } from "react"
+import { toast } from "sonner"
 
-export default function QueryInput({ query, setQuery, loading, handleQuery }) {
+export default function QueryInput({
+	query,
+	setQuery,
+	modelChoice,
+	setModelChoice,
+	loading,
+	handleQuery,
+}) {
+	const fetcher = (...args) => fetch(...args).then((res) => res.json())
+	const { data, error, swrIsLoading } = useSWR(`/quota`, fetcher)
+
+	const [thinkingAllowed, setThinkingAllowed] = useState(false)
+
+	useEffect(() => {
+		if (error) console.error("SWR ERROR: ", error)
+	}, [error])
+
+	useEffect(() => {
+		if (swrIsLoading) return
+
+		if (!data) return
+
+		if (!data.status) {
+			console.error(data)
+			toast.error(data?.message)
+			setThinkingAllowed(false)
+			return
+		}
+
+		if (data?.quota?.thinking?.available) {
+			setThinkingAllowed(true)
+			return
+		}
+
+		setThinkingAllowed(false)
+	}, [data, swrIsLoading])
+
+	useEffect(() => {
+		if (!thinkingAllowed) {
+			setModelChoice("primary")
+		}
+	}, [thinkingAllowed, setModelChoice])
+
 	return (
-		<div className="w-[90vw] max-w-4xl mx-auto flex flex-col flex-nowrap gap-4">
-			<div className="flex flex-nowrap gap-5 px-4 py-2 bg-accent rounded-full border-4">
-				<textarea
-					rows={1}
-					style={{
-						minHeight: "40px",
-						maxHeight: "120px", // 5 lines
-						resize: "none",
-						lineHeight: "1.9",
-						overflow: query.trim() ? "auto" : "hidden",
-					}}
-					onInput={(e) => {
-						e.target.style.height = "auto"
-						e.target.style.height =
-							Math.min(e.target.scrollHeight, 120) + "px"
-					}}
-					cols={100}
+		<div className="flex flex-nowrap flex-col w-[90vw] max-w-4xl max-h-[30vh] overflow-y-scroll hide-scrollbar mx-auto bg-background px-4 py-2  ring-ring ring-2 rounded-2xl">
+			<div className="flex flex-nowrap gap-5">
+				<CustomTextarea
 					disabled={loading}
-					className="w-full h-full outline-none m-auto text-lg placeholder:text-left"
-					placeholder="Ask me anything about PESU..."
+					className="w-full text-lg border-none"
+					placeholder="Ask me anything..."
 					value={query}
 					onChange={(e) => setQuery(e.target.value)}
 					onKeyDown={(e) => {
-						if (e.key === "Enter" && !e.shiftKey && !loading) {
+						if (e.key === "Enter" && !loading) {
+							e.preventDefault()
 							handleQuery()
 						}
 					}}
 				/>
 				<Button
 					disabled={loading}
-					className="rounded-full w-12 h-10"
-					onClick={handleQuery}
+					className="rounded-l-none rounded-full w-12 h-10"
+					onClick={() => handleQuery()}
 				>
 					<SendHorizonal className="size-4" />
 				</Button>
+			</div>
+			<div>
+				{/* <Select
+					value={modelChoice}
+					onValueChange={(v) => {
+						setModelChoice(v)
+					}}
+					disabled={!thinkingAllowed || swrIsLoading}
+				>
+					<SelectTrigger id="model-select" className="w-56">
+						<SelectValue placeholder="Select model" />
+					</SelectTrigger>
+					<SelectContent>
+						<SelectGroup>
+							<SelectLabel>Model Choice</SelectLabel>
+							<SelectItem value="primary">
+								Primary model
+							</SelectItem>
+							<SelectItem value="thinking">
+								Thinking model
+							</SelectItem>
+						</SelectGroup>
+					</SelectContent>
+				</Select> */}
 			</div>
 		</div>
 	)

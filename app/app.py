@@ -11,6 +11,7 @@ import pytz
 import torch
 import uvicorn
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from google.api_core.exceptions import ResourceExhausted
@@ -54,6 +55,16 @@ app = FastAPI(
             "description": "Health checks and other monitoring endpoints.",
         },
     ],
+)
+
+origins = ["*"]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Initialize globals

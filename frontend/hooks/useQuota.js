@@ -9,12 +9,16 @@ export default function useQuota() {
 
 	const fetchQuota = useCallback(async () => {
 		try {
-			const response = await fetch(`/quota`)
+			const url = `/quota`;
+			const response = await fetch(url);
+			//const response = await fetch(`${API_URL}/quota`)
 			if (response.ok) {
 				const data = await response.json()
 				if (data.status && data.quota) {
 					setQuotaStatus(data.quota)
 				}
+				//console.log("Response body:", response)
+				//console.log(`${API_URL}/quota`)
 			} else {
 				console.error("Failed to fetch quota:", response.status)
 			}
