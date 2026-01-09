@@ -173,6 +173,11 @@ export default function Home() {
 						: "translateY(calc(50vh - 120px))",
 				}}
 			>
+				{isFirstQuery && (
+					<h1 className="text-8xl text-orange-500 font-bold text-center mb-8 transition-opacity duration-700">
+						AskPESU
+					</h1>
+				)}
 				<QueryInput
 					query={query}
 					setQuery={setQuery}

@@ -52,7 +52,7 @@ export default function QueryInput({
 	}, [thinkingAllowed, setModelChoice])
 
 	return (
-		<div className="flex flex-nowrap flex-col w-[90vw] max-w-4xl max-h-[30vh] overflow-y-scroll hide-scrollbar mx-auto bg-background px-4 py-2 ring-2 ring-primary/50 focus-within:ring-blue-500 focus-within:ring-2 rounded-2xl transition-all duration-200">
+		<div className="flex flex-nowrap flex-col w-[90vw] max-w-4xl max-h-[30vh] overflow-y-auto hide-scrollbar mx-auto bg-background px-4 py-2 ring-2 ring-primary/50 focus-within:ring-blue-500 focus-within:ring-2 rounded-2xl transition-all duration-200">
 			<div className="flex flex-nowrap gap-5">
 				<CustomTextarea
 					disabled={loading}
