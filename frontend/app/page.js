@@ -17,6 +17,9 @@ export default function Home() {
 	const [modelChoice, setModelChoice] = useState("primary")
 	const chatEndRef = useRef(null)
 
+	// state to track if it is first query
+	const [isFirstQuery, setIsFirstQuery] = useState(true)
+
 	// useEffect(() => {
 	// 	console.log("API URL:", process.env.NEXT_PUBLIC_DEV_API_URL)
 	// }, [])
@@ -92,6 +95,7 @@ export default function Home() {
 			return
 		}
 
+		setIsFirstQuery(false)
 		setLoading(true)
 		setInQueueQuery(query)
 
@@ -117,7 +121,14 @@ export default function Home() {
 	return (
 		<div className="relative bg-background w-screen h-screen flex flex-col">
 			{/* Chat Window */}
-			<div className="flex-1 w-full max-w-5xl mx-auto px-4 py-6 overflow-y-auto hide-scrollbar">
+			<div
+				className={`flex-1 w-full max-w-5xl mx-auto px-4 py-6 overflow-y-auto hide-scrollbar transition-opacity duration-500 ${
+					isFirstQuery
+						? "opacity-0 pointer-events-none"
+						: "opacity-100"
+				}`}
+			>
+				{" "}
 				{/* Past Queries */}
 				{history.map((row, i) => (
 					<div key={i} className="mb-6">
@@ -132,13 +143,14 @@ export default function Home() {
 							isThinkingAvailable={isThinkingAvailable}
 							thinkingNextAvailable={thinkingNextAvailable}
 							getTimeRemaining={getTimeRemaining}
-							handleThinkMode={() => handleThinkingMode(row.query)}
+							handleThinkMode={() =>
+								handleThinkingMode(row.query)
+							}
 							showThinkMoreOption={isThinkingAvailable}
 							quotaLoading={quotaLoading}
 						/>
 					</div>
 				))}
-
 				{/* Pending Query */}
 				{inQueueQuery && (
 					<div className="mb-6">
@@ -149,12 +161,18 @@ export default function Home() {
 						</div>
 					</div>
 				)}
-
 				<div ref={chatEndRef} className="mb-[20vh]" />
 			</div>
 
 			{/* Input Box For New Queries */}
-			<div className="absolute bottom-10 w-full ">
+			<div
+				className="fixed left-0 right-0 top-1/2 transition-transform duration-700 ease-in-out"
+				style={{
+					transform: isFirstQuery
+						? "translateY(-50%)"
+						: "translateY(calc(50vh - 120px))",
+				}}
+			>
 				<QueryInput
 					query={query}
 					setQuery={setQuery}
