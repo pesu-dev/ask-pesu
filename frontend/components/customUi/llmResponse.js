@@ -88,6 +88,28 @@ export default function LlmResponse({
 						components={{
 							a: LinkRenderer,
 							li: ListItemRenderer,
+							code: ({
+								node,
+								inline,
+								className,
+								children,
+								...props
+							}) => {
+								if (inline) {
+									return (
+										<code className="bg-muted px-1 py-0.5 rounded text-sm">
+											{children}
+										</code>
+									)
+								}
+								return (
+									<pre className="bg-muted p-4 rounded-lg overflow-x-auto my-2">
+										<code className={className} {...props}>
+											{children}
+										</code>
+									</pre>
+								)
+							},
 						}}
 					>
 						{answer}
