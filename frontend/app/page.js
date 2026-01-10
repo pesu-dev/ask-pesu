@@ -168,7 +168,7 @@ export default function Home() {
 				}}
 			>
 				{isFirstQuery && (
-					<h1 className="text-6xl font-bold text-center mb-8 transition-opacity duration-700">
+					<h1 className="text-6xl text-blue-600 font-bold text-center mb-8 transition-opacity duration-700">
 						AskPESU
 					</h1>
 				)}
