@@ -31,7 +31,7 @@ COPY requirements.txt /app/requirements.txt
 COPY .env* /app/
 
 # Copy the built frontend files from the frontend stage
-COPY --from=frontend-builder /app/frontend/out /out
+COPY --from=frontend-builder /app/frontend/out frontend/out
 
 # Set Hugging Face cache directory
 RUN mkdir -p /app/.cache/huggingface

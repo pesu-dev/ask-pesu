@@ -1,23 +1,30 @@
-import { toast } from "sonner"
-
-export default async function Query(question) {
+export default async function Query(
+	question,
+	thinkingMode = false,
+	chatHistory = []
+) {
 	try {
-		const resp = await fetch("/ask", {
+		const API_URL = process.env.NEXT_PUBLIC_DEV_API_URL;
+		const url = `${API_URL}/ask`;
+		//const url = `/ask`;
+		const resp = await fetch(url, {
 			method: "POST",
 			headers: {
 				"Content-Type": "application/json",
 			},
-			body: JSON.stringify({ query: question }),
+			body: JSON.stringify({
+				query: question,
+				thinking: thinkingMode,
+				history: chatHistory,
+			}),
 		})
 
 		if (resp.ok) {
 			return await resp.json()
 		}
 
-		toast.error("An error occurred. Check browser console for logs.")
 		console.error("Request failed:", resp.status, resp.statusText)
 	} catch (err) {
-		toast.error("Failed to reach the server.")
 		console.error("Network error:", err)
 	}
 }
