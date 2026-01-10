@@ -14,9 +14,7 @@ export default function QueryInput({
 	handleQuery,
 }) {
 	const fetcher = (...args) => fetch(...args).then((res) => res.json())
-	const API_URL = process.env.NEXT_PUBLIC_DEV_API_URL
-	const url = `${API_URL}/quota`
-	//const url = `/quota`;
+	const url = `/quota`;
 	const { data, error, swrIsLoading } = useSWR(url, fetcher)
 
 	const [thinkingAllowed, setThinkingAllowed] = useState(false)
