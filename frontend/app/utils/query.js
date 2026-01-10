@@ -4,10 +4,7 @@ export default async function Query(
 	chatHistory = []
 ) {
 	try {
-		const API_URL = process.env.NEXT_PUBLIC_DEV_API_URL;
-		const url = `${API_URL}/ask`;
-		//const url = `/ask`;
-		const resp = await fetch(url, {
+		const resp = await fetch(`/ask`, {
 			method: "POST",
 			headers: {
 				"Content-Type": "application/json",

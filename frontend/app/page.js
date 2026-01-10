@@ -16,13 +16,7 @@ export default function Home() {
 	const [loading, setLoading] = useState(false)
 	const [modelChoice, setModelChoice] = useState("primary")
 	const chatEndRef = useRef(null)
-
-	// state to track if it is first query
 	const [isFirstQuery, setIsFirstQuery] = useState(true)
-
-	// useEffect(() => {
-	// 	console.log("API URL:", process.env.NEXT_PUBLIC_DEV_API_URL)
-	// }, [])
 
 	const {
 		quotaStatus,
@@ -174,7 +168,7 @@ export default function Home() {
 				}}
 			>
 				{isFirstQuery && (
-					<h1 className="text-8xl text-orange-500 font-bold text-center mb-8 transition-opacity duration-700">
+					<h1 className="text-6xl font-bold text-center mb-8 transition-opacity duration-700">
 						AskPESU
 					</h1>
 				)}
