@@ -77,13 +77,5 @@ export default function useServiceStatus() {
 		return `${minutes} minute${minutes !== 1 ? "s" : ""}`
 	}
 
-	//return serviceStatus
-	return {
-		isAvailable: false,
-		message:
-			"Service temporarily unavailable due to usage limits. Will be back in 2 hours 30 minutes",
-		nextAvailableTime: new Date(Date.now() + 2.5 * 60 * 60 * 1000), // 2.5 hours from now
-		isPrimaryDown: true,
-		isThinkingDown: true,
-	}
+	return serviceStatus
 }
