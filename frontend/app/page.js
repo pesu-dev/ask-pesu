@@ -8,6 +8,7 @@ import Query from "./utils/query"
 import { toast } from "sonner"
 import useQuota from "@/hooks/useQuota"
 import ThinkingIndicator from "@/components/customUi/thinkinganimation"
+import useServiceStatus from "@/hooks/useAvail"
 
 export default function Home() {
 	const [query, setQuery] = useState("")
@@ -26,6 +27,8 @@ export default function Home() {
 		isThinkingAvailable,
 		thinkingNextAvailable,
 	} = useQuota()
+
+	const serviceStatus = useServiceStatus()
 
 	// Auto-scroll to bottom on new message
 	useEffect(() => {
@@ -81,11 +84,20 @@ export default function Home() {
 			history,
 		]
 	)
-	console.log("Rendering Home component")
 
 	const handleQuery = useCallback(async () => {
 		if (!query.trim()) {
 			toast.warning("You can't query an empty question.")
+			return
+		}
+
+		if (!serviceStatus.isAvailable) {
+			const timeRemaining = getTimeRemaining(
+				serviceStatus.nextAvailableTime
+			)
+			toast.error(
+				"Service temporarily unavailable",
+			)
 			return
 		}
 
@@ -110,7 +122,15 @@ export default function Home() {
 		}
 
 		setLoading(false)
-	}, [query, setLoading, setInQueueQuery, setHistory, setQuery, history])
+	}, [
+		query,
+		setLoading,
+		setInQueueQuery,
+		setHistory,
+		setQuery,
+		history,
+		serviceStatus,
+	])
 
 	return (
 		<div className="relative bg-background w-screen h-screen flex flex-col">
@@ -157,6 +177,15 @@ export default function Home() {
 				)}
 				<div ref={chatEndRef} className="mb-[20vh]" />
 			</div>
+
+			{/* Service Status Banner */}
+			{!serviceStatus.isAvailable && (
+				<div className="w-full bg-destructive/10 border-b border-destructive/20 px-4 py-3">
+					<p className="text-center text-sm text-destructive font-medium">
+						⚠️ {serviceStatus.message}
+					</p>
+				</div>
+			)}
 
 			{/* Input Box For New Queries */}
 			<div

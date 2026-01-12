@@ -122,6 +122,7 @@ async def unhandled_exception_handler(_request: Request, _exc: Exception) -> JSO
         content={
             "status": False,
             "message": "Internal Server Error. Please try again later.",
+            "quota": get_quota_status(),
             "timestamp": datetime.datetime.now(IST).isoformat(),
         },
     )
