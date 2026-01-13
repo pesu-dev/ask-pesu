@@ -9,8 +9,7 @@ export default function useQuota() {
 
 	const fetchQuota = useCallback(async () => {
 		try {
-			const API_URL = process.env.NEXT_PUBLIC_DEV_API_URL || ""
-			const response = await fetch(`${API_URL}/quota`)
+			const response = await fetch(`/quota`)
 			if (response.ok) {
 				const data = await response.json()
 				if (data.status && data.quota) {
