@@ -57,6 +57,17 @@ export default function Home() {
 			setInQueueQuery(queryText)
 
 			const data = await Query(queryText, true, history)
+
+			if (!data || !data.status) {
+				toast.error(data?.message || "Request failed")
+				if (data?.httpStatus === 429) {
+					refreshQuota()
+				}
+				setInQueueQuery(null)
+				setLoading(false)
+				return
+			}
+
 			console.info(data)
 
 			setInQueueQuery(null)
@@ -95,9 +106,7 @@ export default function Home() {
 			const timeRemaining = getTimeRemaining(
 				serviceStatus.nextAvailableTime
 			)
-			toast.error(
-				"Service temporarily unavailable",
-			)
+			toast.error("Service temporarily unavailable")
 			return
 		}
 
@@ -110,6 +119,16 @@ export default function Home() {
 
 		setInQueueQuery(null)
 		setQuery("")
+
+		if (!data || !data.status) {
+			toast.error(data?.message || "Request failed")
+			// Refresh quota in case it was a 429 error
+			if (data?.httpStatus === 429) {
+				refreshQuota()
+			}
+			setLoading(false)
+			return
+		}
 
 		if (data) {
 			setHistory((prev) => [
