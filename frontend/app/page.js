@@ -35,6 +35,25 @@ export default function Home() {
 		chatEndRef.current?.scrollIntoView({ behavior: "smooth" })
 	}, [history, inQueueQuery, chatEndRef])
 
+	useEffect(() => {
+		if (!serviceStatus.isAvailable && serviceStatus.message) {
+			const timeRemaining = getTimeRemaining(
+				serviceStatus.nextAvailableTime
+			)
+			toast.error(
+				`Quota exhausted. ${
+					timeRemaining
+						? `Will be back in ${timeRemaining}.`
+						: "Please try again later."
+				}`
+			)
+		}
+	}, [
+		serviceStatus.isAvailable,
+		serviceStatus.nextAvailableTime,
+		getTimeRemaining,
+	])
+
 	const handleEditQuery = useCallback((query) => {
 		setQuery(query)
 	}, [])
@@ -62,6 +81,7 @@ export default function Home() {
 				toast.error(data?.message || "Request failed")
 				if (data?.httpStatus === 429) {
 					refreshQuota()
+					serviceStatus.refreshStatus?.()
 				}
 				setInQueueQuery(null)
 				setLoading(false)
@@ -125,6 +145,7 @@ export default function Home() {
 			// Refresh quota in case it was a 429 error
 			if (data?.httpStatus === 429) {
 				refreshQuota()
+				serviceStatus.refreshStatus?.()
 			}
 			setLoading(false)
 			return
@@ -150,6 +171,18 @@ export default function Home() {
 		history,
 		serviceStatus,
 	])
+
+	const getDisabledMessage = useCallback(() => {
+		if (!serviceStatus.isAvailable) {
+			const timeRemaining = getTimeRemaining(
+				serviceStatus.nextAvailableTime
+			)
+			return `Quota exhausted. Will be back ${
+				timeRemaining ? `in ${timeRemaining}` : "soon"
+			}.`
+		}
+		return null
+	}, [serviceStatus, getTimeRemaining])
 
 	return (
 		<div className="relative bg-background w-screen h-screen flex flex-col">
@@ -227,6 +260,8 @@ export default function Home() {
 					handleQuery={handleQuery}
 					modelChoice={modelChoice}
 					setModelChoice={setModelChoice}
+					disabled={!serviceStatus.isAvailable}
+					disabledMessage={getDisabledMessage()}
 				/>
 			</div>
 		</div>

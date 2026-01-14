@@ -12,6 +12,8 @@ export default function QueryInput({
 	setModelChoice,
 	loading,
 	handleQuery,
+	disabled,
+	disabledMessage,
 }) {
 	const fetcher = (...args) => fetch(...args).then((res) => res.json())
 	const url = `/quota`
@@ -61,11 +63,14 @@ export default function QueryInput({
 		>
 			<div className="flex flex-nowrap gap-5">
 				<CustomTextarea
-					disabled={loading}
+					disabled={loading || disabled}
 					className="w-full text-lg border-none focus:outline-none focus-visible:ring-0"
 					placeholder={
-						loading
-							? "Service temporarily unavailable..."
+						disabled
+							? disabledMessage ||
+							  "Service temporarily unavailable..."
+							: loading
+							? "Processing..."
 							: "What would you like to know about PESU?"
 					}
 					value={query}
@@ -78,7 +83,7 @@ export default function QueryInput({
 					}}
 				/>
 				<Button
-					disabled={loading}
+					disabled={loading || disabled}
 					className="rounded-l-none rounded-full w-12 h-10"
 					onClick={() => handleQuery()}
 				>

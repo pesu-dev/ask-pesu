@@ -3,12 +3,16 @@ import useSWR from "swr"
 
 const fetcher = (...args) => {
 	console.log("🔍 Fetching quota status at:", new Date().toLocaleTimeString())
-	fetch(...args).then((res) => res.json())
+	return fetch(...args).then((res) => res.json())
 }
 
 export default function useServiceStatus() {
 	const url = `/quota`
-	const { data, error } = useSWR(url, fetcher)
+	const { data, error, mutate } = useSWR(url, fetcher, {
+		refreshInterval: 60000, // Refresh every 60 seconds
+		revalidateOnFocus: true, // Refresh when user returns to tab
+		dedupingInterval: 5000, // Avoid duplicate requests within 5 seconds
+	})
 
 	const [serviceStatus, setServiceStatus] = useState({
 		isAvailable: true,
@@ -17,6 +21,25 @@ export default function useServiceStatus() {
 		isPrimaryDown: false,
 		isThinkingDown: false,
 	})
+
+	const getTimeRemaining = (nextAvailableTime) => {
+		if (!nextAvailableTime) return null
+
+		const now = new Date()
+		const diff = new Date(nextAvailableTime) - now
+
+		if (diff <= 0) return null
+
+		const hours = Math.floor(diff / (1000 * 60 * 60))
+		const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60))
+
+		if (hours > 0) {
+			return `${hours} hour${hours > 1 ? "s" : ""} ${minutes} minute${
+				minutes !== 1 ? "s" : ""
+			}`
+		}
+		return `${minutes} minute${minutes !== 1 ? "s" : ""}`
+	}
 
 	useEffect(() => {
 		console.log(
@@ -41,7 +64,10 @@ export default function useServiceStatus() {
 
 			setServiceStatus({
 				isAvailable: false,
-				message: "Service temporarily unavailable due to usage limits",
+				//message: "Service temporarily unavailable due to usage limits",
+				message: `Service temporarily unavailable due to usage limits${
+					timeRemaining ? `. Will be back in ${timeRemaining}` : ""
+				}`,
 				nextAvailableTime: nextTime,
 				isPrimaryDown: true,
 				isThinkingDown: !thinkingAvailable,
@@ -57,24 +83,10 @@ export default function useServiceStatus() {
 		}
 	}, [data])
 
-	const getTimeRemaining = (nextAvailableTime) => {
-		if (!nextAvailableTime) return null
+	//return serviceStatus
 
-		const now = new Date()
-		const diff = new Date(nextAvailableTime) - now
-
-		if (diff <= 0) return null
-
-		const hours = Math.floor(diff / (1000 * 60 * 60))
-		const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60))
-
-		if (hours > 0) {
-			return `${hours} hour${hours > 1 ? "s" : ""} ${minutes} minute${
-				minutes !== 1 ? "s" : ""
-			}`
-		}
-		return `${minutes} minute${minutes !== 1 ? "s" : ""}`
+	return {
+		...serviceStatus,
+		refreshStatus: mutate,
 	}
-
-	return serviceStatus
 }
