@@ -54,11 +54,11 @@ export default function QueryInput({
 	return (
 		<div
 			className={`flex flex-nowrap flex-col w-[90vw] max-w-4xl max-h-[30vh] overflow-y-auto hide-scrollbar mx-auto bg-background px-4 py-2 ring-2 ${
-				loading
+				loading || disabled
 					? "ring-muted"
 					: "ring-primary/50 focus-within:ring-blue-500"
 			} rounded-2xl transition-all duration-200 ${
-				loading ? "opacity-60" : ""
+				loading || disabled ? "opacity-60" : ""
 			}`}
 		>
 			<div className="flex flex-nowrap gap-5">
@@ -68,10 +68,10 @@ export default function QueryInput({
 					placeholder={
 						disabled
 							? disabledMessage ||
-							  "Service temporarily unavailable..."
+								"Service temporarily unavailable..."
 							: loading
-							? "Processing..."
-							: "What would you like to know about PESU?"
+								? "Processing..."
+								: "What would you like to know about PESU?"
 					}
 					value={query}
 					onChange={(e) => setQuery(e.target.value)}
