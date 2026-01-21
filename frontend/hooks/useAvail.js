@@ -14,14 +14,13 @@ export default function useServiceStatus() {
 		dedupingInterval: 5000,
 	})
 
-	// Mock data for testing service unavailability
 	const [serviceStatus, setServiceStatus] = useState({
-        isAvailable: false, // Changed to false for testing
-        message: "Service temporarily unavailable due to usage limits. Will be back in 45 minutes",
-        nextAvailableTime: new Date(Date.now() + 45 * 60 * 1000), // 45 mins from now
-        isPrimaryDown: true,
-        isThinkingDown: false,
-    })
+		isAvailable: true,
+		message: "",
+		nextAvailableTime: null,
+		isPrimaryDown: false,
+		isThinkingDown: false,
+	})
 
 	const getTimeRemaining = (nextAvailableTime) => {
 		if (!nextAvailableTime) return null
@@ -48,8 +47,6 @@ export default function useServiceStatus() {
 			new Date().toLocaleTimeString(),
 			data
 		)
-
-		return
 
 		if (!data) return
 
@@ -85,8 +82,6 @@ export default function useServiceStatus() {
 			})
 		}
 	}, [data])
-
-	//return serviceStatus
 
 	return {
 		...serviceStatus,
