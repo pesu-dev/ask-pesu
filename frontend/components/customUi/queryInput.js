@@ -4,6 +4,7 @@ import { CustomTextarea } from "./customTextarea"
 import useSWR from "swr"
 import { useEffect, useState } from "react"
 import { toast } from "sonner"
+import { useRef } from "react"
 
 export default function QueryInput({
 	query,
@@ -15,11 +16,19 @@ export default function QueryInput({
 	disabled,
 	disabledMessage,
 }) {
+	const inputRef = useRef(null)
+
 	const fetcher = (...args) => fetch(...args).then((res) => res.json())
 	const url = `/quota`
 	const { data, error, swrIsLoading } = useSWR(url, fetcher)
 
 	const [thinkingAllowed, setThinkingAllowed] = useState(false)
+
+	useEffect(() => {
+		if (!loading && !disabled) {
+			inputRef.current?.focus()
+		}
+	}, [loading, disabled])
 
 	useEffect(() => {
 		if (error) console.error("SWR ERROR: ", error)
@@ -63,6 +72,7 @@ export default function QueryInput({
 		>
 			<div className="flex flex-nowrap gap-5">
 				<CustomTextarea
+					ref={inputRef}
 					disabled={loading || disabled}
 					className="w-full text-lg border-none focus:outline-none focus-visible:ring-0"
 					placeholder={
