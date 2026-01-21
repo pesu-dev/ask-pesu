@@ -9,9 +9,9 @@ const fetcher = (...args) => {
 export default function useServiceStatus() {
 	const url = `/quota`
 	const { data, error, mutate } = useSWR(url, fetcher, {
-		refreshInterval: 60000, // Refresh every 60 seconds
-		revalidateOnFocus: true, // Refresh when user returns to tab
-		dedupingInterval: 5000, // Avoid duplicate requests within 5 seconds
+		revalidateOnFocus: true,
+		revalidateOnMount: true,
+		dedupingInterval: 5000,
 	})
 
 	const [serviceStatus, setServiceStatus] = useState({
