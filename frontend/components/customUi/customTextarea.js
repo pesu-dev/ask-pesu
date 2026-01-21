@@ -16,4 +16,6 @@ const CustomTextarea = React.forwardRef(({ className, ...props }, ref) => {
 	)
 })
 
+CustomTextarea.displayName = "CustomTextarea"
+
 export { CustomTextarea }
