@@ -8,6 +8,7 @@ import Query from "./utils/query"
 import { toast } from "sonner"
 import useQuota from "@/hooks/useQuota"
 import ThinkingIndicator from "@/components/customUi/thinkinganimation"
+import useServiceStatus from "@/hooks/useAvail"
 
 export default function Home() {
 	const [query, setQuery] = useState("")
@@ -27,10 +28,31 @@ export default function Home() {
 		thinkingNextAvailable,
 	} = useQuota()
 
+	const serviceStatus = useServiceStatus()
+
 	// Auto-scroll to bottom on new message
 	useEffect(() => {
 		chatEndRef.current?.scrollIntoView({ behavior: "smooth" })
 	}, [history, inQueueQuery, chatEndRef])
+
+	useEffect(() => {
+		if (!serviceStatus.isAvailable && serviceStatus.message) {
+			const timeRemaining = getTimeRemaining(
+				serviceStatus.nextAvailableTime
+			)
+			toast.error(
+				`Quota exhausted. ${
+					timeRemaining
+						? `Will be back in ${timeRemaining}.`
+						: "Please try again later."
+				}`
+			)
+		}
+	}, [
+		serviceStatus.isAvailable,
+		serviceStatus.nextAvailableTime,
+		getTimeRemaining,
+	])
 
 	const handleEditQuery = useCallback((query) => {
 		setQuery(query)
@@ -54,6 +76,18 @@ export default function Home() {
 			setInQueueQuery(queryText)
 
 			const data = await Query(queryText, true, history)
+
+			if (!data || !data.status) {
+				toast.error(data?.message || "Request failed")
+				if (data?.httpStatus === 429) {
+					refreshQuota()
+					serviceStatus.refreshStatus?.()
+				}
+				setInQueueQuery(null)
+				setLoading(false)
+				return
+			}
+
 			console.info(data)
 
 			setInQueueQuery(null)
@@ -81,11 +115,18 @@ export default function Home() {
 			history,
 		]
 	)
-	console.log("Rendering Home component")
 
 	const handleQuery = useCallback(async () => {
 		if (!query.trim()) {
 			toast.warning("You can't query an empty question.")
+			return
+		}
+
+		if (!serviceStatus.isAvailable) {
+			const timeRemaining = getTimeRemaining(
+				serviceStatus.nextAvailableTime
+			)
+			toast.error("Service temporarily unavailable")
 			return
 		}
 
@@ -99,6 +140,17 @@ export default function Home() {
 		setInQueueQuery(null)
 		setQuery("")
 
+		if (!data || !data.status) {
+			toast.error(data?.message || "Request failed")
+			// Refresh quota in case it was a 429 error
+			if (data?.httpStatus === 429) {
+				refreshQuota()
+				serviceStatus.refreshStatus?.()
+			}
+			setLoading(false)
+			return
+		}
+
 		if (data) {
 			setHistory((prev) => [
 				...prev,
@@ -110,7 +162,27 @@ export default function Home() {
 		}
 
 		setLoading(false)
-	}, [query, setLoading, setInQueueQuery, setHistory, setQuery, history])
+	}, [
+		query,
+		setLoading,
+		setInQueueQuery,
+		setHistory,
+		setQuery,
+		history,
+		serviceStatus,
+	])
+
+	const getDisabledMessage = useCallback(() => {
+		if (!serviceStatus.isAvailable) {
+			const timeRemaining = getTimeRemaining(
+				serviceStatus.nextAvailableTime
+			)
+			return `Quota exhausted. Will be back ${
+				timeRemaining ? `in ${timeRemaining}` : "soon"
+			}.`
+		}
+		return null
+	}, [serviceStatus, getTimeRemaining])
 
 	return (
 		<div className="relative bg-background w-screen h-screen flex flex-col">
@@ -158,6 +230,15 @@ export default function Home() {
 				<div ref={chatEndRef} className="mb-[20vh]" />
 			</div>
 
+			{/* Service Status Banner */}
+			{!serviceStatus.isAvailable && (
+				<div className="w-full bg-destructive/10 border-b border-destructive/20 px-4 py-3">
+					<p className="text-center text-sm text-destructive font-medium">
+						⚠️ {serviceStatus.message}
+					</p>
+				</div>
+			)}
+
 			{/* Input Box For New Queries */}
 			<div
 				className="fixed left-0 right-0 top-1/2 transition-transform duration-700 ease-in-out"
@@ -179,6 +260,8 @@ export default function Home() {
 					handleQuery={handleQuery}
 					modelChoice={modelChoice}
 					setModelChoice={setModelChoice}
+					disabled={!serviceStatus.isAvailable}
+					disabledMessage={getDisabledMessage()}
 				/>
 			</div>
 		</div>

@@ -16,12 +16,23 @@ export default async function Query(
 			}),
 		})
 
+		const data = await resp.json()
+
 		if (resp.ok) {
-			return await resp.json()
+			return data
 		}
 
-		console.error("Request failed:", resp.status, resp.statusText)
+		// Return error response with status code
+		return {
+			...data,
+			httpStatus: resp.status,
+		}
 	} catch (err) {
 		console.error("Network error:", err)
+		return {
+			status: false,
+			message: "Network error. Please check your connection.",
+			httpStatus: 0,
+		}
 	}
 }
