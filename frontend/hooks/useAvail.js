@@ -49,6 +49,8 @@ export default function useServiceStatus() {
 			data
 		)
 
+		return
+
 		if (!data) return
 
 		const primaryAvailable = data?.quota?.primary?.available ?? true
