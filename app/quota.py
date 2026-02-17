@@ -36,5 +36,5 @@ class QuotaState:
         """Get current status."""
         return {
             "available": self.enabled,
-            "next_available": self.disabled_until.isoformat() if not self.enabled and self.disabled_until else None,
+            "next_available": self.disabled_until if not self.enabled and self.disabled_until else None,
         }
