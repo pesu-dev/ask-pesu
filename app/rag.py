@@ -4,7 +4,7 @@ import os
 
 import yaml
 from dotenv import load_dotenv
-from langchain.chat_models import init_chat_model
+from huggingface_hub import InferenceClient
 from langchain.retrievers.multi_query import MultiQueryRetriever
 from langchain_core.documents.base import Document
 from langchain_core.language_models import BaseChatModel
@@ -12,12 +12,10 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnablePassthrough, RunnableSerializable
+from langchain_huggingface import ChatHuggingFace, HuggingFaceEndpoint
 from langchain_huggingface.embeddings import HuggingFaceEmbeddings
 from langchain_qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
-from huggingface_hub import InferenceClient
-from langchain_huggingface import HuggingFaceEndpoint
-from langchain_huggingface import ChatHuggingFace
 
 load_dotenv()
 
@@ -31,11 +29,10 @@ class RetrievalAugmentedGenerator:
         Args:
             config_path (str): Path to the configuration YAML file.
         """
-
-        client = InferenceClient(
+        InferenceClient(
             api_key=os.environ["HF_TOKEN"],
         )
-        
+
         # Load configuration from YAML file
         with open(config_path) as file:
             self.config = yaml.safe_load(file)
@@ -58,7 +55,7 @@ class RetrievalAugmentedGenerator:
                 huggingfacehub_api_token=os.getenv("HF_TOKEN"),
                 temperature=0.3,
                 max_new_tokens=512,
-                timeout=120
+                timeout=120,
             )
         )
 
@@ -69,7 +66,7 @@ class RetrievalAugmentedGenerator:
                 huggingfacehub_api_token=os.getenv("HF_TOKEN"),
                 temperature=0.3,
                 max_new_tokens=512,
-                timeout=120
+                timeout=120,
             )
         )
 
@@ -184,6 +181,5 @@ class RetrievalAugmentedGenerator:
 
         response = await rag_chain.ainvoke({"input": query, "question": query, "chat_history": chat_history})
         if thinking:
-            return {"answer":response.split("</think>")[1], "steps": response.split("</think>")[0]}
-        else:
-            return {"answer":response, "steps":None}
+            return {"answer": response.split("</think>")[1], "steps": response.split("</think>")[0]}
+        return {"answer": response, "steps": None}

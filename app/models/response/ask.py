@@ -59,17 +59,17 @@ class AskResponseModel(BaseModel):
             "example": "The user is asking:"
             "- How is CGPA and SGPA calculated"
             "- What do they need to score in each subject in first sem to get a SGPA of 9+"
-            "Let me go through the context to find relevant information about CGPA and SGPA calculation at PES University."
-
+            "Let me go through the context to find relevant information about CGPA and SGPA calculation at "
+            "PES University"
             "From the context, I can find several relevant posts:"
-
-            "1. From the post titled 'CGPA' (https://www.reddit.com/r/PESU/comments/13wdtcl/cgpa_and_sgpa_calculator/): This post has a detailed explanation of how SGPA and CGPA are calculated at PESU."
-
+            "1. From the post titled 'CGPA': This post has a detailed explanation of how SGPA and CGPA are calculated"
+            "at PESU."
             "Key details from this post:"
             "- SGPA is a weighted average of grades in a semester where the weights are the credits for that course"
             "- SGPA = sum(credits for course * grade obtained in course) / total credits in semester"
             "- CGPA is a weighted average of your SGPA, where the weights are the credits in that semester"
             "- CGPA = sum(credits in semester * SGPA in semester) / total credits across all semesters"
-            "Based on this, I'll compose a clear, accurate answer about how CGPA/SGPA is calculated at PESU and what marks they need in each subject to get a SGPA of 9+."
+            "Based on this, I'll compose a clear, accurate answer about how CGPA/SGPA is calculated at PESU,"
+            " and what marks they need in each subject to get a SGPA of 9+."
         },
     )
