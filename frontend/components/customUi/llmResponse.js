@@ -3,6 +3,10 @@ import { motion } from "motion/react"
 import ReactMarkdown from "react-markdown"
 import { Button } from "../ui/button"
 import React from "react"
+import remarkMath from "remark-math"
+import rehypeKatex from "rehype-katex"
+import "katex/dist/katex.min.css"
+import remarkGfm from "remark-gfm"
 
 export default function LlmResponse({
 	answer,
@@ -85,6 +89,8 @@ export default function LlmResponse({
 			<div className="flex flex-col flex-nowrap gap-4">
 				<div className="bg-card px-4 py-3 rounded-2xl text-card-foreground text-base leading-relaxed prose dark:prose-invert wrap-anywhere">
 					<ReactMarkdown
+						remarkPlugins={[remarkGfm, remarkMath]}
+						rehypePlugins={[rehypeKatex]}
 						components={{
 							a: LinkRenderer,
 							li: ListItemRenderer,

@@ -15,6 +15,9 @@ from langchain_core.runnables import RunnablePassthrough, RunnableSerializable
 from langchain_huggingface.embeddings import HuggingFaceEmbeddings
 from langchain_qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
+from huggingface_hub import InferenceClient
+from langchain_huggingface import HuggingFaceEndpoint
+from langchain_huggingface import ChatHuggingFace
 
 load_dotenv()
 
@@ -28,6 +31,11 @@ class RetrievalAugmentedGenerator:
         Args:
             config_path (str): Path to the configuration YAML file.
         """
+
+        client = InferenceClient(
+            api_key=os.environ["HF_TOKEN"],
+        )
+        
         # Load configuration from YAML file
         with open(config_path) as file:
             self.config = yaml.safe_load(file)
@@ -43,20 +51,42 @@ class RetrievalAugmentedGenerator:
             client=self.qdrant_client,
         )
 
-        # Initialize LLM
-        self.llm_primary = init_chat_model(
-            model=self.config["rag"]["llm"]["primary"],
-            model_provider="google_genai",
-            google_api_key=os.getenv("GEMINI_API_KEY"),
-        )
-        # Initialize secondary LLM if specified
-        self.llm_thinking = None
-        if self.config["rag"]["llm"].get("thinking"):
-            self.llm_thinking = init_chat_model(
-                model=self.config["rag"]["llm"]["thinking"],
-                model_provider="google_genai",
-                google_api_key=os.getenv("GEMINI_API_KEY"),
+        self.llm_primary = ChatHuggingFace(
+            llm=HuggingFaceEndpoint(
+                repo_id="Qwen/Qwen3-4B-Instruct-2507",
+                provider="nscale",
+                huggingfacehub_api_token=os.getenv("HF_TOKEN"),
+                temperature=0.3,
+                max_new_tokens=512,
+                timeout=120
             )
+        )
+
+        self.llm_thinking = ChatHuggingFace(
+            llm=HuggingFaceEndpoint(
+                repo_id="Qwen/Qwen3-4B-Thinking-2507",
+                provider="nscale",
+                huggingfacehub_api_token=os.getenv("HF_TOKEN"),
+                temperature=0.3,
+                max_new_tokens=512,
+                timeout=120
+            )
+        )
+
+        # # Initialize LLM
+        # self.llm_primary = init_chat_model(
+        #     model=self.config["rag"]["llm"]["primary"],
+        #     model_provider="google_genai",
+        #     google_api_key=os.getenv("GEMINI_API_KEY"),
+        # )
+        # # Initialize secondary LLM if specified
+        # self.llm_thinking = None
+        # if self.config["rag"]["llm"].get("thinking"):
+        #     self.llm_thinking = init_chat_model(
+        #         model=self.config["rag"]["llm"]["thinking"],
+        #         model_provider="google_genai",
+        #         google_api_key=os.getenv("GEMINI_API_KEY"),
+        #     )
 
         # Initialize the prompt template
         self.prompt = ChatPromptTemplate.from_messages(
@@ -152,4 +182,8 @@ class RetrievalAugmentedGenerator:
             self.rag_chain_thinking if thinking and self.rag_chain_thinking is not None else self.rag_chain_primary
         )
 
-        return await rag_chain.ainvoke({"input": query, "question": query, "chat_history": chat_history})
+        response = await rag_chain.ainvoke({"input": query, "question": query, "chat_history": chat_history})
+        if thinking:
+            return {"answer":response.split("</think>")[1], "steps": response.split("</think>")[0]}
+        else:
+            return {"answer":response, "steps":None}

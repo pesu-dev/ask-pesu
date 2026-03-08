@@ -177,7 +177,9 @@ async def ask(payload: AskRequestModel) -> JSONResponse:
     # Attempt to generate the answer
     start_time = time.perf_counter()
     try:
-        answer = await rag.generate(query=payload.query, thinking=payload.thinking, history=payload.history)
+        response = await rag.generate(query=payload.query, thinking=payload.thinking, history=payload.history)
+        answer = response['answer']
+        steps = response['steps']
     except ResourceExhausted:
         llm_state = THINKING_STATE if payload.thinking else PRIMARY_STATE
         llm_state.disable()
@@ -190,6 +192,7 @@ async def ask(payload: AskRequestModel) -> JSONResponse:
         answer=answer,
         timestamp=current_time,
         latency=latency,
+        steps=steps
     )
     return JSONResponse(status_code=200, content=response.model_dump(mode="json", exclude_none=True))
 
