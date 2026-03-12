@@ -7,7 +7,7 @@ import LlmResponse from "@/components/customUi/llmResponse"
 import Query from "./utils/query"
 import { toast } from "sonner"
 import useQuota from "@/hooks/useQuota"
-import ThinkingIndicator from "@/components/customUi/thinkinganimation"
+import PendingResponse from "@/components/customUi/thinkinganimation"
 import useServiceStatus from "@/hooks/useAvail"
 
 export default function Home() {
@@ -30,7 +30,6 @@ export default function Home() {
 
 	const serviceStatus = useServiceStatus()
 
-	// Auto-scroll to bottom on new message
 	useEffect(() => {
 		chatEndRef.current?.scrollIntoView({ behavior: "smooth" })
 	}, [history, inQueueQuery, chatEndRef])
@@ -88,8 +87,6 @@ export default function Home() {
 				return
 			}
 
-			console.info(data)
-
 			setInQueueQuery(null)
 
 			if (data) {
@@ -98,10 +95,10 @@ export default function Home() {
 					{
 						query: queryText,
 						answer: data.answer,
+						steps: data.steps || null,
 					},
 				])
 			} else {
-				// If query failed, refresh quota to check if thinking mode went down
 				refreshQuota()
 			}
 
@@ -123,9 +120,6 @@ export default function Home() {
 		}
 
 		if (!serviceStatus.isAvailable) {
-			const timeRemaining = getTimeRemaining(
-				serviceStatus.nextAvailableTime
-			)
 			toast.error("Service temporarily unavailable")
 			return
 		}
@@ -134,15 +128,18 @@ export default function Home() {
 		setLoading(true)
 		setInQueueQuery(query)
 
-		const data = await Query(query, false, history)
+		const currentQuery = query
+		setQuery("")
+
+		// Use thinking mode if available, otherwise primary
+		const useThinking = isThinkingAvailable
+		const data = await Query(currentQuery, useThinking, history)
 		console.info(data)
 
 		setInQueueQuery(null)
-		setQuery("")
 
 		if (!data || !data.status) {
 			toast.error(data?.message || "Request failed")
-			// Refresh quota in case it was a 429 error
 			if (data?.httpStatus === 429) {
 				refreshQuota()
 				serviceStatus.refreshStatus?.()
@@ -151,26 +148,17 @@ export default function Home() {
 			return
 		}
 
-		if (data) {
-			setHistory((prev) => [
-				...prev,
-				{
-					query,
-					answer: data.answer,
-				},
-			])
-		}
+		setHistory((prev) => [
+			...prev,
+			{
+				query: currentQuery,
+				answer: data.answer,
+				steps: data.steps || null,
+			},
+		])
 
 		setLoading(false)
-	}, [
-		query,
-		setLoading,
-		setInQueueQuery,
-		setHistory,
-		setQuery,
-		history,
-		serviceStatus,
-	])
+	}, [query, history, serviceStatus, isThinkingAvailable, refreshQuota])
 
 	const getDisabledMessage = useCallback(() => {
 		if (!serviceStatus.isAvailable) {
@@ -186,7 +174,6 @@ export default function Home() {
 
 	return (
 		<div className="relative bg-background w-screen h-screen flex flex-col">
-			{/* Chat Window */}
 			<div
 				className={`flex-1 w-full max-w-5xl mx-auto px-4 py-6 overflow-y-auto hide-scrollbar transition-opacity duration-500 ${
 					isFirstQuery
@@ -195,7 +182,6 @@ export default function Home() {
 				}`}
 			>
 				{" "}
-				{/* Past Queries */}
 				{history.map((row, i) => (
 					<div key={i} className="mb-6">
 						<UserPrompt
@@ -204,33 +190,25 @@ export default function Home() {
 						/>
 						<LlmResponse
 							answer={row.answer}
-							query={row.query}
-							onThinkingMode={handleThinkingMode}
-							isThinkingAvailable={isThinkingAvailable}
-							thinkingNextAvailable={thinkingNextAvailable}
-							getTimeRemaining={getTimeRemaining}
+							steps={row.steps}
 							handleThinkMode={() =>
 								handleThinkingMode(row.query)
 							}
 							showThinkMoreOption={isThinkingAvailable}
-							quotaLoading={quotaLoading}
 						/>
 					</div>
 				))}
-				{/* Pending Query */}
 				{inQueueQuery && (
 					<div className="mb-6">
 						<UserPrompt query={inQueueQuery} />
-
 						<div className="flex justify-start mt-3">
-							<ThinkingIndicator />
+							<PendingResponse />
 						</div>
 					</div>
 				)}
 				<div ref={chatEndRef} className="mb-[20vh]" />
 			</div>
 
-			{/* Service Status Banner */}
 			{!serviceStatus.isAvailable && (
 				<div className="w-full bg-destructive/10 border-b border-destructive/20 px-4 py-3">
 					<p className="text-center text-sm text-destructive font-medium">
@@ -239,7 +217,6 @@ export default function Home() {
 				</div>
 			)}
 
-			{/* Input Box For New Queries */}
 			<div
 				className="fixed left-0 right-0 top-1/2 transition-transform duration-700 ease-in-out"
 				style={{
