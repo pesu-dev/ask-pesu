@@ -7,6 +7,7 @@ const fetcher = (...args) => {
 }
 
 export default function useServiceStatus() {
+	const API_URL = process.env.NEXT_PUBLIC_DEV_API_URL
 	const url = `/quota`
 	const { data, error, mutate } = useSWR(url, fetcher, {
 		revalidateOnFocus: true,

@@ -2,7 +2,12 @@ import { motion, AnimatePresence } from "motion/react"
 import { Bot } from "lucide-react"
 import { useState, useEffect } from "react"
 
-const statuses = ["Analyzing the question...", "Thinking...", "Almost there..."]
+const statuses = [
+  "Analyzing the question...",
+  "Thinking...",
+  "Almost there...",
+  "Invoking the PRIDE of PESU...",
+]
 
 export default function PendingResponse() {
 	const [statusIndex, setStatusIndex] = useState(0)

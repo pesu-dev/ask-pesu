@@ -1,9 +1,10 @@
 """FastAPI application for AskPESU backend APIs."""
 
 import argparse
+import asyncio
 import datetime
+import json
 import logging
-import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -16,8 +17,8 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from google.api_core.exceptions import ResourceExhausted
 
-from app.docs import ask_docs, health_docs, index_docs, quota_docs
-from app.models import AskRequestModel, AskResponseModel, HealthResponseModel, QuotaResponseModel
+from app.docs import health_docs, index_docs, quota_docs
+from app.models import HealthResponseModel, QuotaResponseModel
 from app.quota import QuotaState
 from app.rag import RetrievalAugmentedGenerator
 
@@ -74,30 +75,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-import json
-async def stream():
 
+async def stream() -> AsyncIterator[str]:
+    """Simulate a streaming response for the /ask endpoint."""
     # Step 1
-    yield json.dumps({
-        "type": "step",
-        "content": "Searching documents...\n"
-    }) + "\n"
-    time.sleep(1)
-
+    yield json.dumps({"type": "step", "content": "Searching documents...\n"}) + "\n"
+    await asyncio.sleep(0.02)
 
     # Step 2
-    yield json.dumps({
-        "type": "step",
-        "content": "Ranking sources...\n"
-    }) + "\n"
+    yield json.dumps({"type": "step", "content": "Ranking sources...\n"}) + "\n"
 
-    time.sleep(1)
+    await asyncio.sleep(0.02)
     # Step 3
-    yield json.dumps({
-        "type": "step",
-        "content": "Generating answer...\n"
-    }) + "\n"
-    time.sleep(1)
+    yield json.dumps({"type": "step", "content": "Generating answer...\n"}) + "\n"
+    await asyncio.sleep(0.02)
 
     tokens = [
         "SGPA ",
@@ -106,24 +97,142 @@ async def stream():
         "Semester ",
         "Grade ",
         "Point ",
-        "Average."
+        "Average. ",
+        "It ",
+        "is ",
+        "a ",
+        "numerical ",
+        "representation ",
+        "of ",
+        "a ",
+        "student’s ",
+        "academic ",
+        "performance ",
+        "during ",
+        "a ",
+        "specific ",
+        "semester ",
+        "in ",
+        "a ",
+        "college ",
+        "or ",
+        "university. ",
+        "The ",
+        "calculation ",
+        "is ",
+        "typically ",
+        "based ",
+        "on ",
+        "the ",
+        "grades ",
+        "obtained ",
+        "in ",
+        "different ",
+        "subjects ",
+        "along ",
+        "with ",
+        "the ",
+        "credit ",
+        "value ",
+        "assigned ",
+        "to ",
+        "each ",
+        "course. ",
+        "Higher ",
+        "grades ",
+        "and ",
+        "higher ",
+        "credit ",
+        "courses ",
+        "usually ",
+        "contribute ",
+        "more ",
+        "toward ",
+        "the ",
+        "final ",
+        "SGPA ",
+        "value. ",
+        "Universities ",
+        "use ",
+        "this ",
+        "metric ",
+        "to ",
+        "quickly ",
+        "summarize ",
+        "how ",
+        "well ",
+        "a ",
+        "student ",
+        "has ",
+        "performed ",
+        "academically ",
+        "within ",
+        "that ",
+        "particular ",
+        "term. ",
+        "It ",
+        "also ",
+        "helps ",
+        "students ",
+        "track ",
+        "their ",
+        "progress ",
+        "throughout ",
+        "their ",
+        "degree ",
+        "program ",
+        "and ",
+        "identify ",
+        "areas ",
+        "where ",
+        "improvement ",
+        "may ",
+        "be ",
+        "needed. ",
+        "In ",
+        "many ",
+        "institutions, ",
+        "the ",
+        "SGPA ",
+        "is ",
+        "later ",
+        "combined ",
+        "across ",
+        "multiple ",
+        "semesters ",
+        "to ",
+        "calculate ",
+        "the ",
+        "CGPA ",
+        "which ",
+        "represents ",
+        "the ",
+        "overall ",
+        "cumulative ",
+        "academic ",
+        "performance ",
+        "of ",
+        "a ",
+        "student ",
+        "throughout ",
+        "their ",
+        "entire ",
+        "course ",
+        "of ",
+        "study.",
     ]
-
     for t in tokens:
-        yield json.dumps({
-            "type": "token",
-            "content": t
-        }) + "\n"
-        time.sleep(1)
+        yield json.dumps({"type": "token", "content": t}) + "\n"
+        await asyncio.sleep(0.02)
 
-    yield json.dumps({
-        "type": "done"
-    }) + "\n"
+    yield json.dumps({"type": "done"}) + "\n"
 
 
 @app.post("/ask")
-async def ask():
+async def ask() -> StreamingResponse:
+    """Test endpoint to simulate streaming response for the /ask endpoint."""
     return StreamingResponse(stream(), media_type="text/plain")
+
 
 # Initialize globals
 DIST_DIR = "frontend/out"  # Directory for static files (built from frontend)
