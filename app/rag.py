@@ -56,6 +56,7 @@ class RetrievalAugmentedGenerator:
                 temperature=0.3,
                 max_new_tokens=512,
                 timeout=120,
+                streaming=True
             )
         )
 

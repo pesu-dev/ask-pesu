@@ -114,51 +114,64 @@ export default function Home() {
 	)
 
 	const handleQuery = useCallback(async () => {
-		if (!query.trim()) {
-			toast.warning("You can't query an empty question.")
-			return
-		}
+	if (!query.trim()) {
+		toast.warning("You can't query an empty question.")
+		return
+	}
 
-		if (!serviceStatus.isAvailable) {
-			toast.error("Service temporarily unavailable")
-			return
-		}
+	if (!serviceStatus.isAvailable) {
+		toast.error("Service temporarily unavailable")
+		return
+	}
 
-		setIsFirstQuery(false)
-		setLoading(true)
-		setInQueueQuery(query)
+	setIsFirstQuery(false)
 
-		const currentQuery = query
-		setQuery("")
+	const currentQuery = query
+	setQuery("")
+	setInQueueQuery(null)
 
-		// Use thinking mode if available, otherwise primary
-		const useThinking = isThinkingAvailable
-		const data = await Query(currentQuery, useThinking, history)
-		console.info(data)
+	const messageIndex = history.length
 
-		setInQueueQuery(null)
+	// Insert empty message
+	setHistory(prev => [
+		...prev,
+		{
+			query: currentQuery,
+			answer: "",
+			steps: "",
+		},
+	])
 
-		if (!data || !data.status) {
-			toast.error(data?.message || "Request failed")
-			if (data?.httpStatus === 429) {
-				refreshQuota()
-				serviceStatus.refreshStatus?.()
-			}
-			setLoading(false)
-			return
-		}
+	setLoading(true)
 
-		setHistory((prev) => [
-			...prev,
-			{
-				query: currentQuery,
-				answer: data.answer,
-				steps: data.steps || null,
+	await Query(
+		currentQuery,
+		isThinkingAvailable,
+		history,
+		{
+			onToken: (token) => {
+				setHistory(prev => {
+					const updated = [...prev]
+					updated[messageIndex].answer += token
+					return updated
+				})
 			},
-		])
 
-		setLoading(false)
-	}, [query, history, serviceStatus, isThinkingAvailable, refreshQuota])
+			onStep: (step) => {
+				setHistory(prev => {
+					const updated = [...prev]
+					updated[messageIndex].steps =
+						(updated[messageIndex].steps || "") + step
+					return updated
+				})
+			},
+
+			onDone: () => {
+				setLoading(false)
+			},
+		}
+	)
+}, [query, history, serviceStatus, isThinkingAvailable])
 
 	const getDisabledMessage = useCallback(() => {
 		if (!serviceStatus.isAvailable) {
@@ -198,14 +211,14 @@ export default function Home() {
 						/>
 					</div>
 				))}
-				{inQueueQuery && (
+				{/* {inQueueQuery && (
 					<div className="mb-6">
 						<UserPrompt query={inQueueQuery} />
 						<div className="flex justify-start mt-3">
 							<PendingResponse />
 						</div>
 					</div>
-				)}
+				)} */}
 				<div ref={chatEndRef} className="mb-[20vh]" />
 			</div>
 

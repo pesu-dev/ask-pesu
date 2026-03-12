@@ -12,7 +12,7 @@ import torch
 import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from google.api_core.exceptions import ResourceExhausted
 
@@ -73,6 +73,57 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+import json
+async def stream():
+
+    # Step 1
+    yield json.dumps({
+        "type": "step",
+        "content": "Searching documents...\n"
+    }) + "\n"
+    time.sleep(1)
+
+
+    # Step 2
+    yield json.dumps({
+        "type": "step",
+        "content": "Ranking sources...\n"
+    }) + "\n"
+
+    time.sleep(1)
+    # Step 3
+    yield json.dumps({
+        "type": "step",
+        "content": "Generating answer...\n"
+    }) + "\n"
+    time.sleep(1)
+
+    tokens = [
+        "SGPA ",
+        "stands ",
+        "for ",
+        "Semester ",
+        "Grade ",
+        "Point ",
+        "Average."
+    ]
+
+    for t in tokens:
+        yield json.dumps({
+            "type": "token",
+            "content": t
+        }) + "\n"
+        time.sleep(1)
+
+    yield json.dumps({
+        "type": "done"
+    }) + "\n"
+
+
+@app.post("/ask")
+async def ask():
+    return StreamingResponse(stream(), media_type="text/plain")
 
 # Initialize globals
 DIST_DIR = "frontend/out"  # Directory for static files (built from frontend)
@@ -138,63 +189,63 @@ async def index() -> FileResponse:
     return FileResponse(f"{DIST_DIR}/index.html")
 
 
-@app.post(
-    "/ask",
-    response_model=AskResponseModel,
-    response_class=JSONResponse,
-    openapi_extra=ask_docs.request_examples,
-    responses=ask_docs.response_examples,
-    tags=["Generation"],
-)
-async def ask(payload: AskRequestModel) -> JSONResponse:
-    """Endpoint to handle question-answering requests.
+# @app.post(
+#     "/ask",
+#     response_model=AskResponseModel,
+#     response_class=JSONResponse,
+#     openapi_extra=ask_docs.request_examples,
+#     responses=ask_docs.response_examples,
+#     tags=["Generation"],
+# )
+# async def ask(payload: AskRequestModel) -> JSONResponse:
+#     """Endpoint to handle question-answering requests.
 
-    Automatically manages LLM quota with cooldowns.
-    May raise 429 if 'thinking' or 'primary' mode is temporarily unavailable.
-    """
-    global THINKING_STATE, PRIMARY_STATE
-    logging.debug(f"Received /ask question: {payload.query}")
-    logging.debug(f"Thinking mode: {payload.thinking}")
-    current_time = datetime.datetime.now(IST)
+#     Automatically manages LLM quota with cooldowns.
+#     May raise 429 if 'thinking' or 'primary' mode is temporarily unavailable.
+#     """
+#     global THINKING_STATE, PRIMARY_STATE
+#     logging.debug(f"Received /ask question: {payload.query}")
+#     logging.debug(f"Thinking mode: {payload.thinking}")
+#     current_time = datetime.datetime.now(IST)
 
-    # Re-enable thinking mode and primary LLM if cooldown period has expired
-    THINKING_STATE.refresh()
-    PRIMARY_STATE.refresh()
+#     # Re-enable thinking mode and primary LLM if cooldown period has expired
+#     THINKING_STATE.refresh()
+#     PRIMARY_STATE.refresh()
 
-    # Check if thinking mode is requested and enabled
-    if payload.thinking and not THINKING_STATE.enabled:
-        logging.warning("Thinking mode was requested but currently unavailable due to quota limits.")
-        raise ResourceExhausted(
-            "Thinking mode is temporarily unavailable due to quota limits. "
-            "Please try again later, or disable 'thinking' mode if enabled."
-        )
+#     # Check if thinking mode is requested and enabled
+#     if payload.thinking and not THINKING_STATE.enabled:
+#         logging.warning("Thinking mode was requested but currently unavailable due to quota limits.")
+#         raise ResourceExhausted(
+#             "Thinking mode is temporarily unavailable due to quota limits. "
+#             "Please try again later, or disable 'thinking' mode if enabled."
+#         )
 
-    # Check if primary LLM is requested and enabled
-    if not payload.thinking and not PRIMARY_STATE.enabled:
-        logging.warning("Primary LLM is currently unavailable due to quota limits.")
-        raise ResourceExhausted("Primary LLM is temporarily unavailable due to quota limits. Please try again later.")
+#     # Check if primary LLM is requested and enabled
+#     if not payload.thinking and not PRIMARY_STATE.enabled:
+#         logging.warning("Primary LLM is currently unavailable due to quota limits.")
+#         raise ResourceExhausted("Primary LLM is temporarily unavailable due to quota limits. Please try again later.")
 
-    # Attempt to generate the answer
-    start_time = time.perf_counter()
-    try:
-        response = await rag.generate(query=payload.query, thinking=payload.thinking, history=payload.history)
-        answer = response["answer"]
-        steps = response["steps"]
-    except ResourceExhausted:
-        llm_state = THINKING_STATE if payload.thinking else PRIMARY_STATE
-        llm_state.disable()
-        raise
+#     # Attempt to generate the answer
+#     start_time = time.perf_counter()
+#     try:
+#         response = await rag.generate(query=payload.query, thinking=payload.thinking, history=payload.history)
+#         answer = response["answer"]
+#         steps = response["steps"]
+#     except ResourceExhausted:
+#         llm_state = THINKING_STATE if payload.thinking else PRIMARY_STATE
+#         llm_state.disable()
+#         raise
 
-    latency = round(time.perf_counter() - start_time, 3)
-    response = AskResponseModel(
-        status=True,
-        message="Answer generated successfully.",
-        answer=answer,
-        timestamp=current_time,
-        latency=latency,
-        steps=steps,
-    )
-    return JSONResponse(status_code=200, content=response.model_dump(mode="json", exclude_none=True))
+#     latency = round(time.perf_counter() - start_time, 3)
+#     response = AskResponseModel(
+#         status=True,
+#         message="Answer generated successfully.",
+#         answer=answer,
+#         timestamp=current_time,
+#         latency=latency,
+#         steps=steps,
+#     )
+#     return JSONResponse(status_code=200, content=response.model_dump(mode="json", exclude_none=True))
 
 
 @app.get(
