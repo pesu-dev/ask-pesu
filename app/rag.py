@@ -222,8 +222,7 @@ class RetrievalAugmentedGenerator:
         if buffer:
             yield json.dumps({"type": "token", "content": buffer}) + "\n"
         else:
-            # No closing </think> tag found, treat buffer as thinking content
-            yield json.dumps({"type": "step", "content": buffer}) + "\n"
+            yield json.dumps({"type": "token", "content": buffer}) + "\n"
 
         yield json.dumps({"type": "done"}) + "\n"
 
