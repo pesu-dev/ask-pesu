@@ -161,89 +161,10 @@ class RetrievalAugmentedGenerator:
         """Format the retrieved documents into a single string."""
         return "\n\n".join(f"{doc.metadata['url']}\n{doc.page_content}" for doc in docs)
 
-    async def _process_non_thinking_stream(
-        self, rag_chain: RunnableSerializable[str, str], query: str, chat_history: list
-    ) -> AsyncGenerator[str, None]:
-        """Process non-thinking mode streaming.
-
-        Streams tokens directly to the frontend without processing.
-
-        Args:
-            rag_chain: The RAG chain to use for generation.
-            query: The user's query.
-            chat_history: The chat history.
-
-        Yields:
-            JSON-formatted token strings.
-        """
-        async for chunk in rag_chain.astream({"input": query, "question": query, "chat_history": chat_history}):
-            if chunk:
-                yield json.dumps({"type": "token", "content": chunk}) + "\n"
-        yield json.dumps({"type": "done"}) + "\n"
-
-    async def _process_thinking_stream(
-        self, rag_chain: RunnableSerializable[str, str], query: str, chat_history: list
-    ) -> AsyncGenerator[str, None]:
-        """Process thinking mode streaming.
-
-        Splits stream content around </think> tag, emitting steps for thinking
-        content and tokens for the final answer.
-
-        Args:
-            rag_chain: The RAG chain to use for generation.
-            query: The user's query.
-            chat_history: The chat history.
-
-        Yields:
-            JSON-formatted step or token strings.
-        """
-        thinking_done = False
-        buffer = ""
-
-        async for chunk in rag_chain.astream({"input": query, "question": query, "chat_history": chat_history}):
-            if not chunk:
-                continue
-
-            if thinking_done:
-                yield json.dumps({"type": "token", "content": chunk}) + "\n"
-                continue
-
-            buffer += chunk
-
-            if "</think>" in buffer:
-                pre, post = buffer.split("</think>", 1)
-                if pre:
-                    yield json.dumps({"type": "step", "content": pre}) + "\n"
-                thinking_done = True
-                buffer = ""
-                if post:
-                    yield json.dumps({"type": "token", "content": post}) + "\n"
-
-        if buffer:
-            if thinking_done:
-                # Content after </think> that came in remaining chunks
-                yield json.dumps({"type": "token", "content": buffer}) + "\n"
-            else:
-                # No closing </think> tag found, entire buffer is thinking content
-                yield json.dumps({"type": "step", "content": buffer}) + "\n"
-
-        yield json.dumps({"type": "done"}) + "\n"
-
     async def generate(self, query: str, thinking: bool, history: list) -> AsyncGenerator[str, None]:
-        """Generate an answer to the query using the RAG pipeline.
-
-        Handles both thinking and non-thinking modes, streaming responses
-        in real-time to the frontend.
-
-        Args:
-            query: The user's query.
-            thinking: Whether to use thinking mode.
-            history: The chat history.
-
-        Yields:
-            JSON-formatted stream data (steps, tokens, or done signal).
-        """
+        """Generate an answer to the query using the RAG pipeline."""
         chat_history = []
+
         for convo in history:
             if query != convo.query:
                 chat_history.append(HumanMessage(convo.query))
@@ -253,9 +174,11 @@ class RetrievalAugmentedGenerator:
             self.rag_chain_thinking if thinking and self.rag_chain_thinking is not None else self.rag_chain_primary
         )
 
-        if thinking:
-            async for chunk in self._process_thinking_stream(rag_chain, query, chat_history):
-                yield chunk
-        else:
-            async for chunk in self._process_non_thinking_stream(rag_chain, query, chat_history):
-                yield chunk
+        thinking_done = False
+        async for chunk in rag_chain.astream({"input": query, "question": query, "chat_history": chat_history}):
+            if thinking:
+                if chunk == "</think>":
+                    thinking_done = True
+            if chunk != "</think>":
+                yield json.dumps({"type": "token" if thinking_done else "step", "content": chunk}) + "\n"
+        yield json.dumps({"type": "done"}) + "\n"
