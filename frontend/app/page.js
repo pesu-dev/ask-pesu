@@ -13,15 +13,13 @@ import useServiceStatus from "@/hooks/useAvail"
 export default function Home() {
 	const [query, setQuery] = useState("")
 	const [history, setHistory] = useState([])
-	const [inQueueQuery, setInQueueQuery] = useState("")
 	const [loading, setLoading] = useState(false)
-	const [modelChoice, setModelChoice] = useState("primary")
-	const chatEndRef = useRef(null)
+	const [modelChoice, setModelChoice] = useState("thinking")
 	const [isFirstQuery, setIsFirstQuery] = useState(true)
 
+	const chatEndRef = useRef(null)
+
 	const {
-		quotaStatus,
-		loading: quotaLoading,
 		refreshQuota,
 		getTimeRemaining,
 		isThinkingAvailable,
@@ -32,7 +30,7 @@ export default function Home() {
 
 	useEffect(() => {
 		chatEndRef.current?.scrollIntoView({ behavior: "smooth" })
-	}, [history, inQueueQuery, chatEndRef])
+	}, [history])
 
 	useEffect(() => {
 		if (!serviceStatus.isAvailable && serviceStatus.message) {
@@ -51,11 +49,83 @@ export default function Home() {
 		serviceStatus.isAvailable,
 		serviceStatus.nextAvailableTime,
 		getTimeRemaining,
+		serviceStatus.message,
 	])
 
-	const handleEditQuery = useCallback((query) => {
-		setQuery(query)
+	const handleEditQuery = useCallback((editedQuery) => {
+		setQuery(editedQuery)
 	}, [])
+
+	const runStreamedQuery = useCallback(
+		async (queryText, thinkingFlag) => {
+			setLoading(true)
+
+			const rowId = crypto.randomUUID()
+
+			setHistory((prev) => [
+				...prev,
+				{
+					id: rowId,
+					query: queryText,
+					answer: "",
+					steps: "",
+					isStreaming: true,
+					hasReceivedBytes: false,
+					isDone: false,
+					wasThinkingMode: thinkingFlag,
+				},
+			])
+
+			const updateRow = (updater) => {
+				setHistory((prev) =>
+					prev.map((row) => (row.id === rowId ? updater(row) : row))
+				)
+			}
+
+			const result = await Query(queryText, thinkingFlag, history, {
+				onFirstByte: () => {
+					updateRow((row) => ({ ...row, hasReceivedBytes: true }))
+				},
+				onToken: (token) => {
+					updateRow((row) => ({
+						...row,
+						hasReceivedBytes: true,
+						answer: (row.answer || "") + token,
+					}))
+				},
+				onStep: (step) => {
+					updateRow((row) => ({
+						...row,
+						hasReceivedBytes: true,
+						steps: (row.steps || "") + step,
+					}))
+				},
+				onDone: () => {
+					updateRow((row) => ({
+						...row,
+						isStreaming: false,
+						isDone: true,
+					}))
+					setLoading(false)
+				},
+			})
+
+			if (!result?.status) {
+				toast.error(result?.message || "Request failed")
+				updateRow((row) => ({
+					...row,
+					isStreaming: false,
+					isDone: true,
+				}))
+				if (result?.httpStatus === 429) {
+					refreshQuota()
+					serviceStatus.refreshStatus?.()
+				}
+				setLoading(false)
+			}
+		},
+		[history, refreshQuota, serviceStatus]
+	)
 
 	const handleThinkingMode = useCallback(
 		async (queryText) => {
@@ -71,107 +141,44 @@ export default function Home() {
 				return
 			}
 
-			setLoading(true)
-			setInQueueQuery(queryText)
-
-			const data = await Query(queryText, true, history)
-
-			if (!data || !data.status) {
-				toast.error(data?.message || "Request failed")
-				if (data?.httpStatus === 429) {
-					refreshQuota()
-					serviceStatus.refreshStatus?.()
-				}
-				setInQueueQuery(null)
-				setLoading(false)
-				return
-			}
-
-			setInQueueQuery(null)
-
-			if (data) {
-				setHistory((prev) => [
-					...prev,
-					{
-						query: queryText,
-						answer: data.answer,
-						steps: data.steps || null,
-					},
-				])
-			} else {
-				refreshQuota()
-			}
-
-			setLoading(false)
+			await runStreamedQuery(queryText, true)
 		},
 		[
 			isThinkingAvailable,
 			thinkingNextAvailable,
 			getTimeRemaining,
-			refreshQuota,
-			history,
+			runStreamedQuery,
 		]
 	)
 
 	const handleQuery = useCallback(async () => {
-	if (!query.trim()) {
-		toast.warning("You can't query an empty question.")
-		return
-	}
-
-	if (!serviceStatus.isAvailable) {
-		toast.error("Service temporarily unavailable")
-		return
-	}
-
-	setIsFirstQuery(false)
-
-	const currentQuery = query
-	setQuery("")
-	setInQueueQuery(null)
-
-	const messageIndex = history.length
-
-	// Insert empty message
-	setHistory(prev => [
-		...prev,
-		{
-			query: currentQuery,
-			answer: "",
-			steps: "",
-		},
-	])
-
-	setLoading(true)
-
-	await Query(
-		currentQuery,
-		isThinkingAvailable,
-		history,
-		{
-			onToken: (token) => {
-				setHistory(prev => {
-					const updated = [...prev]
-					updated[messageIndex].answer += token
-					return updated
-				})
-			},
-
-			onStep: (step) => {
-				setHistory(prev => {
-					const updated = [...prev]
-					updated[messageIndex].steps =
-						(updated[messageIndex].steps || "") + step
-					return updated
-				})
-			},
-
-			onDone: () => {
-				setLoading(false)
-			},
+		if (!query.trim()) {
+			toast.warning("You can't query an empty question.")
+			return
 		}
-	)
-}, [query, history, serviceStatus, isThinkingAvailable])
+
+		if (!serviceStatus.isAvailable) {
+			toast.error("Service temporarily unavailable")
+			return
+		}
+
+		setIsFirstQuery(false)
+
+		const currentQuery = query
+		setQuery("")
+
+		// Thinking mode by default.
+		const useThinkingMode =
+			modelChoice === "thinking" && isThinkingAvailable
+
+		await runStreamedQuery(currentQuery, useThinkingMode)
+	}, [
+		query,
+		serviceStatus.isAvailable,
+		modelChoice,
+		isThinkingAvailable,
+		runStreamedQuery,
+	])
 
 	const getDisabledMessage = useCallback(() => {
 		if (!serviceStatus.isAvailable) {
@@ -194,31 +201,34 @@ export default function Home() {
 						: "opacity-100"
 				}`}
 			>
-				{" "}
 				{history.map((row, i) => (
 					<div key={i} className="mb-6">
 						<UserPrompt
 							query={row.query}
 							handleEditQuery={handleEditQuery}
 						/>
+
+						{row.isStreaming && !row.hasReceivedBytes && (
+							<div className="flex justify-start mt-3">
+								<PendingResponse />
+							</div>
+						)}
+
 						<LlmResponse
 							answer={row.answer}
 							steps={row.steps}
+							isStreaming={row.isStreaming}
+							hasReceivedBytes={row.hasReceivedBytes}
 							handleThinkMode={() =>
 								handleThinkingMode(row.query)
 							}
-							showThinkMoreOption={isThinkingAvailable}
+							showThinkMoreOption={Boolean(
+								row.isDone && isThinkingAvailable
+							)}
+							wasThinkingMode={row.wasThinkingMode}
 						/>
 					</div>
 				))}
-				{/* {inQueueQuery && (
-					<div className="mb-6">
-						<UserPrompt query={inQueueQuery} />
-						<div className="flex justify-start mt-3">
-							<PendingResponse />
-						</div>
-					</div>
-				)} */}
 				<div ref={chatEndRef} className="mb-[20vh]" />
 			</div>
 

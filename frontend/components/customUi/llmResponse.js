@@ -1,4 +1,4 @@
-import { Bot, Clipboard, ChevronDown, ChevronUp } from "lucide-react"
+import { Bot, Clipboard, ChevronDown, ChevronUp, Loader2 } from "lucide-react"
 import { motion, AnimatePresence } from "motion/react"
 import ReactMarkdown from "react-markdown"
 import { Button } from "../ui/button"
@@ -10,12 +10,12 @@ import remarkGfm from "remark-gfm"
 
 const STYLE = (
 	<style>{`
-		@keyframes _wIn {
-			from { opacity: 0; transform: translateY(3px); }
-			to   { opacity: 1; transform: none; }
-		}
-		._w { animation: _wIn 0.14s ease-out both; display: inline; }
-	`}</style>
+    @keyframes _wIn {
+      from { opacity: 0; transform: translateY(3px); }
+      to   { opacity: 1; transform: none; }
+    }
+    ._w { animation: _wIn 0.14s ease-out both; display: inline; }
+  `}</style>
 )
 
 export default function LlmResponse({
@@ -23,11 +23,15 @@ export default function LlmResponse({
 	steps,
 	handleThinkMode,
 	showThinkMoreOption = false,
+	isStreaming = false,
+	hasReceivedBytes = false,
+	wasThinkingMode = false,
 }) {
 	const [showThinking, setShowThinking] = useState(false)
 	const stableCountRef = useRef(0)
 	const counterRef = useRef(0)
 	counterRef.current = 0
+
 	useEffect(() => {
 		stableCountRef.current = counterRef.current
 	})
@@ -57,6 +61,7 @@ export default function LlmResponse({
 			.map((c) => (typeof c === "string" ? c : ""))
 			.join("")
 			.trim()
+
 		if (isValidUrl(textContent)) {
 			return (
 				<li>
@@ -71,17 +76,18 @@ export default function LlmResponse({
 				</li>
 			)
 		}
+
 		return <li>{children}</li>
 	}
 
-	const renderAnimatedWords = (node, baseKey) => {
-		if (typeof node !== "string") return node
+	const renderAnimatedWords = (node, baseKey, shouldAnimate = true) => {
+		if (typeof node !== "string" || !shouldAnimate) return node
 		const stable = stableCountRef.current
+
 		return node.split(/(\s+)/).map((word, i) => {
 			const idx = counterRef.current++
-			if (idx < stable) {
-				return word
-			}
+			if (idx < stable) return word
+
 			const delay = (idx - stable) * 12
 			return (
 				<span
@@ -102,28 +108,28 @@ export default function LlmResponse({
 			p: ({ children }) => (
 				<p>
 					{React.Children.map(children, (c, i) =>
-						renderAnimatedWords(c, i)
+						renderAnimatedWords(c, i, isStreaming)
 					)}
 				</p>
 			),
 			h1: ({ children }) => (
 				<h1>
 					{React.Children.map(children, (c, i) =>
-						renderAnimatedWords(c, i)
+						renderAnimatedWords(c, i, isStreaming)
 					)}
 				</h1>
 			),
 			h2: ({ children }) => (
 				<h2>
 					{React.Children.map(children, (c, i) =>
-						renderAnimatedWords(c, i)
+						renderAnimatedWords(c, i, isStreaming)
 					)}
 				</h2>
 			),
 			h3: ({ children }) => (
 				<h3>
 					{React.Children.map(children, (c, i) =>
-						renderAnimatedWords(c, i)
+						renderAnimatedWords(c, i, isStreaming)
 					)}
 				</h3>
 			),
@@ -135,6 +141,7 @@ export default function LlmResponse({
 						</code>
 					)
 				}
+
 				return (
 					<pre className="bg-muted p-4 rounded-lg overflow-x-auto my-2">
 						<code className={className} {...props}>
@@ -144,9 +151,14 @@ export default function LlmResponse({
 				)
 			},
 		}),
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-		[answer]
+		[answer, isStreaming]
 	)
+
+	const answerText = (answer || "").trim()
+	const stepsText = (steps || "").trim()
+
+	const showThinkingAnswerPlaceholder =
+		isStreaming && !answerText && !!stepsText
 
 	return (
 		<>
@@ -158,7 +170,7 @@ export default function LlmResponse({
 			>
 				<Bot className="rounded-full p-2 hidden md:block min-w-10 min-h-10 ring-2 ring-accent/40 text-accent" />
 				<div className="flex flex-col flex-nowrap gap-4">
-					{steps && (
+					{steps && wasThinkingMode && (
 						<div className="rounded-xl border border-border overflow-hidden w-fit">
 							<button
 								onClick={() => setShowThinking((p) => !p)}
@@ -173,6 +185,7 @@ export default function LlmResponse({
 									<ChevronDown className="w-4 h-4" />
 								)}
 							</button>
+
 							<AnimatePresence>
 								{showThinking && (
 									<motion.div
@@ -201,22 +214,34 @@ export default function LlmResponse({
 					)}
 
 					<div className="bg-card px-4 py-3 rounded-2xl text-card-foreground text-base leading-relaxed prose dark:prose-invert wrap-anywhere">
-						<ReactMarkdown
-							remarkPlugins={[remarkGfm, remarkMath]}
-							rehypePlugins={[rehypeKatex]}
-							components={markdownComponents}
-						>
-							{answer}
-						</ReactMarkdown>
-						<Button
-							className="rounded-2xl text-card-foreground hover:text-card-foreground/50 cursor-pointer"
-							variant="outline"
-							onClick={() =>
-								navigator.clipboard.writeText(answer)
-							}
-						>
-							<Clipboard />
-						</Button>
+						{showThinkingAnswerPlaceholder ? (
+							<div className="flex items-center gap-2 text-muted-foreground not-prose">
+								<Loader2 className="h-4 w-4 animate-spin" />
+								<span className="text-sm">
+									Generating final answer...
+								</span>
+							</div>
+						) : (
+							<ReactMarkdown
+								remarkPlugins={[remarkGfm, remarkMath]}
+								rehypePlugins={[rehypeKatex]}
+								components={markdownComponents}
+							>
+								{answer}
+							</ReactMarkdown>
+						)}
+
+						{answerText && (
+							<Button
+								className="rounded-2xl text-card-foreground hover:text-card-foreground/50 cursor-pointer"
+								variant="outline"
+								onClick={() =>
+									navigator.clipboard.writeText(answer)
+								}
+							>
+								<Clipboard />
+							</Button>
+						)}
 					</div>
 
 					{showThinkMoreOption && (

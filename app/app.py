@@ -5,7 +5,6 @@ import asyncio
 import datetime
 import json
 import logging
-import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -18,8 +17,8 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from google.api_core.exceptions import ResourceExhausted
 
-from app.docs import health_docs, index_docs, quota_docs, ask_docs
-from app.models import HealthResponseModel, QuotaResponseModel, AskRequestModel, AskResponseModel
+from app.docs import ask_docs, health_docs, index_docs, quota_docs
+from app.models import AskRequestModel, AskResponseModel, HealthResponseModel, QuotaResponseModel
 from app.quota import QuotaState
 from app.rag import RetrievalAugmentedGenerator
 
@@ -316,7 +315,7 @@ async def ask(payload: AskRequestModel) -> JSONResponse:
     global THINKING_STATE, PRIMARY_STATE
     logging.debug(f"Received /ask question: {payload.query}")
     logging.debug(f"Thinking mode: {payload.thinking}")
-    current_time = datetime.datetime.now(IST)
+    # current_time = datetime.datetime.now(IST)
 
     # Re-enable thinking mode and primary LLM if cooldown period has expired
     THINKING_STATE.refresh()
@@ -336,7 +335,7 @@ async def ask(payload: AskRequestModel) -> JSONResponse:
         raise ResourceExhausted("Primary LLM is temporarily unavailable due to quota limits. Please try again later.")
 
     # Attempt to generate the answer
-    start_time = time.perf_counter()
+    # start_time = time.perf_counter()
     # try:
     #     response = await rag.generate(query=payload.query, thinking=payload.thinking, history=payload.history)
     # except ResourceExhausted:
@@ -352,8 +351,11 @@ async def ask(payload: AskRequestModel) -> JSONResponse:
     #     timestamp=current_time,
     #     latency=latency,
     # )
-    return StreamingResponse(rag.generate(query=payload.query, thinking=payload.thinking, history=payload.history), media_type="text/plain", status_code=200)
-
+    return StreamingResponse(
+        rag.generate(query=payload.query, thinking=payload.thinking, history=payload.history),
+        media_type="text/plain",
+        status_code=200,
+    )
 
 
 @app.get(
