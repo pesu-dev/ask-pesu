@@ -3,6 +3,7 @@
 import os
 
 import yaml
+import json
 from dotenv import load_dotenv
 from huggingface_hub import InferenceClient
 from langchain.retrievers.multi_query import MultiQueryRetriever
@@ -12,6 +13,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnablePassthrough, RunnableSerializable
+from langchain_core.messages import AIMessageChunk
 from langchain_huggingface import ChatHuggingFace, HuggingFaceEndpoint
 from langchain_huggingface.embeddings import HuggingFaceEmbeddings
 from langchain_qdrant import QdrantVectorStore
@@ -57,7 +59,7 @@ class RetrievalAugmentedGenerator:
                 max_new_tokens=512,
                 timeout=120,
                 streaming=True,
-            )
+            ),
         )
 
         self.llm_thinking = ChatHuggingFace(
@@ -158,29 +160,71 @@ class RetrievalAugmentedGenerator:
         """Format the retrieved documents into a single string."""
         return "\n\n".join(f"{doc.metadata['url']}\n{doc.page_content}" for doc in docs)
 
-    async def generate(self, query: str, thinking: bool, history: list) -> str:
-        """Generate a response for the given query using the RAG chain.
 
-        Args:
-            query (str): The input query.
-            thinking (bool): Flag to indicate if the model should 'think' before answering.
-            history (list): The entire chat history until the current query
-
-        Returns:
-            str: The generated response.
-        """
+    async def generate(self, query: str, thinking: bool, history: list):
         chat_history = []
 
         for convo in history:
-            if query != convo.query:  # Prevents repeating the same question when using the thinking model.
+            if query != convo.query:
                 chat_history.append(HumanMessage(convo.query))
                 chat_history.append(AIMessage(convo.answer))
 
         rag_chain = (
-            self.rag_chain_thinking if thinking and self.rag_chain_thinking is not None else self.rag_chain_primary
+            self.rag_chain_thinking
+            if thinking and self.rag_chain_thinking is not None
+            else self.rag_chain_primary
         )
+        
+        thinking_done = False
+        async for chunk in rag_chain.astream({
+            "input": query,
+            "question": query,
+            "chat_history": chat_history
+        }):
+            if thinking:
+                if chunk == "</think>":
+                    thinking_done = True
+            if chunk != "</think>":
+                yield json.dumps({"type": "token" if thinking_done else "step","content": chunk}) + "\n"
 
-        response = await rag_chain.ainvoke({"input": query, "question": query, "chat_history": chat_history})
-        if thinking:
-            return {"answer": response.split("</think>")[1], "steps": response.split("</think>")[0]}
-        return {"answer": response, "steps": None}
+
+            # if isinstance(chunk, AIMessageChunk):
+            #     content = chunk.content
+            # else:
+            #     content = chunk
+
+            # if not content:
+            #     continue
+
+            # if thinking and not thinking_done:
+            #     buffer += content
+            #     if "</think>" in buffer:
+            #         steps, remainder = buffer.split("</think>", 1)
+            #         yield json.dumps({
+            #             "type": "step",
+            #             "content": steps
+            #         }) + "\n"
+
+            #         thinking_done = True
+            #         buffer = remainder
+
+            #         if remainder:
+            #             yield json.dumps({
+            #                 "type": "token",
+            #                 "content": remainder
+            #             }) + "\n"
+
+            #     else:
+            #         yield json.dumps({
+            #             "type": "step",
+            #             "content": content
+            #         }) + "\n"
+
+            # else:
+            #     print(content)
+            #     yield json.dumps({
+            #         "type": "token",
+            #         "content": content
+            #     }) + "\n"
+
+        yield json.dumps({"type": "done"}) + "\n"

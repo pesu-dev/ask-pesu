@@ -5,6 +5,7 @@ import asyncio
 import datetime
 import json
 import logging
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -17,8 +18,8 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from google.api_core.exceptions import ResourceExhausted
 
-from app.docs import health_docs, index_docs, quota_docs
-from app.models import HealthResponseModel, QuotaResponseModel
+from app.docs import health_docs, index_docs, quota_docs, ask_docs
+from app.models import HealthResponseModel, QuotaResponseModel, AskRequestModel, AskResponseModel
 from app.quota import QuotaState
 from app.rag import RetrievalAugmentedGenerator
 
@@ -228,10 +229,10 @@ async def stream() -> AsyncIterator[str]:
     yield json.dumps({"type": "done"}) + "\n"
 
 
-@app.post("/ask")
-async def ask() -> StreamingResponse:
-    """Test endpoint to simulate streaming response for the /ask endpoint."""
-    return StreamingResponse(stream(), media_type="text/plain")
+# @app.post("/ask")
+# async def ask() -> StreamingResponse:
+#     """Test endpoint to simulate streaming response for the /ask endpoint."""
+#     return StreamingResponse(stream(), media_type="text/plain")
 
 
 # Initialize globals
@@ -298,63 +299,61 @@ async def index() -> FileResponse:
     return FileResponse(f"{DIST_DIR}/index.html")
 
 
-# @app.post(
-#     "/ask",
-#     response_model=AskResponseModel,
-#     response_class=JSONResponse,
-#     openapi_extra=ask_docs.request_examples,
-#     responses=ask_docs.response_examples,
-#     tags=["Generation"],
-# )
-# async def ask(payload: AskRequestModel) -> JSONResponse:
-#     """Endpoint to handle question-answering requests.
+@app.post(
+    "/ask",
+    response_model=AskResponseModel,
+    response_class=JSONResponse,
+    openapi_extra=ask_docs.request_examples,
+    responses=ask_docs.response_examples,
+    tags=["Generation"],
+)
+async def ask(payload: AskRequestModel) -> JSONResponse:
+    """Endpoint to handle question-answering requests.
 
-#     Automatically manages LLM quota with cooldowns.
-#     May raise 429 if 'thinking' or 'primary' mode is temporarily unavailable.
-#     """
-#     global THINKING_STATE, PRIMARY_STATE
-#     logging.debug(f"Received /ask question: {payload.query}")
-#     logging.debug(f"Thinking mode: {payload.thinking}")
-#     current_time = datetime.datetime.now(IST)
+    Automatically manages LLM quota with cooldowns.
+    May raise 429 if 'thinking' or 'primary' mode is temporarily unavailable.
+    """
+    global THINKING_STATE, PRIMARY_STATE
+    logging.debug(f"Received /ask question: {payload.query}")
+    logging.debug(f"Thinking mode: {payload.thinking}")
+    current_time = datetime.datetime.now(IST)
 
-#     # Re-enable thinking mode and primary LLM if cooldown period has expired
-#     THINKING_STATE.refresh()
-#     PRIMARY_STATE.refresh()
+    # Re-enable thinking mode and primary LLM if cooldown period has expired
+    THINKING_STATE.refresh()
+    PRIMARY_STATE.refresh()
 
-#     # Check if thinking mode is requested and enabled
-#     if payload.thinking and not THINKING_STATE.enabled:
-#         logging.warning("Thinking mode was requested but currently unavailable due to quota limits.")
-#         raise ResourceExhausted(
-#             "Thinking mode is temporarily unavailable due to quota limits. "
-#             "Please try again later, or disable 'thinking' mode if enabled."
-#         )
+    # Check if thinking mode is requested and enabled
+    if payload.thinking and not THINKING_STATE.enabled:
+        logging.warning("Thinking mode was requested but currently unavailable due to quota limits.")
+        raise ResourceExhausted(
+            "Thinking mode is temporarily unavailable due to quota limits. "
+            "Please try again later, or disable 'thinking' mode if enabled."
+        )
 
-#     # Check if primary LLM is requested and enabled
-#     if not payload.thinking and not PRIMARY_STATE.enabled:
-#         logging.warning("Primary LLM is currently unavailable due to quota limits.")
-#         raise ResourceExhausted("Primary LLM is temporarily unavailable due to quota limits. Please try again later.")
+    # Check if primary LLM is requested and enabled
+    if not payload.thinking and not PRIMARY_STATE.enabled:
+        logging.warning("Primary LLM is currently unavailable due to quota limits.")
+        raise ResourceExhausted("Primary LLM is temporarily unavailable due to quota limits. Please try again later.")
 
-#     # Attempt to generate the answer
-#     start_time = time.perf_counter()
-#     try:
-#         response = await rag.generate(query=payload.query, thinking=payload.thinking, history=payload.history)
-#         answer = response["answer"]
-#         steps = response["steps"]
-#     except ResourceExhausted:
-#         llm_state = THINKING_STATE if payload.thinking else PRIMARY_STATE
-#         llm_state.disable()
-#         raise
+    # Attempt to generate the answer
+    start_time = time.perf_counter()
+    # try:
+    #     response = await rag.generate(query=payload.query, thinking=payload.thinking, history=payload.history)
+    # except ResourceExhausted:
+    #     llm_state = THINKING_STATE if payload.thinking else PRIMARY_STATE
+    #     llm_state.disable()
+    #     raise
 
-#     latency = round(time.perf_counter() - start_time, 3)
-#     response = AskResponseModel(
-#         status=True,
-#         message="Answer generated successfully.",
-#         answer=answer,
-#         timestamp=current_time,
-#         latency=latency,
-#         steps=steps,
-#     )
-#     return JSONResponse(status_code=200, content=response.model_dump(mode="json", exclude_none=True))
+    # latency = round(time.perf_counter() - start_time, 3)
+    # response = AskResponseModel(
+    #     status=True,
+    #     message="Answer generated successfully.",
+    #     answer=answer,
+    #     timestamp=current_time,
+    #     latency=latency,
+    # )
+    return StreamingResponse(rag.generate(query=payload.query, thinking=payload.thinking, history=payload.history), media_type="text/plain", status_code=200)
+
 
 
 @app.get(
