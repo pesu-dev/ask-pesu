@@ -7,7 +7,7 @@ from collections.abc import AsyncGenerator
 import yaml
 from dotenv import load_dotenv
 from huggingface_hub import InferenceClient
-from langchain.retrievers.multi_query import MultiQueryRetriever
+from langchain_classic.retrievers import MultiQueryRetriever
 from langchain_core.documents.base import Document
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage
