@@ -220,9 +220,12 @@ class RetrievalAugmentedGenerator:
                     yield json.dumps({"type": "token", "content": post}) + "\n"
 
         if buffer:
-            yield json.dumps({"type": "token", "content": buffer}) + "\n"
-        else:
-            yield json.dumps({"type": "token", "content": buffer}) + "\n"
+            if thinking_done:
+                # Content after </think> that came in remaining chunks
+                yield json.dumps({"type": "token", "content": buffer}) + "\n"
+            else:
+                # No closing </think> tag found, entire buffer is thinking content
+                yield json.dumps({"type": "step", "content": buffer}) + "\n"
 
         yield json.dumps({"type": "done"}) + "\n"
 
