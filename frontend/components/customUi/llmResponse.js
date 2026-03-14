@@ -133,21 +133,26 @@ export default function LlmResponse({
 					)}
 				</h3>
 			),
-			code: ({ inline, className, children, ...props }) => {
-				if (inline) {
+			pre: ({ children }) => (
+				<pre className="bg-muted p-4 rounded-lg overflow-x-auto my-2">
+					{children}
+				</pre>
+			),
+			code: ({ className, children, ...props }) => {
+				if (!className) {
 					return (
-						<code className="bg-muted px-1 py-0.5 rounded text-sm">
+						<code
+							className="bg-muted px-1 py-0.5 rounded text-sm"
+							{...props}
+						>
 							{children}
 						</code>
 					)
 				}
-
 				return (
-					<pre className="bg-muted p-4 rounded-lg overflow-x-auto my-2">
-						<code className={className} {...props}>
-							{children}
-						</code>
-					</pre>
+					<code className={className} {...props}>
+						{children}
+					</code>
 				)
 			},
 		}),
@@ -212,7 +217,6 @@ export default function LlmResponse({
 							</AnimatePresence>
 						</div>
 					)}
-
 					<div className="bg-card px-4 py-3 rounded-2xl text-card-foreground text-base leading-relaxed prose dark:prose-invert wrap-anywhere">
 						{showThinkingAnswerPlaceholder ? (
 							<div className="flex items-center gap-2 text-muted-foreground not-prose">
@@ -221,27 +225,26 @@ export default function LlmResponse({
 									Generating final answer...
 								</span>
 							</div>
-						) : (
-							<ReactMarkdown
-								remarkPlugins={[remarkGfm, remarkMath]}
-								rehypePlugins={[rehypeKatex]}
-								components={markdownComponents}
-							>
-								{answer}
-							</ReactMarkdown>
-						)}
-
-						{answerText && (
-							<Button
-								className="rounded-2xl text-card-foreground hover:text-card-foreground/50 cursor-pointer"
-								variant="outline"
-								onClick={() =>
-									navigator.clipboard.writeText(answer)
-								}
-							>
-								<Clipboard />
-							</Button>
-						)}
+						) : answerText ? (
+							<>
+								<ReactMarkdown
+									remarkPlugins={[remarkGfm, remarkMath]}
+									rehypePlugins={[rehypeKatex]}
+									components={markdownComponents}
+								>
+									{answer}
+								</ReactMarkdown>
+								<Button
+									className="rounded-2xl text-card-foreground hover:text-card-foreground/50 cursor-pointer"
+									variant="outline"
+									onClick={() =>
+										navigator.clipboard.writeText(answer)
+									}
+								>
+									<Clipboard />
+								</Button>
+							</>
+						) : null}
 					</div>
 
 					{showThinkMoreOption && (

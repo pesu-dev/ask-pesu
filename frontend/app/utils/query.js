@@ -59,16 +59,27 @@ export default async function Query(
 				return
 			}
 
+			// console.log(
+			// 	`[DEBUG] Received ${data.type}:`,
+			// 	data.content?.substring(0, 50)
+			// )
+
 			if (data.type === "token") onToken?.(data.content || "")
 			if (data.type === "step") onStep?.(data.content || "")
 			if (data.type === "done") {
+				// console.log("[DEBUG] Done event received")
 				doneEventSeen = true
 				onDone?.()
+			}
+			if (data.type === "error") {
+				// console.error("[DEBUG] Error from backend:", data.content)
+				onError?.({ status: false, message: data.content })
 			}
 		}
 
 		while (true) {
 			const { done, value } = await reader.read()
+			//if (done) console.log("[DEBUG] Stream reader closed by backend")
 			if (done) break
 
 			if (!firstByteSeen && value && value.byteLength > 0) {
@@ -91,6 +102,10 @@ export default async function Query(
 		if (buffer.trim()) {
 			processLine(buffer)
 		}
+
+		// if (!firstByteSeen) {
+		// 	console.warn("[DEBUG] No bytes received from stream")
+		// }
 
 		// Fallback if backend closes stream without explicit done event.
 		if (!doneEventSeen) {
