@@ -51,7 +51,7 @@ class RetrievalAugmentedGenerator:
                 provider="nscale",
                 huggingfacehub_api_token=os.getenv("HF_TOKEN"),
                 temperature=0.3,
-                max_new_tokens=512,
+                max_new_tokens=2048,
                 timeout=120,
                 streaming=True,
             ),
@@ -65,7 +65,7 @@ class RetrievalAugmentedGenerator:
                 provider="nscale",
                 huggingfacehub_api_token=os.getenv("HF_TOKEN"),
                 temperature=0.3,
-                max_new_tokens=4096,  # <-- CRITICAL: 512 was too small, </think> never emitted
+                max_new_tokens=4096,
                 timeout=300,
                 streaming=True,
             )
