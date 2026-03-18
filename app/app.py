@@ -1,9 +1,10 @@
 """FastAPI application for AskPESU backend APIs."""
 
 import argparse
+import asyncio
 import datetime
+import json
 import logging
-import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -12,7 +13,7 @@ import torch
 import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from google.api_core.exceptions import ResourceExhausted
 
@@ -73,6 +74,165 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+async def stream() -> AsyncIterator[str]:
+    """Simulate a streaming response for the /ask endpoint."""
+    # Step 1
+    yield json.dumps({"type": "step", "content": "Searching documents...\n"}) + "\n"
+    await asyncio.sleep(0.02)
+
+    # Step 2
+    yield json.dumps({"type": "step", "content": "Ranking sources...\n"}) + "\n"
+
+    await asyncio.sleep(0.02)
+    # Step 3
+    yield json.dumps({"type": "step", "content": "Generating answer...\n"}) + "\n"
+    await asyncio.sleep(0.02)
+
+    tokens = [
+        "SGPA ",
+        "stands ",
+        "for ",
+        "Semester ",
+        "Grade ",
+        "Point ",
+        "Average. ",
+        "It ",
+        "is ",
+        "a ",
+        "numerical ",
+        "representation ",
+        "of ",
+        "a ",
+        "student’s ",
+        "academic ",
+        "performance ",
+        "during ",
+        "a ",
+        "specific ",
+        "semester ",
+        "in ",
+        "a ",
+        "college ",
+        "or ",
+        "university. ",
+        "The ",
+        "calculation ",
+        "is ",
+        "typically ",
+        "based ",
+        "on ",
+        "the ",
+        "grades ",
+        "obtained ",
+        "in ",
+        "different ",
+        "subjects ",
+        "along ",
+        "with ",
+        "the ",
+        "credit ",
+        "value ",
+        "assigned ",
+        "to ",
+        "each ",
+        "course. ",
+        "Higher ",
+        "grades ",
+        "and ",
+        "higher ",
+        "credit ",
+        "courses ",
+        "usually ",
+        "contribute ",
+        "more ",
+        "toward ",
+        "the ",
+        "final ",
+        "SGPA ",
+        "value. ",
+        "Universities ",
+        "use ",
+        "this ",
+        "metric ",
+        "to ",
+        "quickly ",
+        "summarize ",
+        "how ",
+        "well ",
+        "a ",
+        "student ",
+        "has ",
+        "performed ",
+        "academically ",
+        "within ",
+        "that ",
+        "particular ",
+        "term. ",
+        "It ",
+        "also ",
+        "helps ",
+        "students ",
+        "track ",
+        "their ",
+        "progress ",
+        "throughout ",
+        "their ",
+        "degree ",
+        "program ",
+        "and ",
+        "identify ",
+        "areas ",
+        "where ",
+        "improvement ",
+        "may ",
+        "be ",
+        "needed. ",
+        "In ",
+        "many ",
+        "institutions, ",
+        "the ",
+        "SGPA ",
+        "is ",
+        "later ",
+        "combined ",
+        "across ",
+        "multiple ",
+        "semesters ",
+        "to ",
+        "calculate ",
+        "the ",
+        "CGPA ",
+        "which ",
+        "represents ",
+        "the ",
+        "overall ",
+        "cumulative ",
+        "academic ",
+        "performance ",
+        "of ",
+        "a ",
+        "student ",
+        "throughout ",
+        "their ",
+        "entire ",
+        "course ",
+        "of ",
+        "study.",
+    ]
+    for t in tokens:
+        yield json.dumps({"type": "token", "content": t}) + "\n"
+        await asyncio.sleep(0.02)
+
+    yield json.dumps({"type": "done"}) + "\n"
+
+
+# @app.post("/ask")
+# async def ask() -> StreamingResponse:
+#     """Test endpoint to simulate streaming response for the /ask endpoint."""
+#     return StreamingResponse(stream(), media_type="text/plain")
+
 
 # Initialize globals
 DIST_DIR = "frontend/out"  # Directory for static files (built from frontend)
@@ -155,7 +315,7 @@ async def ask(payload: AskRequestModel) -> JSONResponse:
     global THINKING_STATE, PRIMARY_STATE
     logging.debug(f"Received /ask question: {payload.query}")
     logging.debug(f"Thinking mode: {payload.thinking}")
-    current_time = datetime.datetime.now(IST)
+    # current_time = datetime.datetime.now(IST)
 
     # Re-enable thinking mode and primary LLM if cooldown period has expired
     THINKING_STATE.refresh()
@@ -175,23 +335,27 @@ async def ask(payload: AskRequestModel) -> JSONResponse:
         raise ResourceExhausted("Primary LLM is temporarily unavailable due to quota limits. Please try again later.")
 
     # Attempt to generate the answer
-    start_time = time.perf_counter()
-    try:
-        answer = await rag.generate(query=payload.query, thinking=payload.thinking, history=payload.history)
-    except ResourceExhausted:
-        llm_state = THINKING_STATE if payload.thinking else PRIMARY_STATE
-        llm_state.disable()
-        raise
+    # start_time = time.perf_counter()
+    # try:
+    #     response = await rag.generate(query=payload.query, thinking=payload.thinking, history=payload.history)
+    # except ResourceExhausted:
+    #     llm_state = THINKING_STATE if payload.thinking else PRIMARY_STATE
+    #     llm_state.disable()
+    #     raise
 
-    latency = round(time.perf_counter() - start_time, 3)
-    response = AskResponseModel(
-        status=True,
-        message="Answer generated successfully.",
-        answer=answer,
-        timestamp=current_time,
-        latency=latency,
+    # latency = round(time.perf_counter() - start_time, 3)
+    # response = AskResponseModel(
+    #     status=True,
+    #     message="Answer generated successfully.",
+    #     answer=answer,
+    #     timestamp=current_time,
+    #     latency=latency,
+    # )
+    return StreamingResponse(
+        rag.generate(query=payload.query, thinking=payload.thinking, history=payload.history),
+        media_type="text/plain",
+        status_code=200,
     )
-    return JSONResponse(status_code=200, content=response.model_dump(mode="json", exclude_none=True))
 
 
 @app.get(

@@ -7,21 +7,19 @@ import LlmResponse from "@/components/customUi/llmResponse"
 import Query from "./utils/query"
 import { toast } from "sonner"
 import useQuota from "@/hooks/useQuota"
-import ThinkingIndicator from "@/components/customUi/thinkinganimation"
+import PendingResponse from "@/components/customUi/thinkinganimation"
 import useServiceStatus from "@/hooks/useAvail"
 
 export default function Home() {
 	const [query, setQuery] = useState("")
 	const [history, setHistory] = useState([])
-	const [inQueueQuery, setInQueueQuery] = useState("")
 	const [loading, setLoading] = useState(false)
-	const [modelChoice, setModelChoice] = useState("primary")
-	const chatEndRef = useRef(null)
+	const [modelChoice, setModelChoice] = useState("thinking")
 	const [isFirstQuery, setIsFirstQuery] = useState(true)
 
+	const chatEndRef = useRef(null)
+
 	const {
-		quotaStatus,
-		loading: quotaLoading,
 		refreshQuota,
 		getTimeRemaining,
 		isThinkingAvailable,
@@ -30,10 +28,9 @@ export default function Home() {
 
 	const serviceStatus = useServiceStatus()
 
-	// Auto-scroll to bottom on new message
 	useEffect(() => {
 		chatEndRef.current?.scrollIntoView({ behavior: "smooth" })
-	}, [history, inQueueQuery, chatEndRef])
+	}, [history])
 
 	useEffect(() => {
 		if (!serviceStatus.isAvailable && serviceStatus.message) {
@@ -52,11 +49,83 @@ export default function Home() {
 		serviceStatus.isAvailable,
 		serviceStatus.nextAvailableTime,
 		getTimeRemaining,
+		serviceStatus.message,
 	])
 
-	const handleEditQuery = useCallback((query) => {
-		setQuery(query)
+	const handleEditQuery = useCallback((editedQuery) => {
+		setQuery(editedQuery)
 	}, [])
+
+	const runStreamedQuery = useCallback(
+		async (queryText, thinkingFlag) => {
+			setLoading(true)
+
+			const rowId = crypto.randomUUID()
+
+			setHistory((prev) => [
+				...prev,
+				{
+					id: rowId,
+					query: queryText,
+					answer: "",
+					steps: "",
+					isStreaming: true,
+					hasReceivedBytes: false,
+					isDone: false,
+					wasThinkingMode: thinkingFlag,
+				},
+			])
+
+			const updateRow = (updater) => {
+				setHistory((prev) =>
+					prev.map((row) => (row.id === rowId ? updater(row) : row))
+				)
+			}
+
+			const result = await Query(queryText, thinkingFlag, history, {
+				onFirstByte: () => {
+					updateRow((row) => ({ ...row, hasReceivedBytes: true }))
+				},
+				onToken: (token) => {
+					updateRow((row) => ({
+						...row,
+						hasReceivedBytes: true,
+						answer: (row.answer || "") + token,
+					}))
+				},
+				onStep: (step) => {
+					updateRow((row) => ({
+						...row,
+						hasReceivedBytes: true,
+						steps: (row.steps || "") + step,
+					}))
+				},
+				onDone: () => {
+					updateRow((row) => ({
+						...row,
+						isStreaming: false,
+						isDone: true,
+					}))
+					setLoading(false)
+				},
+			})
+
+			if (!result?.status) {
+				toast.error(result?.message || "Request failed")
+				updateRow((row) => ({
+					...row,
+					isStreaming: false,
+					isDone: true,
+				}))
+				if (result?.httpStatus === 429) {
+					refreshQuota()
+					serviceStatus.refreshStatus?.()
+				}
+				setLoading(false)
+			}
+		},
+		[history, refreshQuota, serviceStatus]
+	)
 
 	const handleThinkingMode = useCallback(
 		async (queryText) => {
@@ -72,47 +141,13 @@ export default function Home() {
 				return
 			}
 
-			setLoading(true)
-			setInQueueQuery(queryText)
-
-			const data = await Query(queryText, true, history)
-
-			if (!data || !data.status) {
-				toast.error(data?.message || "Request failed")
-				if (data?.httpStatus === 429) {
-					refreshQuota()
-					serviceStatus.refreshStatus?.()
-				}
-				setInQueueQuery(null)
-				setLoading(false)
-				return
-			}
-
-			console.info(data)
-
-			setInQueueQuery(null)
-
-			if (data) {
-				setHistory((prev) => [
-					...prev,
-					{
-						query: queryText,
-						answer: data.answer,
-					},
-				])
-			} else {
-				// If query failed, refresh quota to check if thinking mode went down
-				refreshQuota()
-			}
-
-			setLoading(false)
+			await runStreamedQuery(queryText, true)
 		},
 		[
 			isThinkingAvailable,
 			thinkingNextAvailable,
 			getTimeRemaining,
-			refreshQuota,
-			history,
+			runStreamedQuery,
 		]
 	)
 
@@ -123,53 +158,26 @@ export default function Home() {
 		}
 
 		if (!serviceStatus.isAvailable) {
-			const timeRemaining = getTimeRemaining(
-				serviceStatus.nextAvailableTime
-			)
 			toast.error("Service temporarily unavailable")
 			return
 		}
 
 		setIsFirstQuery(false)
-		setLoading(true)
-		setInQueueQuery(query)
 
-		const data = await Query(query, false, history)
-		console.info(data)
-
-		setInQueueQuery(null)
+		const currentQuery = query
 		setQuery("")
 
-		if (!data || !data.status) {
-			toast.error(data?.message || "Request failed")
-			// Refresh quota in case it was a 429 error
-			if (data?.httpStatus === 429) {
-				refreshQuota()
-				serviceStatus.refreshStatus?.()
-			}
-			setLoading(false)
-			return
-		}
+		// Thinking mode by default.
+		const useThinkingMode =
+			modelChoice === "thinking" && isThinkingAvailable
 
-		if (data) {
-			setHistory((prev) => [
-				...prev,
-				{
-					query,
-					answer: data.answer,
-				},
-			])
-		}
-
-		setLoading(false)
+		await runStreamedQuery(currentQuery, useThinkingMode)
 	}, [
 		query,
-		setLoading,
-		setInQueueQuery,
-		setHistory,
-		setQuery,
-		history,
-		serviceStatus,
+		serviceStatus.isAvailable,
+		modelChoice,
+		isThinkingAvailable,
+		runStreamedQuery,
 	])
 
 	const getDisabledMessage = useCallback(() => {
@@ -186,7 +194,6 @@ export default function Home() {
 
 	return (
 		<div className="relative bg-background w-screen h-screen flex flex-col">
-			{/* Chat Window */}
 			<div
 				className={`flex-1 w-full max-w-5xl mx-auto px-4 py-6 overflow-y-auto hide-scrollbar transition-opacity duration-500 ${
 					isFirstQuery
@@ -194,43 +201,37 @@ export default function Home() {
 						: "opacity-100"
 				}`}
 			>
-				{" "}
-				{/* Past Queries */}
 				{history.map((row, i) => (
 					<div key={i} className="mb-6">
 						<UserPrompt
 							query={row.query}
 							handleEditQuery={handleEditQuery}
 						/>
+
+						{row.isStreaming && !row.hasReceivedBytes && (
+							<div className="flex justify-start mt-3">
+								<PendingResponse />
+							</div>
+						)}
+
 						<LlmResponse
 							answer={row.answer}
-							query={row.query}
-							onThinkingMode={handleThinkingMode}
-							isThinkingAvailable={isThinkingAvailable}
-							thinkingNextAvailable={thinkingNextAvailable}
-							getTimeRemaining={getTimeRemaining}
+							steps={row.steps}
+							isStreaming={row.isStreaming}
+							hasReceivedBytes={row.hasReceivedBytes}
 							handleThinkMode={() =>
 								handleThinkingMode(row.query)
 							}
-							showThinkMoreOption={isThinkingAvailable}
-							quotaLoading={quotaLoading}
+							showThinkMoreOption={Boolean(
+								row.isDone && isThinkingAvailable
+							)}
+							wasThinkingMode={row.wasThinkingMode}
 						/>
 					</div>
 				))}
-				{/* Pending Query */}
-				{inQueueQuery && (
-					<div className="mb-6">
-						<UserPrompt query={inQueueQuery} />
-
-						<div className="flex justify-start mt-3">
-							<ThinkingIndicator />
-						</div>
-					</div>
-				)}
 				<div ref={chatEndRef} className="mb-[20vh]" />
 			</div>
 
-			{/* Service Status Banner */}
 			{!serviceStatus.isAvailable && (
 				<div className="w-full bg-destructive/10 border-b border-destructive/20 px-4 py-3">
 					<p className="text-center text-sm text-destructive font-medium">
@@ -239,7 +240,6 @@ export default function Home() {
 				</div>
 			)}
 
-			{/* Input Box For New Queries */}
 			<div
 				className="fixed left-0 right-0 top-1/2 transition-transform duration-700 ease-in-out"
 				style={{
