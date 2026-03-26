@@ -41,9 +41,7 @@ export default function LlmResponse({
 				indexRef.current += 5
 
 				setDisplayText((prev) => prev + nextChunk)
-
-				// 🔥 Controlled speed (KEY)
-				timeoutId = setTimeout(step, 12) // tweak: 8–20ms
+				timeoutId = setTimeout(step, 12) // TODO: enhance
 			}
 		}
 

@@ -173,7 +173,7 @@ export default function Home() {
 		const currentQuery = query
 		setQuery("")
 
-		// Thinking mode by default.
+		// Thinking mode by default
 		const useThinkingMode =
 			modelChoice === "thinking" && isThinkingAvailable
 
