@@ -5,7 +5,8 @@ export default async function Query(
 	{ onToken, onStep, onDone, onFirstByte, onError } = {}
 ) {
 	try {
-		const resp = await fetch(`/ask`, {
+		const API_URL = process.env.NEXT_PUBLIC_DEV_API_URL
+		const resp = await fetch(`${API_URL}/ask`, {
 			method: "POST",
 			headers: {
 				"Content-Type": "application/json",

@@ -192,3 +192,73 @@
 .hide-scrollbar::-webkit-scrollbar {
 	display: none; /* Chrome, Safari, and Opera */
 }
+
+.typing-cursor {
+	display: inline-block;
+	margin-left: 2px;
+	animation: blink 1s infinite;
+}
+
+@keyframes blink {
+	0%, 50%, 100% { opacity: 1; }
+	25%, 75% { opacity: 0; }
+}
+
+.stream-text {
+	animation: fadeInText 0.15s ease-out;
+}
+
+@keyframes fadeInText {
+	from {
+		opacity: 0.6;
+		transform: translateY(1px);
+	}
+	to {
+		opacity: 1;
+		transform: translateY(0);
+	}
+}
+
+
+@keyframes wipeIn {
+	from {
+		width: 0;
+		opacity: 0.7;
+	}
+	to {
+		width: 100%;
+		opacity: 1;
+	}
+}
+
+.wipe-chunk {
+	display: inline-block;
+	overflow: hidden;
+	white-space: pre;
+
+	/* Start hidden */
+	width: 0;
+
+	/* Smooth wipe */
+	animation: wipeIn 0.25s ease-out forwards;
+}
+
+.wipe-container {
+  display: inline-block;
+  overflow: hidden;
+  white-space: pre-wrap;
+
+  /* Animate reveal */
+  animation: wipeReveal 0.4s ease-out;
+}
+
+@keyframes wipeReveal {
+  from {
+    clip-path: inset(0 100% 0 0);
+    opacity: 0.7;
+  }
+  to {
+    clip-path: inset(0 0 0 0);
+    opacity: 1;
+  }
+}

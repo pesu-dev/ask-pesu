@@ -29,8 +29,10 @@ export default function Home() {
 	const serviceStatus = useServiceStatus()
 
 	useEffect(() => {
-		chatEndRef.current?.scrollIntoView({ behavior: "smooth" })
-	}, [history])
+		chatEndRef.current?.scrollIntoView({
+			behavior: loading ? "auto" : "smooth",
+		})
+	}, [history, loading])
 
 	useEffect(() => {
 		if (!serviceStatus.isAvailable && serviceStatus.message) {
@@ -92,6 +94,10 @@ export default function Home() {
 						hasReceivedBytes: true,
 						answer: (row.answer || "") + token,
 					}))
+
+					requestAnimationFrame(() => {
+						chatEndRef.current?.scrollIntoView({ behavior: "auto" })
+					})
 				},
 				onStep: (step) => {
 					updateRow((row) => ({
@@ -193,9 +199,9 @@ export default function Home() {
 	}, [serviceStatus, getTimeRemaining])
 
 	return (
-		<div className="relative bg-background w-screen h-screen flex flex-col">
+		<div className="bg-background min-h-screen flex flex-col">
 			<div
-				className={`flex-1 w-full max-w-5xl mx-auto px-4 py-6 overflow-y-auto hide-scrollbar transition-opacity duration-500 ${
+				className={`w-full max-w-5xl mx-auto px-4 py-6 transition-opacity duration-500 ${
 					isFirstQuery
 						? "opacity-0 pointer-events-none"
 						: "opacity-100"
