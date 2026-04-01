@@ -19,6 +19,43 @@ export default function Home() {
 
 	const chatEndRef = useRef(null)
 
+	// Load history from localStorage on component mount
+	useEffect(() => {
+		try {
+			const savedHistory = localStorage.getItem("chatHistory")
+			if (savedHistory) {
+				const parsedHistory = JSON.parse(savedHistory)
+				if (Array.isArray(parsedHistory) && parsedHistory.length > 0) {
+					setHistory(parsedHistory)
+					setIsFirstQuery(false)
+				}
+			}
+		} catch (error) {
+			console.error(
+				"Failed to parse chat history from localStorage",
+				error
+			)
+			toast.error("Could not load your chat history.")
+		}
+	}, [])
+
+	// Save history to localStorage whenever it changes
+	useEffect(() => {
+		// Don't save an empty history if it's the initial state
+		if (history.length === 0 && isFirstQuery) {
+			return
+		}
+		try {
+			const filteredHistory = history.map(
+				({ isStreaming, hasReceivedBytes, ...rest }) => rest
+			)
+			localStorage.setItem("chatHistory", JSON.stringify(filteredHistory))
+		} catch (error) {
+			console.error("Failed to save chat history to localStorage", error)
+			toast.error("Could not save your chat history.")
+		}
+	}, [history, isFirstQuery])
+
 	const {
 		refreshQuota,
 		getTimeRemaining,

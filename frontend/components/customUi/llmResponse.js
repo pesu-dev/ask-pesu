@@ -2,7 +2,7 @@ import { Bot, Clipboard, ChevronDown, ChevronUp, Loader2 } from "lucide-react"
 import { motion, AnimatePresence } from "motion/react"
 import ReactMarkdown from "react-markdown"
 import { Button } from "../ui/button"
-import React, { useMemo, useRef, useState, useEffect } from "react"
+import React, { useMemo, useState, useEffect, useRef } from "react"
 import remarkMath from "remark-math"
 import rehypeKatex from "rehype-katex"
 import "katex/dist/katex.min.css"
@@ -18,36 +18,54 @@ export default function LlmResponse({
 	wasThinkingMode = false,
 }) {
 	const [showThinking, setShowThinking] = useState(false)
-	const [displayText, setDisplayText] = useState("")
-	const indexRef = useRef(0)
+	const [displayedText, setDisplayedText] = useState("")
+
+	// Refs to handle our dynamic animation frame queue
+	const textToDisplayRef = useRef("")
+	const currentDisplayedRef = useRef("")
+	const rafRef = useRef(null)
 
 	useEffect(() => {
+		textToDisplayRef.current = answer || ""
+
+		// If we are done streaming, snap to the full text and stop the animation loop
 		if (!isStreaming) {
-			setDisplayText(answer)
+			setDisplayedText(answer || "")
+			currentDisplayedRef.current = answer || ""
+			if (rafRef.current) cancelAnimationFrame(rafRef.current)
 			return
 		}
 
-		let timeoutId
+		const animateText = () => {
+			const target = textToDisplayRef.current
+			const current = currentDisplayedRef.current
 
-		const step = () => {
-			const full = answer || ""
+			if (current.length < target.length) {
+				const diff = target.length - current.length
+				// The Magic: dynamically adjust typing speed based on the backlog.
+				// It catches up by a fraction of the difference per frame, minimum 1 character.
+				// This creates an organic acceleration/deceleration effect.
+				const charsToAdd = Math.max(3, Math.ceil(diff / 30))
 
-			if (indexRef.current < full.length) {
-				const nextChunk = full.slice(
-					indexRef.current,
-					indexRef.current + 5
+				currentDisplayedRef.current = target.slice(
+					0,
+					current.length + charsToAdd
 				)
-
-				indexRef.current += 5
-
-				setDisplayText((prev) => prev + nextChunk)
-				timeoutId = setTimeout(step, 12) // TODO: enhance
+				setDisplayedText(currentDisplayedRef.current)
 			}
+
+			// Keep the animation loop running as long as we are streaming
+			rafRef.current = requestAnimationFrame(animateText)
 		}
 
-		step()
+		if (!rafRef.current) {
+			rafRef.current = requestAnimationFrame(animateText)
+		}
 
-		return () => clearTimeout(timeoutId)
+		return () => {
+			if (rafRef.current) cancelAnimationFrame(rafRef.current)
+			rafRef.current = null
+		}
 	}, [answer, isStreaming])
 
 	const isValidUrl = (string) => {
@@ -75,7 +93,6 @@ export default function LlmResponse({
 			.map((c) => (typeof c === "string" ? c : ""))
 			.join("")
 			.trim()
-
 		if (isValidUrl(textContent)) {
 			return (
 				<li>
@@ -90,22 +107,81 @@ export default function LlmResponse({
 				</li>
 			)
 		}
-
 		return <li>{children}</li>
 	}
 
 	const markdownComponents = useMemo(
 		() => ({
 			a: LinkRenderer,
-			li: ListItemRenderer,
-			p: ({ children }) => <p>{children}</p>,
-			h1: ({ children }) => <h1>{children}</h1>,
-			h2: ({ children }) => <h2>{children}</h2>,
-			h3: ({ children }) => <h3>{children}</h3>,
-			pre: ({ children }) => (
-				<pre className="bg-muted p-4 rounded-lg overflow-x-auto my-2">
+			// Smooth fade-in for list items
+			li: ({ children }) => {
+				const textContent = React.Children.toArray(children)
+					.map((c) => (typeof c === "string" ? c : ""))
+					.join("")
+					.trim()
+
+				if (isValidUrl(textContent)) {
+					return (
+						<motion.li
+							initial={{ opacity: 0, x: -5 }}
+							animate={{ opacity: 1, x: 0 }}
+						>
+							<a
+								href={textContent}
+								target="_blank"
+								rel="noopener noreferrer"
+								className="text-blue-500 hover:text-blue-700 underline"
+							>
+								{textContent}
+							</a>
+						</motion.li>
+					)
+				}
+				return (
+					<motion.li
+						initial={{ opacity: 0, x: -5 }}
+						animate={{ opacity: 1, x: 0 }}
+					>
+						{children}
+					</motion.li>
+				)
+			},
+			// Smooth fade and slide up for new paragraphs
+			p: ({ children }) => (
+				<motion.p
+					initial={{ opacity: 0, y: 4 }}
+					animate={{ opacity: 1, y: 0 }}
+					transition={{ duration: 0.3, ease: "easeOut" }}
+					className="mb-2 last:mb-0"
+				>
 					{children}
-				</pre>
+				</motion.p>
+			),
+			h1: ({ children }) => (
+				<motion.h1 initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+					{children}
+				</motion.h1>
+			),
+			h2: ({ children }) => (
+				<motion.h2 initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+					{children}
+				</motion.h2>
+			),
+			h3: ({ children }) => (
+				<motion.h3 initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+					{children}
+				</motion.h3>
+			),
+			// Fade in code blocks so they don't aggressively snap onto the screen
+			pre: ({ children }) => (
+				<motion.pre
+					initial={{ opacity: 0, scale: 0.98 }}
+					animate={{ opacity: 1, scale: 1 }}
+					transition={{ duration: 0.3 }}
+					className="bg-muted p-4 rounded-lg overflow-x-auto my-2"
+				>
+					{children}
+				</motion.pre>
 			),
 			code: ({ className, children, ...props }) => {
 				if (!className) {
@@ -125,14 +201,12 @@ export default function LlmResponse({
 				)
 			},
 		}),
-		[answer, isStreaming]
+		[]
 	)
 
-	const answerText = (answer || "").trim()
 	const stepsText = (steps || "").trim()
-
 	const showThinkingAnswerPlaceholder =
-		isStreaming && !answerText && !!stepsText
+		isStreaming && !textToDisplayRef.current && !!stepsText
 
 	return (
 		<motion.div
@@ -141,7 +215,7 @@ export default function LlmResponse({
 			className="flex justify-start mt-3 gap-4"
 		>
 			<Bot className="rounded-full p-2 hidden md:block min-w-10 min-h-10 ring-2 ring-accent/40 text-accent" />
-			<div className="flex flex-col flex-nowrap gap-4">
+			<div className="flex flex-col flex-nowrap gap-4 w-full max-w-[calc(100%-3rem)]">
 				{steps && wasThinkingMode && (
 					<div className="rounded-xl border border-border overflow-hidden w-fit">
 						<button
@@ -157,7 +231,6 @@ export default function LlmResponse({
 								<ChevronDown className="w-4 h-4" />
 							)}
 						</button>
-
 						<AnimatePresence>
 							{showThinking && (
 								<motion.div
@@ -192,34 +265,30 @@ export default function LlmResponse({
 								Generating final answer...
 							</span>
 						</div>
-					) : answerText ? (
-						<>
-							{isStreaming ? (
-								<div className="whitespace-pre-wrap stream-text">
-									{displayText}
-								</div>
-							) : (
-								<ReactMarkdown
-									remarkPlugins={[remarkGfm, remarkMath]}
-									rehypePlugins={[rehypeKatex]}
-									components={markdownComponents}
-								>
-									{answer}
-								</ReactMarkdown>
-							)}
-							<Button
-								className="rounded-2xl text-card-foreground hover:text-card-foreground/50 cursor-pointer"
-								variant="outline"
-								onClick={() =>
-									navigator.clipboard.writeText(answer)
-								}
+					) : displayedText ? (
+						<div className="relative group">
+							<ReactMarkdown
+								remarkPlugins={[remarkGfm, remarkMath]}
+								rehypePlugins={[rehypeKatex]}
+								components={markdownComponents}
 							>
-								<Clipboard />
-							</Button>
-						</>
+								{displayedText}
+							</ReactMarkdown>
+
+							{!isStreaming && (
+								<Button
+									className="absolute -top-2 -right-2 opacity-0 group-hover:opacity-100 transition-opacity rounded-xl text-muted-foreground hover:text-foreground h-8 w-8 p-0"
+									variant="secondary"
+									onClick={() =>
+										navigator.clipboard.writeText(answer)
+									}
+								>
+									<Clipboard className="w-4 h-4" />
+								</Button>
+							)}
+						</div>
 					) : null}
 				</div>
-
 				{showThinkMoreOption && (
 					<div className="flex gap-4">
 						<Button
