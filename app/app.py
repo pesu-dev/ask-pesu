@@ -7,6 +7,8 @@ import json
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from dotenv import load_dotenv
+import os
 
 import pytz
 import torch
@@ -16,11 +18,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from google.api_core.exceptions import ResourceExhausted
+import aiohttp.client_exceptions
 
 from app.docs import ask_docs, health_docs, index_docs, quota_docs
 from app.models import AskRequestModel, AskResponseModel, HealthResponseModel, QuotaResponseModel
 from app.quota import QuotaState
 from app.rag import RetrievalAugmentedGenerator
+
+load_dotenv()
 
 
 @asynccontextmanager
@@ -76,7 +81,21 @@ app.add_middleware(
 )
 
 
-async def stream() -> AsyncIterator[str]:
+# Initialize globals
+DIST_DIR = "frontend/out"  # Directory for static files (built from frontend)
+IST = pytz.timezone("Asia/Kolkata")  # Indian Standard Time timezone
+rag: RetrievalAugmentedGenerator | None = None  # Global variable to hold the RAG instance
+
+# Global state to track if 'thinking' mode is enabled
+THINKING_STATE = QuotaState(name="thinking", cooldown_hours=24)
+# Global state to track if primary LLM is enabled
+PRIMARY_STATE = QuotaState(name="primary", cooldown_hours=24)
+
+# Mount static files
+app.mount("/static", StaticFiles(directory=DIST_DIR), name="static")
+
+
+async def test_stream() -> AsyncIterator[str]:
     """Simulate a streaming response for the /ask endpoint."""
     # Step 1
     yield json.dumps({"type": "step", "content": "Searching documents...\n"}) + "\n"
@@ -91,161 +110,30 @@ async def stream() -> AsyncIterator[str]:
     await asyncio.sleep(0.02)
 
     tokens = [
-        "SGPA ",
-        "stands ",
-        "for ",
-        "Semester ",
-        "Grade ",
-        "Point ",
-        "Average. ",
-        "It ",
-        "is ",
-        "a ",
-        "numerical ",
-        "representation ",
-        "of ",
-        "a ",
-        "student’s ",
-        "academic ",
-        "performance ",
-        "during ",
-        "a ",
-        "specific ",
-        "semester ",
-        "in ",
-        "a ",
-        "college ",
-        "or ",
-        "university. ",
-        "The ",
-        "calculation ",
-        "is ",
-        "typically ",
-        "based ",
-        "on ",
-        "the ",
-        "grades ",
-        "obtained ",
-        "in ",
-        "different ",
-        "subjects ",
-        "along ",
-        "with ",
-        "the ",
-        "credit ",
-        "value ",
-        "assigned ",
-        "to ",
-        "each ",
-        "course. ",
-        "Higher ",
-        "grades ",
-        "and ",
-        "higher ",
-        "credit ",
-        "courses ",
-        "usually ",
-        "contribute ",
-        "more ",
-        "toward ",
-        "the ",
-        "final ",
-        "SGPA ",
-        "value. ",
-        "Universities ",
-        "use ",
-        "this ",
-        "metric ",
-        "to ",
-        "quickly ",
-        "summarize ",
-        "how ",
-        "well ",
-        "a ",
-        "student ",
-        "has ",
-        "performed ",
-        "academically ",
-        "within ",
-        "that ",
-        "particular ",
-        "term. ",
-        "It ",
-        "also ",
-        "helps ",
-        "students ",
-        "track ",
-        "their ",
-        "progress ",
-        "throughout ",
-        "their ",
-        "degree ",
-        "program ",
-        "and ",
-        "identify ",
-        "areas ",
-        "where ",
-        "improvement ",
-        "may ",
-        "be ",
-        "needed. ",
-        "In ",
-        "many ",
-        "institutions, ",
-        "the ",
-        "SGPA ",
-        "is ",
-        "later ",
-        "combined ",
-        "across ",
-        "multiple ",
-        "semesters ",
-        "to ",
-        "calculate ",
-        "the ",
-        "CGPA ",
-        "which ",
-        "represents ",
-        "the ",
-        "overall ",
-        "cumulative ",
-        "academic ",
-        "performance ",
-        "of ",
-        "a ",
-        "student ",
-        "throughout ",
-        "their ",
-        "entire ",
-        "course ",
-        "of ",
-        "study.",
+        "### How SGPA is Calculated\n\n",
+        "SGPA is the **weighted average** of the grades obtained in all courses during a semester, ",
+        "where the weights are the **credits** assigned to each course.\n\n",
+        "#### Formula\n\n",
+        "$$\\text{SGPA} = ",
+        "\\frac{\\sum (\\text{Grade Points} \\times \\text{Credits})}{\\text{Total Credits}}$$\n\n",
+        "#### Step-by-step\n\n",
+        "1. **Determine the final grade** for each course.\n",
+        "2. **Convert the grade into grade points**.\n",
+        "3. **Multiply** the grade points by the course credits.\n",
+        "4. **Add** the products for all courses.\n",
+        "5. **Divide** by the total credits in the semester.\n\n",
+        "#### Example\n\n",
+        "- Course 1: 4 credits, grade **A** = 9 points\n",
+        "- Course 2: 2 credits, grade **S** = 10 points\n\n",
+        "So the SGPA is **(4 x 9 + 2 x 10) / 6 = 9.33**.\n\n",
+        "**Sources**\n\n",
+        "- https://www.reddit.com/r/PESU/\n",
     ]
     for t in tokens:
         yield json.dumps({"type": "token", "content": t}) + "\n"
-        await asyncio.sleep(0.02)
+        await asyncio.sleep(0.1)
 
     yield json.dumps({"type": "done"}) + "\n"
-
-
-# @app.post("/ask")
-# async def ask() -> StreamingResponse:
-#     """Test endpoint to simulate streaming response for the /ask endpoint."""
-#     return StreamingResponse(stream(), media_type="text/plain")
-
-
-# Initialize globals
-DIST_DIR = "frontend/out"  # Directory for static files (built from frontend)
-IST = pytz.timezone("Asia/Kolkata")  # Indian Standard Time timezone
-rag: RetrievalAugmentedGenerator | None = None  # Global variable to hold the RAG instance
-
-# Global state to track if 'thinking' mode is enabled
-THINKING_STATE = QuotaState(name="thinking", cooldown_hours=24)
-# Global state to track if primary LLM is enabled
-PRIMARY_STATE = QuotaState(name="primary", cooldown_hours=24)
-
-# Mount static files
-app.mount("/static", StaticFiles(directory=DIST_DIR), name="static")
 
 
 def get_quota_status() -> dict:
@@ -306,7 +194,7 @@ async def index() -> FileResponse:
     responses=ask_docs.response_examples,
     tags=["Generation"],
 )
-async def ask(payload: AskRequestModel) -> JSONResponse:
+async def ask(payload: AskRequestModel) -> StreamingResponse:
     """Endpoint to handle question-answering requests.
 
     Automatically manages LLM quota with cooldowns.
@@ -334,28 +222,14 @@ async def ask(payload: AskRequestModel) -> JSONResponse:
         logging.warning("Primary LLM is currently unavailable due to quota limits.")
         raise ResourceExhausted("Primary LLM is temporarily unavailable due to quota limits. Please try again later.")
 
-    # Attempt to generate the answer
-    # start_time = time.perf_counter()
-    # try:
-    #     response = await rag.generate(query=payload.query, thinking=payload.thinking, history=payload.history)
-    # except ResourceExhausted:
-    #     llm_state = THINKING_STATE if payload.thinking else PRIMARY_STATE
-    #     llm_state.disable()
-    #     raise
-
-    # latency = round(time.perf_counter() - start_time, 3)
-    # response = AskResponseModel(
-    #     status=True,
-    #     message="Answer generated successfully.",
-    #     answer=answer,
-    #     timestamp=current_time,
-    #     latency=latency,
-    # )
-    return StreamingResponse(
-        rag.generate(query=payload.query, thinking=payload.thinking, history=payload.history),
-        media_type="text/plain",
-        status_code=200,
-    )
+    if os.getenv("env") == "test":
+        return StreamingResponse(test_stream(), media_type="text/plain")
+    else:
+        return StreamingResponse(
+            rag.generate(query=payload.query, thinking=payload.thinking, history=payload.history),
+            media_type="text/plain",
+            status_code=200,
+        )
 
 
 @app.get(
