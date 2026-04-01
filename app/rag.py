@@ -47,54 +47,39 @@ class RetrievalAugmentedGenerator:
         # Primary LLM — used for normal mode AND question rewriting in all modes
         self.llm_primary = ChatHuggingFace(
             llm=HuggingFaceEndpoint(
-                repo_id="Qwen/Qwen3-4B-Instruct-2507",
-                provider="nscale",
+                repo_id=self.config["rag"]["llm"]["primary"]["repo_id"],
+                provider=self.config["rag"]["llm"]["primary"]["provider"],
                 huggingfacehub_api_token=os.getenv("HF_TOKEN"),
-                temperature=0.3,
-                max_new_tokens=2048,
-                timeout=120,
+                temperature=self.config["rag"]["llm"]["primary"]["temperature"],
+                max_new_tokens=self.config["rag"]["llm"]["primary"]["max_new_tokens"],
+                timeout=self.config["rag"]["llm"]["primary"]["timeout"],
                 streaming=True,
             ),
         )
 
         # Thinking LLM — ONLY used for final answer generation in thinking mode
-        # max_new_tokens must be large enough to fit <think>...</think> + answer
         self.llm_thinking = ChatHuggingFace(
             llm=HuggingFaceEndpoint(
-                repo_id="Qwen/Qwen3-4B-Thinking-2507",
-                provider="nscale",
+                repo_id=self.config["rag"]["llm"]["thinking"]["repo_id"],
+                provider=self.config["rag"]["llm"]["thinking"]["provider"],
                 huggingfacehub_api_token=os.getenv("HF_TOKEN"),
-                temperature=0.3,
-                max_new_tokens=4096,
-                timeout=300,
+                temperature=self.config["rag"]["llm"]["thinking"]["temperature"],
+                max_new_tokens=self.config["rag"]["llm"]["thinking"]["max_new_tokens"],
+                timeout=self.config["rag"]["llm"]["thinking"]["timeout"],
                 streaming=True,
             )
         )
 
         self.prompt = ChatPromptTemplate.from_messages(
             [
-                ("system", self.config["rag"]["system_prompt"]),
-                ("human", "Question: {question}\nContext: {context}\nAnswer:"),
+                ("system", self.config["rag"]["prompts"]["system_prompt"]),
+                ("human", self.config["rag"]["prompts"]["answer_prompt"]),
             ]
         )
 
         self.frame_qn_prompt = ChatPromptTemplate.from_messages(
             [
-                (
-                    "system",
-                    "You are a question rewriting assistant. Your job is to rewrite the user's "
-                    "question into an independent, self-contained question.\n\n"
-                    "Rewrite rules:\n"
-                    "1.ONLY use the chat history if the user's question is ambiguous or refers to previous context "
-                    "(e.g., pronouns like 'he', 'she', 'it', 'they', 'that').\n"
-                    "2.If the question is clear on its own, return it EXACTLY as it is.\n"
-                    "3.When resolving a follow-up question, ALWAYS prioritize the most recent topic in the chat history"
-                    "Do NOT pull context from older, unrelated parts of the conversation.\n"
-                    "4.If the question could refer to multiple topics, choose the MOST RECENT plausible topic.\n"
-                    "5.Do NOT invent or assume connections between unrelated topics.\n"
-                    "6.Do NOT answer the question — only rewrite it.\n\n"
-                    "Chat History:\n{chat_history}",
-                ),
+                ("system", self.config["rag"]["prompts"]["rewrite_prompt"]),
                 ("human", "{input}"),
             ]
         )
@@ -114,7 +99,7 @@ class RetrievalAugmentedGenerator:
         history_aware_retriever = (
             {"input": RunnablePassthrough(), "chat_history": RunnablePassthrough()}
             | self.frame_qn_prompt
-            | self.llm_primary  # <-- always primary, not `llm`
+            | self.llm_primary
             | StrOutputParser()
             | multiquery_retriever
         )
@@ -125,7 +110,7 @@ class RetrievalAugmentedGenerator:
                 "question": RunnablePassthrough(),
             }
             | self.prompt
-            | llm  # <-- only the final answer uses the passed-in llm
+            | llm
             | StrOutputParser()
         )
 
@@ -192,6 +177,7 @@ class RetrievalAugmentedGenerator:
         thinking_done = False
         pending = ""
         token_count = 0
+        f = open("data.txt", "a+")
 
         try:
             async for chunk in rag_chain.astream(
@@ -201,6 +187,7 @@ class RetrievalAugmentedGenerator:
                     "chat_history": chat_history,
                 }
             ):
+                f.write(chunk)
                 token_count += 1
 
                 if not thinking:
