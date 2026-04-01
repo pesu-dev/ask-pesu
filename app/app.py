@@ -5,20 +5,19 @@ import asyncio
 import datetime
 import json
 import logging
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from dotenv import load_dotenv
-import os
 
 import pytz
 import torch
 import uvicorn
+from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from google.api_core.exceptions import ResourceExhausted
-import aiohttp.client_exceptions
 
 from app.docs import ask_docs, health_docs, index_docs, quota_docs
 from app.models import AskRequestModel, AskResponseModel, HealthResponseModel, QuotaResponseModel
@@ -224,12 +223,11 @@ async def ask(payload: AskRequestModel) -> StreamingResponse:
 
     if os.getenv("env") == "test":
         return StreamingResponse(test_stream(), media_type="text/plain")
-    else:
-        return StreamingResponse(
-            rag.generate(query=payload.query, thinking=payload.thinking, history=payload.history),
-            media_type="text/plain",
-            status_code=200,
-        )
+    return StreamingResponse(
+        rag.generate(query=payload.query, thinking=payload.thinking, history=payload.history),
+        media_type="text/plain",
+        status_code=200,
+    )
 
 
 @app.get(

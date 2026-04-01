@@ -99,7 +99,7 @@ class RetrievalAugmentedGenerator:
         history_aware_retriever = (
             {"input": RunnablePassthrough(), "chat_history": RunnablePassthrough()}
             | self.frame_qn_prompt
-            | self.llm_primary  
+            | self.llm_primary
             | StrOutputParser()
             | multiquery_retriever
         )
