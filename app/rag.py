@@ -213,7 +213,7 @@ class RetrievalAugmentedGenerator:
                     "system",
                     "Rewrite the user's query into at most 8 important words."
                     "Keep the core meaning. Remove filler words."
-                    "Return ONLY the shortened query."
+                    "Return ONLY the shortened query.",
                 ),
                 ("human", "{query}"),
             ]
