@@ -62,7 +62,7 @@ export default function QueryInput({
 
 	return (
 		<div
-			className={`flex flex-nowrap flex-col w-[90vw] max-w-4xl max-h-[30vh] overflow-y-auto hide-scrollbar mx-auto bg-background px-4 py-2 ring-2 ${
+			className={`flex flex-nowrap flex-col w-full max-w-4xl max-h-[30vh] overflow-y-auto hide-scrollbar mx-auto bg-background px-4 py-2 ring-2 ${
 				loading || disabled
 					? "ring-muted"
 					: "ring-primary/50 focus-within:ring-blue-500"
