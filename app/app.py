@@ -185,7 +185,7 @@ async def index() -> FileResponse:
     return FileResponse(f"{DIST_DIR}/index.html")
 
 
-@app.post("/rewrite", response_model=ShortenQueryModel)
+@app.post("/rewriteQuery", response_model=ShortenQueryModel)
 async def rewrite_query(payload: AskRequestModel) -> JSONResponse:
     """Endpoint to shorten query to name the chat."""
     return ShortenQueryModel(query=await rag.shorten_query(payload.query))
