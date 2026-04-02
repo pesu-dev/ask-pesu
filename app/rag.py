@@ -177,7 +177,6 @@ class RetrievalAugmentedGenerator:
         thinking_done = False
         pending = ""
         token_count = 0
-        f = open("data.txt", "a+")
 
         try:
             async for chunk in rag_chain.astream(
@@ -187,7 +186,6 @@ class RetrievalAugmentedGenerator:
                     "chat_history": chat_history,
                 }
             ):
-                f.write(chunk)
                 token_count += 1
 
                 if not thinking:
@@ -200,11 +198,29 @@ class RetrievalAugmentedGenerator:
 
             if pending:
                 yield json.dumps(self._flush_pending(pending, thinking_done)) + "\n"
-
             logging.info(f"Stream complete. Total chunks: {token_count}")
-
         except Exception as e:
             logging.error(f"Error in generate(): {str(e)}", exc_info=True)
             yield json.dumps({"type": "error", "content": str(e)}) + "\n"
 
         yield json.dumps({"type": "done"}) + "\n"
+
+    async def shorten_query(self, query: str) -> str:
+        """Shorten a query to max 8 words."""
+        prompt = ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    "Rewrite the user's query into at most 8 important words."
+                    "Keep the core meaning. Remove filler words."
+                    "Return ONLY the shortened query."
+                ),
+                ("human", "{query}"),
+            ]
+        )
+
+        chain = prompt | self.llm_primary | StrOutputParser()
+
+        result = await chain.ainvoke({"query": query})
+        print(result)
+        return " ".join(result.split()[:8])
