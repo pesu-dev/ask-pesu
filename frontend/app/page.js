@@ -9,25 +9,33 @@ import { toast } from "sonner"
 import useQuota from "@/hooks/useQuota"
 import PendingResponse from "@/components/customUi/thinkinganimation"
 import useServiceStatus from "@/hooks/useAvail"
+import Sidebar from "@/components/customUi/sideBar"
 
 export default function Home() {
 	const [query, setQuery] = useState("")
-	const [history, setHistory] = useState([])
+	const [sessions, setSessions] = useState([])
+	const [currentSessionId, setCurrentSessionId] = useState(null)
 	const [loading, setLoading] = useState(false)
 	const [modelChoice, setModelChoice] = useState("thinking")
-	const [isFirstQuery, setIsFirstQuery] = useState(true)
+
+	const currentSession = sessions.find((s) => s.id === currentSessionId)
+	const history = currentSession?.history || []
+	const isFirstQuery = history.length === 0
 
 	const chatEndRef = useRef(null)
 
-	// Load history from localStorage on component mount
+	// Load history from localStorage
 	useEffect(() => {
 		try {
-			const savedHistory = localStorage.getItem("chatHistory")
-			if (savedHistory) {
-				const parsedHistory = JSON.parse(savedHistory)
-				if (Array.isArray(parsedHistory) && parsedHistory.length > 0) {
-					setHistory(parsedHistory)
-					setIsFirstQuery(false)
+			const savedSessions = localStorage.getItem("chatSessions")
+			if (savedSessions) {
+				const parsedSessions = JSON.parse(savedSessions)
+				if (
+					Array.isArray(parsedSessions) &&
+					parsedSessions.length > 0
+				) {
+					setSessions(parsedSessions)
+					setCurrentSessionId(parsedSessions[0].id)
 				}
 			}
 		} catch (error) {
@@ -39,22 +47,24 @@ export default function Home() {
 		}
 	}, [])
 
-	// Save history to localStorage whenever it changes
+	// Save history to localStorage
 	useEffect(() => {
-		// Don't save an empty history if it's the initial state
-		if (history.length === 0 && isFirstQuery) {
+		if (sessions.length === 0) {
 			return
 		}
 		try {
-			const filteredHistory = history.map(
-				({ isStreaming, hasReceivedBytes, ...rest }) => rest
-			)
-			localStorage.setItem("chatHistory", JSON.stringify(filteredHistory))
+			const sessionsToSave = sessions.map((session) => ({
+				...session,
+				history: session.history.map(
+					({ isStreaming, hasReceivedBytes, ...rest }) => rest
+				),
+			}))
+			localStorage.setItem("chatSessions", JSON.stringify(sessionsToSave))
 		} catch (error) {
 			console.error("Failed to save chat history to localStorage", error)
 			toast.error("Could not save your chat history.")
 		}
-	}, [history, isFirstQuery])
+	}, [sessions])
 
 	const {
 		refreshQuota,
@@ -91,6 +101,29 @@ export default function Home() {
 		serviceStatus.message,
 	])
 
+	const handleNewChat = useCallback(() => {
+		setCurrentSessionId(null)
+	}, [])
+
+	const handleSelectChat = useCallback((id) => {
+		setCurrentSessionId(id)
+	}, [])
+
+	const handleDeleteChat = useCallback(
+		(id) => {
+			setSessions((prev) => {
+				const filtered = prev.filter((s) => s.id !== id)
+				if (currentSessionId === id) {
+					setCurrentSessionId(
+						filtered.length > 0 ? filtered[0].id : null
+					)
+				}
+				return filtered
+			})
+		},
+		[currentSessionId]
+	)
+
 	const handleEditQuery = useCallback((editedQuery) => {
 		setQuery(editedQuery)
 	}, [])
@@ -100,33 +133,67 @@ export default function Home() {
 			setLoading(true)
 
 			const rowId = crypto.randomUUID()
+			let targetSessionId = currentSessionId
 
-			setHistory((prev) => [
-				...prev,
-				{
-					id: rowId,
-					query: queryText,
-					answer: "",
-					steps: "",
-					isStreaming: true,
-					hasReceivedBytes: false,
-					isDone: false,
-					wasThinkingMode: thinkingFlag,
-				},
-			])
+			if (!targetSessionId) {
+				targetSessionId = crypto.randomUUID()
+				setCurrentSessionId(targetSessionId)
+				setSessions((prev) => [
+					{
+						id: targetSessionId,
+						title:
+							queryText.substring(0, 30) +
+							(queryText.length > 30 ? "..." : ""),
+						history: [],
+					},
+					...prev,
+				])
+			}
 
-			const updateRow = (updater) => {
-				setHistory((prev) =>
-					prev.map((row) => (row.id === rowId ? updater(row) : row))
+			const newRow = {
+				id: rowId,
+				query: queryText,
+				answer: "",
+				steps: "",
+				isStreaming: true,
+				hasReceivedBytes: false,
+				isDone: false,
+				wasThinkingMode: thinkingFlag,
+			}
+
+			const updateSessionHistory = (updater) => {
+				setSessions((prev) =>
+					prev.map((session) => {
+						if (session.id !== targetSessionId) return session
+
+						const rowExists = session.history.some(
+							(r) => r.id === rowId
+						)
+						const newHistory = rowExists
+							? session.history.map((row) =>
+									row.id === rowId ? updater(row) : row
+								)
+							: [...session.history, updater(newRow)]
+
+						return { ...session, history: newHistory }
+					})
 				)
 			}
 
-			const result = await Query(queryText, thinkingFlag, history, {
+			updateSessionHistory((r) => r)
+
+			const activeHistory =
+				sessions.find((s) => s.id === targetSessionId)?.history || []
+
+			const result = await Query(queryText, thinkingFlag, activeHistory, {
 				onFirstByte: () => {
-					updateRow((row) => ({ ...row, hasReceivedBytes: true }))
+					updateSessionHistory((row) => ({
+						...row,
+						hasReceivedBytes: true,
+					}))
 				},
 				onToken: (token) => {
-					updateRow((row) => ({
+					updateSessionHistory((row) => ({
 						...row,
 						hasReceivedBytes: true,
 						answer: (row.answer || "") + token,
@@ -137,14 +204,14 @@ export default function Home() {
 					})
 				},
 				onStep: (step) => {
-					updateRow((row) => ({
+					updateSessionHistory((row) => ({
 						...row,
 						hasReceivedBytes: true,
 						steps: (row.steps || "") + step,
 					}))
 				},
 				onDone: () => {
-					updateRow((row) => ({
+					updateSessionHistory((row) => ({
 						...row,
 						isStreaming: false,
 						isDone: true,
@@ -155,7 +222,7 @@ export default function Home() {
 
 			if (!result?.status) {
 				toast.error(result?.message || "Request failed")
-				updateRow((row) => ({
+				updateSessionHistory((row) => ({
 					...row,
 					isStreaming: false,
 					isDone: true,
@@ -167,7 +234,7 @@ export default function Home() {
 				setLoading(false)
 			}
 		},
-		[history, refreshQuota, serviceStatus]
+		[currentSessionId, sessions, refreshQuota, serviceStatus]
 	)
 
 	const handleThinkingMode = useCallback(
@@ -205,12 +272,9 @@ export default function Home() {
 			return
 		}
 
-		setIsFirstQuery(false)
-
 		const currentQuery = query
 		setQuery("")
 
-		// Thinking mode by default
 		const useThinkingMode =
 			modelChoice === "thinking" && isThinkingAvailable
 
@@ -236,76 +300,87 @@ export default function Home() {
 	}, [serviceStatus, getTimeRemaining])
 
 	return (
-		<div className="bg-background min-h-screen flex flex-col">
-			<div
-				className={`w-full max-w-5xl mx-auto px-4 py-6 transition-opacity duration-500 ${
-					isFirstQuery
-						? "opacity-0 pointer-events-none"
-						: "opacity-100"
-				}`}
-			>
-				{history.map((row, i) => (
-					<div key={i} className="mb-6">
-						<UserPrompt
-							query={row.query}
-							handleEditQuery={handleEditQuery}
-						/>
+		<div className="flex h-screen bg-background overflow-hidden">
+			<Sidebar
+				chatSessions={sessions}
+				currentSessionId={currentSessionId}
+				onSelectChat={handleSelectChat}
+				onNewChat={handleNewChat}
+				onDeleteChat={handleDeleteChat}
+			/>
 
-						{row.isStreaming && !row.hasReceivedBytes && (
-							<div className="flex justify-start mt-3">
-								<PendingResponse />
-							</div>
-						)}
+			<div className="flex-1 relative flex flex-col overflow-y-auto">
+				<div
+					className={`w-full max-w-5xl mx-auto px-4 py-6 transition-opacity duration-500 ${
+						isFirstQuery
+							? "opacity-0 pointer-events-none"
+							: "opacity-100"
+					}`}
+				>
+					{history.map((row, i) => (
+						<div key={i} className="mb-6">
+							<UserPrompt
+								query={row.query}
+								handleEditQuery={handleEditQuery}
+							/>
 
-						<LlmResponse
-							answer={row.answer}
-							steps={row.steps}
-							isStreaming={row.isStreaming}
-							hasReceivedBytes={row.hasReceivedBytes}
-							handleThinkMode={() =>
-								handleThinkingMode(row.query)
-							}
-							showThinkMoreOption={Boolean(
-								row.isDone && isThinkingAvailable
+							{row.isStreaming && !row.hasReceivedBytes && (
+								<div className="flex justify-start mt-3">
+									<PendingResponse />
+								</div>
 							)}
-							wasThinkingMode={row.wasThinkingMode}
-						/>
-					</div>
-				))}
-				<div ref={chatEndRef} className="mb-[20vh]" />
-			</div>
 
-			{!serviceStatus.isAvailable && (
-				<div className="w-full bg-destructive/10 border-b border-destructive/20 px-4 py-3">
-					<p className="text-center text-sm text-destructive font-medium">
-						⚠️ {serviceStatus.message}
-					</p>
+							<LlmResponse
+								answer={row.answer}
+								steps={row.steps}
+								isStreaming={row.isStreaming}
+								hasReceivedBytes={row.hasReceivedBytes}
+								handleThinkMode={() =>
+									handleThinkingMode(row.query)
+								}
+								showThinkMoreOption={Boolean(
+									row.isDone && isThinkingAvailable
+								)}
+								wasThinkingMode={row.wasThinkingMode}
+							/>
+						</div>
+					))}
+					<div ref={chatEndRef} className="mb-[20vh]" />
 				</div>
-			)}
 
-			<div
-				className="fixed left-0 right-0 top-1/2 transition-transform duration-700 ease-in-out"
-				style={{
-					transform: isFirstQuery
-						? "translateY(-50%)"
-						: "translateY(calc(50vh - 120px))",
-				}}
-			>
-				{isFirstQuery && (
-					<h1 className="text-6xl text-blue-600 font-bold text-center mb-8 transition-opacity duration-700">
-						AskPESU
-					</h1>
+				{!serviceStatus.isAvailable && (
+					<div className="absolute top-0 left-0 right-0 z-10 w-full bg-destructive/10 border-b border-destructive/20 px-4 py-3">
+						<p className="text-center text-sm text-destructive font-medium">
+							⚠️ {serviceStatus.message}
+						</p>
+					</div>
 				)}
-				<QueryInput
-					query={query}
-					setQuery={setQuery}
-					loading={loading}
-					handleQuery={handleQuery}
-					modelChoice={modelChoice}
-					setModelChoice={setModelChoice}
-					disabled={!serviceStatus.isAvailable}
-					disabledMessage={getDisabledMessage()}
-				/>
+
+				<div
+					className="fixed left-64 right-0 px-4 flex flex-col items-center transition-transform duration-700 ease-in-out z-10"
+					style={{
+						top: "50%",
+						transform: isFirstQuery
+							? "translateY(-50%)"
+							: "translateY(calc(50vh - 120px))",
+					}}
+				>
+					{isFirstQuery && (
+						<h1 className="text-6xl text-blue-600 font-bold text-center mb-8 transition-opacity duration-700">
+							AskPESU
+						</h1>
+					)}
+					<QueryInput
+						query={query}
+						setQuery={setQuery}
+						loading={loading}
+						handleQuery={handleQuery}
+						modelChoice={modelChoice}
+						setModelChoice={setModelChoice}
+						disabled={!serviceStatus.isAvailable}
+						disabledMessage={getDisabledMessage()}
+					/>
+				</div>
 			</div>
 		</div>
 	)

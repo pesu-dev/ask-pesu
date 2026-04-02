@@ -20,7 +20,6 @@ export default function LlmResponse({
 	const [showThinking, setShowThinking] = useState(false)
 	const [displayedText, setDisplayedText] = useState("")
 
-	// Refs to handle our dynamic animation frame queue
 	const textToDisplayRef = useRef("")
 	const currentDisplayedRef = useRef("")
 	const rafRef = useRef(null)
@@ -28,7 +27,6 @@ export default function LlmResponse({
 	useEffect(() => {
 		textToDisplayRef.current = answer || ""
 
-		// If we are done streaming, snap to the full text and stop the animation loop
 		if (!isStreaming) {
 			setDisplayedText(answer || "")
 			currentDisplayedRef.current = answer || ""
@@ -42,9 +40,6 @@ export default function LlmResponse({
 
 			if (current.length < target.length) {
 				const diff = target.length - current.length
-				// The Magic: dynamically adjust typing speed based on the backlog.
-				// It catches up by a fraction of the difference per frame, minimum 1 character.
-				// This creates an organic acceleration/deceleration effect.
 				const charsToAdd = Math.max(3, Math.ceil(diff / 30))
 
 				currentDisplayedRef.current = target.slice(
@@ -88,32 +83,32 @@ export default function LlmResponse({
 		</a>
 	)
 
-	const ListItemRenderer = ({ children }) => {
-		const textContent = React.Children.toArray(children)
-			.map((c) => (typeof c === "string" ? c : ""))
-			.join("")
-			.trim()
-		if (isValidUrl(textContent)) {
-			return (
-				<li>
-					<a
-						href={textContent}
-						target="_blank"
-						rel="noopener noreferrer"
-						className="text-blue-500 hover:text-blue-700 underline"
-					>
-						{textContent}
-					</a>
-				</li>
-			)
-		}
-		return <li>{children}</li>
-	}
+	// const ListItemRenderer = ({ children }) => {
+	// 	const textContent = React.Children.toArray(children)
+	// 		.map((c) => (typeof c === "string" ? c : ""))
+	// 		.join("")
+	// 		.trim()
+	// 	if (isValidUrl(textContent)) {
+	// 		return (
+	// 			<li>
+	// 				<a
+	// 					href={textContent}
+	// 					target="_blank"
+	// 					rel="noopener noreferrer"
+	// 					className="text-blue-500 hover:text-blue-700 underline"
+	// 				>
+	// 					{textContent}
+	// 				</a>
+	// 			</li>
+	// 		)
+	// 	}
+	// 	return <li>{children}</li>
+	// }
 
 	const markdownComponents = useMemo(
 		() => ({
 			a: LinkRenderer,
-			// Smooth fade-in for list items
+			// Smooth fade-in animations
 			li: ({ children }) => {
 				const textContent = React.Children.toArray(children)
 					.map((c) => (typeof c === "string" ? c : ""))
@@ -146,7 +141,7 @@ export default function LlmResponse({
 					</motion.li>
 				)
 			},
-			// Smooth fade and slide up for new paragraphs
+			// Smooth fade
 			p: ({ children }) => (
 				<motion.p
 					initial={{ opacity: 0, y: 4 }}
@@ -172,7 +167,7 @@ export default function LlmResponse({
 					{children}
 				</motion.h3>
 			),
-			// Fade in code blocks so they don't aggressively snap onto the screen
+			// Fade in code blocks
 			pre: ({ children }) => (
 				<motion.pre
 					initial={{ opacity: 0, scale: 0.98 }}
