@@ -39,3 +39,16 @@ class AskRequestModel(BaseModel):
             ]
         },
     )
+
+
+class ShortenQueryModel(BaseModel):
+    """Model to shorten the query."""
+
+    model_config = ConfigDict(strict=True)
+
+    query: str = Field(
+        ...,
+        title="Query",
+        description="User's input query for the chatbot.",
+        json_schema_extra={"example": "What is bootstrap?"},
+    )

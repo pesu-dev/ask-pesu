@@ -20,7 +20,7 @@ from fastapi.staticfiles import StaticFiles
 from google.api_core.exceptions import ResourceExhausted
 
 from app.docs import ask_docs, health_docs, index_docs, quota_docs
-from app.models import AskRequestModel, AskResponseModel, HealthResponseModel, QuotaResponseModel
+from app.models import AskRequestModel, AskResponseModel, HealthResponseModel, QuotaResponseModel, ShortenQueryModel
 from app.quota import QuotaState
 from app.rag import RetrievalAugmentedGenerator
 
@@ -183,6 +183,12 @@ async def unhandled_exception_handler(_request: Request, _exc: Exception) -> JSO
 async def index() -> FileResponse:
     """Serve the main entrypoint (index.html) from the built static files."""
     return FileResponse(f"{DIST_DIR}/index.html")
+
+
+@app.post("/rewriteQuery", response_model=ShortenQueryModel)
+async def rewrite_query(payload: AskRequestModel) -> JSONResponse:
+    """Endpoint to shorten query to name the chat."""
+    return ShortenQueryModel(query=await rag.shorten_query(payload.query))
 
 
 @app.post(
