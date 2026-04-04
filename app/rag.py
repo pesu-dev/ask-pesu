@@ -1,41 +1,42 @@
 """Retrieval-Augmented Generation (RAG) pipeline implementation using LangChain and Qdrant."""
 
+import json
+import logging
 import os
+from collections.abc import AsyncGenerator
 
 import yaml
 from dotenv import load_dotenv
-from langchain.chat_models import init_chat_model
-from langchain.retrievers.multi_query import MultiQueryRetriever
+from huggingface_hub import InferenceClient
+from langchain_classic.retrievers import MultiQueryRetriever
 from langchain_core.documents.base import Document
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnablePassthrough, RunnableSerializable
+from langchain_huggingface import ChatHuggingFace, HuggingFaceEndpoint
 from langchain_huggingface.embeddings import HuggingFaceEmbeddings
 from langchain_qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
 
 load_dotenv()
 
+THINK_END = "</think>"
+
 
 class RetrievalAugmentedGenerator:
     """A class that encapsulates the Retrieval-Augmented Generation (RAG) pipeline."""
 
     def __init__(self, config_path: str = "conf/config.yaml") -> None:
-        """Initialize the RAG pipeline with configuration from a YAML file.
+        """Initialize the RAG pipeline components."""
+        InferenceClient(api_key=os.environ["HF_TOKEN"])
 
-        Args:
-            config_path (str): Path to the configuration YAML file.
-        """
-        # Load configuration from YAML file
         with open(config_path) as file:
             self.config = yaml.safe_load(file)
 
-        # Initialize embeddings
         self.embedding = HuggingFaceEmbeddings(model_name=self.config["rag"]["embedding"])
 
-        # Initialize Qdrant client and vector store
         self.qdrant_client = QdrantClient(url=os.getenv("QDRANT_URL"), api_key=os.getenv("QDRANT_API_KEY"))
         self.vector_store = QdrantVectorStore(
             collection_name=self.config["rag"]["qdrant_collection"],
@@ -43,74 +44,62 @@ class RetrievalAugmentedGenerator:
             client=self.qdrant_client,
         )
 
-        # Initialize LLM
-        self.llm_primary = init_chat_model(
-            model=self.config["rag"]["llm"]["primary"],
-            model_provider="google_genai",
-            google_api_key=os.getenv("GEMINI_API_KEY"),
+        # Primary LLM — used for normal mode AND question rewriting in all modes
+        self.llm_primary = ChatHuggingFace(
+            llm=HuggingFaceEndpoint(
+                repo_id=self.config["rag"]["llm"]["primary"]["repo_id"],
+                provider=self.config["rag"]["llm"]["primary"]["provider"],
+                huggingfacehub_api_token=os.getenv("HF_TOKEN"),
+                temperature=self.config["rag"]["llm"]["primary"]["temperature"],
+                max_new_tokens=self.config["rag"]["llm"]["primary"]["max_new_tokens"],
+                timeout=self.config["rag"]["llm"]["primary"]["timeout"],
+                streaming=True,
+            ),
         )
-        # Initialize secondary LLM if specified
-        self.llm_thinking = None
-        if self.config["rag"]["llm"].get("thinking"):
-            self.llm_thinking = init_chat_model(
-                model=self.config["rag"]["llm"]["thinking"],
-                model_provider="google_genai",
-                google_api_key=os.getenv("GEMINI_API_KEY"),
-            )
 
-        # Initialize the prompt template
+        # Thinking LLM — ONLY used for final answer generation in thinking mode
+        self.llm_thinking = ChatHuggingFace(
+            llm=HuggingFaceEndpoint(
+                repo_id=self.config["rag"]["llm"]["thinking"]["repo_id"],
+                provider=self.config["rag"]["llm"]["thinking"]["provider"],
+                huggingfacehub_api_token=os.getenv("HF_TOKEN"),
+                temperature=self.config["rag"]["llm"]["thinking"]["temperature"],
+                max_new_tokens=self.config["rag"]["llm"]["thinking"]["max_new_tokens"],
+                timeout=self.config["rag"]["llm"]["thinking"]["timeout"],
+                streaming=True,
+            )
+        )
+
         self.prompt = ChatPromptTemplate.from_messages(
             [
-                ("system", self.config["rag"]["system_prompt"]),
-                ("human", "Question: {question}\nContext: {context}\nAnswer:"),
+                ("system", self.config["rag"]["prompts"]["system_prompt"]),
+                ("human", self.config["rag"]["prompts"]["answer_prompt"]),
             ]
         )
 
         self.frame_qn_prompt = ChatPromptTemplate.from_messages(
             [
-                (
-                    "system",
-                    "You are a question rewriting assistant. Your job is to rewrite the user's "
-                    "question into an independent, self-contained question.\n\n"
-                    "Rewrite rules:\n"
-                    "1.ONLY use the chat history if the user's question is ambiguous or refers to previous context "
-                    "(e.g., pronouns like 'he', 'she', 'it', 'they', 'that').\n"
-                    "2.If the question is clear on its own, return it EXACTLY as it is.\n"
-                    "3.When resolving a follow-up question, ALWAYS prioritize the most recent topic in the chat history"
-                    "Do NOT pull context from older, unrelated parts of the conversation.\n"
-                    "4.If the question could refer to multiple topics, choose the MOST RECENT plausible topic.\n"
-                    "5.Do NOT invent or assume connections between unrelated topics.\n"
-                    "6.Do NOT answer the question — only rewrite it.\n\n"
-                    "Chat History:\n{chat_history}",
-                ),
+                ("system", self.config["rag"]["prompts"]["rewrite_prompt"]),
                 ("human", "{input}"),
             ]
         )
 
-        # Build the RAG chains
         self.retriever = self.vector_store.as_retriever(search_kwargs=self.config["rag"]["search_kwargs"])
         self.rag_chain_primary = self._build_chain(self.llm_primary)
         self.rag_chain_thinking = self._build_chain(self.llm_thinking) if self.llm_thinking else None
 
     def _build_chain(self, llm: BaseChatModel) -> RunnableSerializable[str, str]:
-        """Build the RAG chain using the specified LLM.
-
-        Args:
-            llm: The language model to use in the RAG chain.
-
-        Returns:
-            RunnableSerializable: The constructed RAG chain.
-        """
-        # Initialize multiquery retriever
+        # Always use llm_primary for retrieval steps — never burn thinking-model
+        # tokens on question rewriting or multi-query expansion.
         multiquery_retriever = MultiQueryRetriever.from_llm(
             retriever=self.retriever,
-            llm=llm,
+            llm=self.llm_primary,  # <-- always primary, not `llm`
         )
 
         history_aware_retriever = (
             {"input": RunnablePassthrough(), "chat_history": RunnablePassthrough()}
             | self.frame_qn_prompt
-            | llm
+            | self.llm_primary
             | StrOutputParser()
             | multiquery_retriever
         )
@@ -127,24 +116,55 @@ class RetrievalAugmentedGenerator:
 
     @staticmethod
     def format_docs(docs: list[Document]) -> str:
-        """Format the retrieved documents into a single string."""
+        """Format retrieved documents into a string for prompt input."""
         return "\n\n".join(f"{doc.metadata['url']}\n{doc.page_content}" for doc in docs)
 
-    async def generate(self, query: str, thinking: bool, history: list) -> str:
-        """Generate a response for the given query using the RAG chain.
-
-        Args:
-            query (str): The input query.
-            thinking (bool): Flag to indicate if the model should 'think' before answering.
-            history (list): The entire chat history until the current query
+    def _process_thinking_chunk(self, chunk: str, pending: str, thinking_done: bool) -> tuple[str, bool, list[dict]]:
+        """Process a single chunk in thinking mode.
 
         Returns:
-            str: The generated response.
+            (updated_pending, updated_thinking_done, list of events to emit)
         """
-        chat_history = []
+        events = []
 
+        if thinking_done:
+            events.append({"type": "token", "content": chunk})
+            return pending, thinking_done, events
+
+        pending += chunk
+
+        if THINK_END in pending:
+            idx = pending.index(THINK_END)
+            step_part = pending[:idx]
+            token_part = pending[idx + len(THINK_END) :]
+            pending = ""
+            thinking_done = True
+
+            if step_part:
+                events.append({"type": "step", "content": step_part})
+            if token_part:
+                events.append({"type": "token", "content": token_part})
+        else:
+            safe_end = max(0, len(pending) - len(THINK_END) + 1)
+            if safe_end > 0:
+                events.append({"type": "step", "content": pending[:safe_end]})
+                pending = pending[safe_end:]
+
+        return pending, thinking_done, events
+
+    def _flush_pending(self, pending: str, thinking_done: bool) -> dict:
+        """Flush the remaining buffer after the stream ends."""
+        if not thinking_done:
+            logging.warning("</think> never detected in thinking mode — emitting buffer as answer.")
+        return {"type": "token", "content": pending}
+
+    async def generate(self, query: str, thinking: bool, history: list) -> AsyncGenerator[str, None]:
+        """Generate an answer to the query using the RAG pipeline."""
+        logging.info(f"Received query: {query} with thinking={thinking} and history of length {len(history)}")
+
+        chat_history = []
         for convo in history:
-            if query != convo.query:  # Prevents repeating the same question when using the thinking model.
+            if query != convo.query:
                 chat_history.append(HumanMessage(convo.query))
                 chat_history.append(AIMessage(convo.answer))
 
@@ -152,4 +172,55 @@ class RetrievalAugmentedGenerator:
             self.rag_chain_thinking if thinking and self.rag_chain_thinking is not None else self.rag_chain_primary
         )
 
-        return await rag_chain.ainvoke({"input": query, "question": query, "chat_history": chat_history})
+        logging.info(f"Using {'thinking' if thinking else 'primary'} LLM for query: {query}")
+
+        thinking_done = False
+        pending = ""
+        token_count = 0
+
+        try:
+            async for chunk in rag_chain.astream(
+                {
+                    "input": query,
+                    "question": query,
+                    "chat_history": chat_history,
+                }
+            ):
+                token_count += 1
+
+                if not thinking:
+                    yield json.dumps({"type": "token", "content": chunk}) + "\n"
+                    continue
+
+                pending, thinking_done, events = self._process_thinking_chunk(chunk, pending, thinking_done)
+                for event in events:
+                    yield json.dumps(event) + "\n"
+
+            if pending:
+                yield json.dumps(self._flush_pending(pending, thinking_done)) + "\n"
+            logging.info(f"Stream complete. Total chunks: {token_count}")
+        except Exception as e:
+            logging.error(f"Error in generate(): {str(e)}", exc_info=True)
+            yield json.dumps({"type": "error", "content": str(e)}) + "\n"
+
+        yield json.dumps({"type": "done"}) + "\n"
+
+    async def shorten_query(self, query: str) -> str:
+        """Shorten a query to max 8 words."""
+        prompt = ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    "Rewrite the user's query into at most 8 important words."
+                    "Keep the core meaning. Remove filler words."
+                    "Return ONLY the shortened query.",
+                ),
+                ("human", "{query}"),
+            ]
+        )
+
+        chain = prompt | self.llm_primary | StrOutputParser()
+
+        result = await chain.ainvoke({"query": query})
+        print(result)
+        return " ".join(result.split()[:8])

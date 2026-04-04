@@ -1,25 +1,30 @@
 """FastAPI application for AskPESU backend APIs."""
 
 import argparse
+import asyncio
 import datetime
+import json
 import logging
-import time
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 import pytz
 import torch
 import uvicorn
+from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from google.api_core.exceptions import ResourceExhausted
 
 from app.docs import ask_docs, health_docs, index_docs, quota_docs
-from app.models import AskRequestModel, AskResponseModel, HealthResponseModel, QuotaResponseModel
+from app.models import AskRequestModel, AskResponseModel, HealthResponseModel, QuotaResponseModel, ShortenQueryModel
 from app.quota import QuotaState
 from app.rag import RetrievalAugmentedGenerator
+
+load_dotenv()
 
 
 @asynccontextmanager
@@ -74,6 +79,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 # Initialize globals
 DIST_DIR = "frontend/out"  # Directory for static files (built from frontend)
 IST = pytz.timezone("Asia/Kolkata")  # Indian Standard Time timezone
@@ -86,6 +92,47 @@ PRIMARY_STATE = QuotaState(name="primary", cooldown_hours=24)
 
 # Mount static files
 app.mount("/static", StaticFiles(directory=DIST_DIR), name="static")
+
+
+async def test_stream() -> AsyncIterator[str]:
+    """Simulate a streaming response for the /ask endpoint."""
+    # Step 1
+    yield json.dumps({"type": "step", "content": "Searching documents...\n"}) + "\n"
+    await asyncio.sleep(0.02)
+
+    # Step 2
+    yield json.dumps({"type": "step", "content": "Ranking sources...\n"}) + "\n"
+
+    await asyncio.sleep(0.02)
+    # Step 3
+    yield json.dumps({"type": "step", "content": "Generating answer...\n"}) + "\n"
+    await asyncio.sleep(0.02)
+
+    tokens = [
+        "### How SGPA is Calculated\n\n",
+        "SGPA is the **weighted average** of the grades obtained in all courses during a semester, ",
+        "where the weights are the **credits** assigned to each course.\n\n",
+        "#### Formula\n\n",
+        "$$\\text{SGPA} = ",
+        "\\frac{\\sum (\\text{Grade Points} \\times \\text{Credits})}{\\text{Total Credits}}$$\n\n",
+        "#### Step-by-step\n\n",
+        "1. **Determine the final grade** for each course.\n",
+        "2. **Convert the grade into grade points**.\n",
+        "3. **Multiply** the grade points by the course credits.\n",
+        "4. **Add** the products for all courses.\n",
+        "5. **Divide** by the total credits in the semester.\n\n",
+        "#### Example\n\n",
+        "- Course 1: 4 credits, grade **A** = 9 points\n",
+        "- Course 2: 2 credits, grade **S** = 10 points\n\n",
+        "So the SGPA is **(4 x 9 + 2 x 10) / 6 = 9.33**.\n\n",
+        "**Sources**\n\n",
+        "- https://www.reddit.com/r/PESU/\n",
+    ]
+    for t in tokens:
+        yield json.dumps({"type": "token", "content": t}) + "\n"
+        await asyncio.sleep(0.1)
+
+    yield json.dumps({"type": "done"}) + "\n"
 
 
 def get_quota_status() -> dict:
@@ -138,6 +185,12 @@ async def index() -> FileResponse:
     return FileResponse(f"{DIST_DIR}/index.html")
 
 
+@app.post("/rewriteQuery", response_model=ShortenQueryModel)
+async def rewrite_query(payload: AskRequestModel) -> JSONResponse:
+    """Endpoint to shorten query to name the chat."""
+    return ShortenQueryModel(query=await rag.shorten_query(payload.query))
+
+
 @app.post(
     "/ask",
     response_model=AskResponseModel,
@@ -146,7 +199,7 @@ async def index() -> FileResponse:
     responses=ask_docs.response_examples,
     tags=["Generation"],
 )
-async def ask(payload: AskRequestModel) -> JSONResponse:
+async def ask(payload: AskRequestModel) -> StreamingResponse:
     """Endpoint to handle question-answering requests.
 
     Automatically manages LLM quota with cooldowns.
@@ -155,7 +208,7 @@ async def ask(payload: AskRequestModel) -> JSONResponse:
     global THINKING_STATE, PRIMARY_STATE
     logging.debug(f"Received /ask question: {payload.query}")
     logging.debug(f"Thinking mode: {payload.thinking}")
-    current_time = datetime.datetime.now(IST)
+    # current_time = datetime.datetime.now(IST)
 
     # Re-enable thinking mode and primary LLM if cooldown period has expired
     THINKING_STATE.refresh()
@@ -174,24 +227,13 @@ async def ask(payload: AskRequestModel) -> JSONResponse:
         logging.warning("Primary LLM is currently unavailable due to quota limits.")
         raise ResourceExhausted("Primary LLM is temporarily unavailable due to quota limits. Please try again later.")
 
-    # Attempt to generate the answer
-    start_time = time.perf_counter()
-    try:
-        answer = await rag.generate(query=payload.query, thinking=payload.thinking, history=payload.history)
-    except ResourceExhausted:
-        llm_state = THINKING_STATE if payload.thinking else PRIMARY_STATE
-        llm_state.disable()
-        raise
-
-    latency = round(time.perf_counter() - start_time, 3)
-    response = AskResponseModel(
-        status=True,
-        message="Answer generated successfully.",
-        answer=answer,
-        timestamp=current_time,
-        latency=latency,
+    if os.getenv("env") == "test":
+        return StreamingResponse(test_stream(), media_type="text/plain")
+    return StreamingResponse(
+        rag.generate(query=payload.query, thinking=payload.thinking, history=payload.history),
+        media_type="text/plain",
+        status_code=200,
     )
-    return JSONResponse(status_code=200, content=response.model_dump(mode="json", exclude_none=True))
 
 
 @app.get(
