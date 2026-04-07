@@ -17,6 +17,8 @@ export default function Home() {
 	const [currentSessionId, setCurrentSessionId] = useState(null)
 	const [loading, setLoading] = useState(false)
 	const [modelChoice, setModelChoice] = useState("thinking")
+	const [hasLoaded, setHasLoaded] = useState(false)
+	const [isSidebarExpanded, setIsSidebarExpanded] = useState(false)
 
 	const currentSession = sessions.find((s) => s.id === currentSessionId)
 	const history = currentSession?.history || []
@@ -24,7 +26,6 @@ export default function Home() {
 
 	const chatEndRef = useRef(null)
 
-	// Load history from localStorage
 	useEffect(() => {
 		try {
 			const savedSessions = localStorage.getItem("chatSessions")
@@ -44,14 +45,16 @@ export default function Home() {
 				error
 			)
 			toast.error("Could not load your chat history.")
+		} finally {
+			setHasLoaded(true)
 		}
 	}, [])
 
-	// Save history to localStorage
 	useEffect(() => {
-		if (sessions.length === 0) {
+		if (!hasLoaded) {
 			return
 		}
+
 		try {
 			const sessionsToSave = sessions.map((session) => ({
 				...session,
@@ -64,7 +67,7 @@ export default function Home() {
 			console.error("Failed to save chat history to localStorage", error)
 			toast.error("Could not save your chat history.")
 		}
-	}, [sessions])
+	}, [sessions, hasLoaded])
 
 	const {
 		refreshQuota,
@@ -128,26 +131,80 @@ export default function Home() {
 		setQuery(editedQuery)
 	}, [])
 
+	const rewriteChatTitle = useCallback(async (sessionId, queryText) => {
+		try {
+			const response = await fetch(`/rewriteQuery`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					query: queryText,
+					thinking: false,
+					history: [],
+				}),
+			})
+
+			if (!response.ok) throw new Error("API response not ok")
+
+			const data = await response.json()
+			if (data && data.query) {
+				setSessions((prev) =>
+					prev.map((s) =>
+						s.id === sessionId
+							? {
+									...s,
+									title: data.query
+										.replace(/["*]/g, "")
+										.trim(),
+									isGeneratingTitle: false,
+								}
+							: s
+					)
+				)
+			} else {
+				throw new Error("No query string in response")
+			}
+		} catch (error) {
+			console.error("Failed to rewrite chat title:", error)
+			setSessions((prev) =>
+				prev.map((s) =>
+					s.id === sessionId
+						? {
+								...s,
+								title: "New Conversation",
+								isGeneratingTitle: false,
+							}
+						: s
+				)
+			)
+		}
+	}, [])
+
 	const runStreamedQuery = useCallback(
 		async (queryText, thinkingFlag) => {
 			setLoading(true)
 
 			const rowId = crypto.randomUUID()
 			let targetSessionId = currentSessionId
+			let isNewSession = false
 
 			if (!targetSessionId) {
 				targetSessionId = crypto.randomUUID()
 				setCurrentSessionId(targetSessionId)
+				isNewSession = true
+
 				setSessions((prev) => [
 					{
 						id: targetSessionId,
-						title:
-							queryText.substring(0, 30) +
-							(queryText.length > 30 ? "..." : ""),
+						title: "",
+						isGeneratingTitle: true,
 						history: [],
 					},
 					...prev,
 				])
+			}
+
+			if (isNewSession) {
+				rewriteChatTitle(targetSessionId, queryText)
 			}
 
 			const newRow = {
@@ -234,7 +291,13 @@ export default function Home() {
 				setLoading(false)
 			}
 		},
-		[currentSessionId, sessions, refreshQuota, serviceStatus]
+		[
+			currentSessionId,
+			sessions,
+			refreshQuota,
+			serviceStatus,
+			rewriteChatTitle,
+		]
 	)
 
 	const handleThinkingMode = useCallback(
@@ -307,6 +370,8 @@ export default function Home() {
 				onSelectChat={handleSelectChat}
 				onNewChat={handleNewChat}
 				onDeleteChat={handleDeleteChat}
+				isSidebarExpanded={isSidebarExpanded}
+				setIsSidebarExpanded={setIsSidebarExpanded}
 			/>
 
 			<div className="flex-1 relative flex flex-col overflow-y-auto">
@@ -357,7 +422,7 @@ export default function Home() {
 				)}
 
 				<div
-					className="fixed left-64 right-0 px-4 flex flex-col items-center transition-transform duration-700 ease-in-out z-10"
+					className={`fixed ${isSidebarExpanded ? "left-96" : "left-64"} right-0 px-4 flex flex-col items-center transition-all duration-300 ease-in-out z-10`}
 					style={{
 						top: "50%",
 						transform: isFirstQuery
