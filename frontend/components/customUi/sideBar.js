@@ -1,6 +1,13 @@
 "use client"
 
-import { MessageSquare, Plus, Trash2 } from "lucide-react"
+import {
+	MessageSquare,
+	Plus,
+	Trash2,
+	Loader2,
+	ChevronLeft,
+	ChevronRight,
+} from "lucide-react"
 import { Button } from "../ui/button"
 
 export default function Sidebar({
@@ -9,9 +16,13 @@ export default function Sidebar({
 	onSelectChat,
 	onNewChat,
 	onDeleteChat,
+	isSidebarExpanded,
+	setIsSidebarExpanded,
 }) {
 	return (
-		<div className="w-64 bg-muted/20 border-r border-border h-screen flex flex-col p-4">
+		<div
+			className={`${isSidebarExpanded ? "w-96" : "w-64"} shrink-0 transition-[width] duration-300 ease-in-out bg-muted/20 border-r border-border h-screen flex flex-col p-4`}
+		>
 			<Button
 				onClick={onNewChat}
 				className="w-full flex items-center justify-start gap-2 mb-6"
@@ -22,9 +33,17 @@ export default function Sidebar({
 			</Button>
 
 			<div className="flex-1 overflow-y-auto flex flex-col gap-2">
-				<h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-2">
-					Recent Chats
-				</h3>
+				<div className="flex items-center justify-between mb-2 px-2">
+					<h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+						Recent Chats
+					</h3>
+					<button
+						onClick={() => setIsSidebarExpanded(!isSidebarExpanded)}
+						className="p-1 hover:bg-muted/80 rounded-md text-muted-foreground transition-colors"
+					>
+						{isSidebarExpanded ? <ChevronLeft className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+					</button>
+				</div>
 
 				{chatSessions?.map((session) => (
 					<div
@@ -38,9 +57,13 @@ export default function Sidebar({
 					>
 						<div className="flex items-center gap-2 overflow-hidden">
 							<MessageSquare className="w-4 h-4 shrink-0" />
-							<span className="text-sm truncate">
-								{session.title || "New Conversation"}
-							</span>
+							{session.isGeneratingTitle ? (
+								<Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+							) : (
+								<span className="text-sm truncate">
+									{session.title || "New Conversation"}
+								</span>
+							)}
 						</div>
 						<button
 							onClick={(e) => {
