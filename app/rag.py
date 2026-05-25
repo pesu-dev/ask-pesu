@@ -4,12 +4,11 @@ import json
 import logging
 import os
 from collections.abc import AsyncGenerator
+from operator import itemgetter
 
 import yaml
 from dotenv import load_dotenv
 from huggingface_hub import InferenceClient
-from operator import itemgetter
-
 from langchain_classic.retrievers import MultiQueryRetriever
 from langchain_core.callbacks import CallbackManagerForRetrieverRun
 from langchain_core.documents.base import Document
@@ -42,7 +41,9 @@ class ScoredRetriever(BaseRetriever):
             doc.metadata["_score"] = score
         return [doc for doc, _ in results]
 
-    async def _aget_relevant_documents(self, query: str, *, run_manager: CallbackManagerForRetrieverRun) -> list[Document]:
+    async def _aget_relevant_documents(
+        self, query: str, *, run_manager: CallbackManagerForRetrieverRun
+    ) -> list[Document]:
         results = await self.vector_store.asimilarity_search_with_relevance_scores(query, **self.search_kwargs)
         for doc, score in results:
             doc.metadata["_score"] = score
@@ -117,6 +118,7 @@ class RetrievalAugmentedGenerator:
         if reranker_cfg.get("enabled", False):
             import torch
             from sentence_transformers import CrossEncoder
+
             self.cross_encoder = CrossEncoder(reranker_cfg["model"], activation_fct=torch.nn.Sigmoid())
             logging.info(f"Cross-encoder reranker loaded: {reranker_cfg['model']}")
         else:
@@ -200,7 +202,7 @@ class RetrievalAugmentedGenerator:
 
         # Strip the opening <think> tag if it appears at the start of the stream
         if pending.startswith(THINK_START):
-            pending = pending[len(THINK_START):]
+            pending = pending[len(THINK_START) :]
 
         if THINK_END in pending:
             idx = pending.index(THINK_END)
