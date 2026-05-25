@@ -16,8 +16,6 @@ interface SettingsDialogProps {
   onOpenChange: (open: boolean) => void;
   theme: Theme;
   onThemeChange: (theme: Theme) => void;
-  demoEnabled: boolean;
-  onDemoEnabledChange: (enabled: boolean) => void;
 }
 
 const themes: { value: Theme; label: string; icon: React.ElementType }[] = [
@@ -30,8 +28,6 @@ export function SettingsDialog({
   onOpenChange,
   theme,
   onThemeChange,
-  demoEnabled,
-  onDemoEnabledChange,
 }: SettingsDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -47,6 +43,7 @@ export function SettingsDialog({
                 <button
                   key={t.value}
                   onClick={() => onThemeChange(t.value)}
+                  title={`Switch to ${t.label} theme`}
                   className={cn(
                     "flex flex-1 flex-col items-center gap-2 rounded-xl border p-3 transition-all outline-none focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
                     theme === t.value
@@ -60,19 +57,7 @@ export function SettingsDialog({
               ))}
             </div>
           </div>
-
-          <div className="space-y-3">
-            <div className="flex items-start justify-between gap-4">
-              <div className="min-w-0">
-                <Label className="text-sm">Demo mode</Label>
-                <p className="mt-0.5 text-xs text-muted-foreground">
-                  Serve pre-generated answers for the four welcome suggestions
-                  instead of calling the backend. Useful when the FastAPI
-                  service is offline.
-                </p>
-              </div>
-              <Switch checked={demoEnabled} onCheckedChange={onDemoEnabledChange} />
-            </div>
+          <div className="space-y-4">
             <div className="flex items-center justify-between">
               <Label className="text-sm">Stream responses</Label>
               <Switch defaultChecked />
