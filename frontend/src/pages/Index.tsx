@@ -14,7 +14,6 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import { useTheme } from "@/hooks/use-theme";
 import { useSidebarState } from "@/hooks/use-sidebar-state";
 import { useHealth } from "@/hooks/use-health";
-import { useDemoMode } from "@/hooks/use-demo-mode";
 import {
   Conversation,
   Message,
@@ -23,7 +22,6 @@ import {
 } from "@/lib/chat-store";
 import { askStream, rewriteQuery, HistoryEntry } from "@/lib/api";
 import { loadConversations, saveConversations } from "@/lib/chat-persistence";
-import { DEMO_RESPONSES } from "@/lib/demo-responses";
 
 const SIDEBAR_W = 280;
 
@@ -45,7 +43,6 @@ export default function Index() {
   const { theme, setTheme } = useTheme();
   const { collapsed, setCollapsed } = useSidebarState();
   const { available: serviceAvailable, error: healthError } = useHealth();
-  const { demoEnabled, setDemoEnabled } = useDemoMode();
 
   // Persist conversations to localStorage on change
   useEffect(() => {
@@ -119,25 +116,6 @@ export default function Index() {
     assistantId: string,
     history: HistoryEntry[]
   ) => {
-    // Demo short-circuit (UI toggle in Settings; default from demo-responses.ts)
-    if (demoEnabled) {
-      const demo = DEMO_RESPONSES.find(
-        (r) => r.prompt.trim().toLowerCase() === trimmed.toLowerCase()
-      );
-      if (demo) {
-        await new Promise((res) => setTimeout(res, 350));
-        updateAssistantMessage(convId, assistantId, (m) => ({
-          ...m,
-          status: undefined,
-          content: demo.content,
-          sources: demo.sources,
-          streamed: false,
-        }));
-        setErrorMsg(null);
-        return { ok: true as const };
-      }
-    }
-
     // Buffer tokens in a ref and flush on animation frames so the UI
     // appends smoothly even when tokens arrive in tight bursts.
     let pendingTokens = "";
@@ -469,6 +447,7 @@ export default function Index() {
           {/* Mobile menu */}
           <button
             onClick={() => setSidebarOpen(true)}
+            aria-label="Open sidebar menu"
             className="fixed left-4 top-4 z-30 flex h-10 w-10 items-center justify-center rounded-full border border-border bg-card/80 shadow-lg backdrop-blur-md transition-all active:scale-95 md:hidden"
           >
             <Menu className="h-5 w-5 text-foreground" />
@@ -545,11 +524,11 @@ export default function Index() {
               >
                 <ChatInputTextArea
                   placeholder={
-                    serviceAvailable || demoEnabled
+                    serviceAvailable
                       ? "Ask anything about PESU..."
                       : "Service unavailable..."
                   }
-                  disabled={!serviceAvailable && !demoEnabled}
+                  disabled={!serviceAvailable}
                 />
                 <ChatInputSubmit />
               </ChatInput>
@@ -573,8 +552,6 @@ export default function Index() {
         onOpenChange={setSettingsOpen}
         theme={theme}
         onThemeChange={setTheme}
-        demoEnabled={demoEnabled}
-        onDemoEnabledChange={setDemoEnabled}
       />
     </div>
   );
