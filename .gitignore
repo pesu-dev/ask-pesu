@@ -40,6 +40,7 @@ pyrightconfig.json
 # =========================
 node_modules/
 frontend/node_modules/
+*.lockb
 
 dist/
 frontend/dist/
