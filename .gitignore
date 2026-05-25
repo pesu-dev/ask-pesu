@@ -1,18 +1,66 @@
-.idea/
-.vscode/
-__pycache__/
-.pytest_cache/
+# =========================
+# General
+# =========================
 .DS_Store
 *.log
-.venv
-pyrightconfig.json
-*.bru
-bruno.json
-.coverage
-.env
+*.local
+
+# =========================
+# Python
+# =========================
+__pycache__/
+.pytest_cache/
+.venv/
 .uv/
 .ruff_cache/
+.coverage
+pyrightconfig.json
+
+# =========================
+# Environment Files
+# =========================
+.env
+
+# =========================
+# IDE / Editor
+# =========================
+.idea/
+
+.vscode/*
+!.vscode/extensions.json
+
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# =========================
+# Node / Frontend
+# =========================
+node_modules/
+frontend/node_modules/
+
+dist/
+frontend/dist/
+
+dist-ssr/
+frontend/dist-ssr/
+
+.next/
+frontend/.next/
+
+# Package manager logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# =========================
+# Misc Project Files
+# =========================
+*.bru
+bruno.json
 *.csv
 *.png
-frontend/.next/
-.next/
