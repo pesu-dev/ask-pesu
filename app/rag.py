@@ -8,13 +8,17 @@ from collections.abc import AsyncGenerator
 import yaml
 from dotenv import load_dotenv
 from huggingface_hub import InferenceClient
+from operator import itemgetter
+
 from langchain_classic.retrievers import MultiQueryRetriever
+from langchain_core.callbacks import CallbackManagerForRetrieverRun
 from langchain_core.documents.base import Document
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.runnables import RunnablePassthrough, RunnableSerializable
+from langchain_core.retrievers import BaseRetriever
+from langchain_core.runnables import RunnableLambda, RunnablePassthrough, RunnableSerializable
 from langchain_huggingface import ChatHuggingFace, HuggingFaceEndpoint
 from langchain_huggingface.embeddings import HuggingFaceEmbeddings
 from langchain_qdrant import QdrantVectorStore
@@ -22,7 +26,27 @@ from qdrant_client import QdrantClient
 
 load_dotenv()
 
+THINK_START = "<think>"
 THINK_END = "</think>"
+
+
+class ScoredRetriever(BaseRetriever):
+    """Thin wrapper around QdrantVectorStore that attaches relevance scores to doc.metadata['_score']."""
+
+    vector_store: QdrantVectorStore
+    search_kwargs: dict
+
+    def _get_relevant_documents(self, query: str, *, run_manager: CallbackManagerForRetrieverRun) -> list[Document]:
+        results = self.vector_store.similarity_search_with_relevance_scores(query, **self.search_kwargs)
+        for doc, score in results:
+            doc.metadata["_score"] = score
+        return [doc for doc, _ in results]
+
+    async def _aget_relevant_documents(self, query: str, *, run_manager: CallbackManagerForRetrieverRun) -> list[Document]:
+        results = await self.vector_store.asimilarity_search_with_relevance_scores(query, **self.search_kwargs)
+        for doc, score in results:
+            doc.metadata["_score"] = score
+        return [doc for doc, _ in results]
 
 
 class RetrievalAugmentedGenerator:
@@ -84,7 +108,20 @@ class RetrievalAugmentedGenerator:
             ]
         )
 
-        self.retriever = self.vector_store.as_retriever(search_kwargs=self.config["rag"]["search_kwargs"])
+        self.retriever = ScoredRetriever(
+            vector_store=self.vector_store,
+            search_kwargs=self.config["rag"]["search_kwargs"],
+        )
+
+        reranker_cfg = self.config["rag"].get("reranker", {})
+        if reranker_cfg.get("enabled", False):
+            import torch
+            from sentence_transformers import CrossEncoder
+            self.cross_encoder = CrossEncoder(reranker_cfg["model"], activation_fct=torch.nn.Sigmoid())
+            logging.info(f"Cross-encoder reranker loaded: {reranker_cfg['model']}")
+        else:
+            self.cross_encoder = None
+
         self.rag_chain_primary = self._build_chain(self.llm_primary)
         self.rag_chain_thinking = self._build_chain(self.llm_thinking) if self.llm_thinking else None
 
@@ -93,11 +130,11 @@ class RetrievalAugmentedGenerator:
         # tokens on question rewriting or multi-query expansion.
         multiquery_retriever = MultiQueryRetriever.from_llm(
             retriever=self.retriever,
-            llm=self.llm_primary,  # <-- always primary, not `llm`
+            llm=self.llm_primary,
         )
 
         history_aware_retriever = (
-            {"input": RunnablePassthrough(), "chat_history": RunnablePassthrough()}
+            {"input": itemgetter("input"), "chat_history": itemgetter("chat_history")}
             | self.frame_qn_prompt
             | self.llm_primary
             | StrOutputParser()
@@ -105,19 +142,47 @@ class RetrievalAugmentedGenerator:
         )
 
         return (
-            {
-                "context": history_aware_retriever | self.format_docs,
-                "question": RunnablePassthrough(),
+            RunnablePassthrough.assign(docs=history_aware_retriever)
+            | RunnableLambda(self._rerank)
+            | {
+                "context": itemgetter("docs") | self.format_docs,
+                "question": itemgetter("input"),
             }
             | self.prompt
             | llm
             | StrOutputParser()
         )
 
-    @staticmethod
-    def format_docs(docs: list[Document]) -> str:
+    def format_docs(self, docs: list[Document]) -> str:
         """Format retrieved documents into a string for prompt input."""
+        if self.cross_encoder is None:
+            docs = sorted(docs, key=lambda d: d.metadata.get("_score", 0.0), reverse=True)
         return "\n\n".join(f"{doc.metadata['url']}\n{doc.page_content}" for doc in docs)
+
+    def _rerank(self, inputs: dict) -> dict:
+        """Re-rank retrieved docs with the cross-encoder and filter by sigmoid threshold."""
+        if self.cross_encoder is None:
+            return inputs
+
+        query = inputs["input"]
+        docs = inputs["docs"]
+        if not docs:
+            return inputs
+
+        threshold = self.config["rag"]["search_kwargs"]["score_threshold"]
+        pairs = [[query, doc.page_content] for doc in docs]
+        scores = self.cross_encoder.predict(pairs)
+
+        reranked = []
+        for doc, score in zip(docs, scores):
+            if float(score) >= threshold:
+                doc.metadata["_score"] = float(score)
+                reranked.append(doc)
+
+        reranked.sort(key=lambda d: d.metadata["_score"], reverse=True)
+        logging.debug(f"Reranker: {len(docs)} → {len(reranked)} docs above threshold {threshold}")
+        inputs["docs"] = reranked
+        return inputs
 
     def _process_thinking_chunk(self, chunk: str, pending: str, thinking_done: bool) -> tuple[str, bool, list[dict]]:
         """Process a single chunk in thinking mode.
@@ -132,6 +197,10 @@ class RetrievalAugmentedGenerator:
             return pending, thinking_done, events
 
         pending += chunk
+
+        # Strip the opening <think> tag if it appears at the start of the stream
+        if pending.startswith(THINK_START):
+            pending = pending[len(THINK_START):]
 
         if THINK_END in pending:
             idx = pending.index(THINK_END)
@@ -222,5 +291,4 @@ class RetrievalAugmentedGenerator:
         chain = prompt | self.llm_primary | StrOutputParser()
 
         result = await chain.ainvoke({"query": query})
-        print(result)
         return " ".join(result.split()[:8])

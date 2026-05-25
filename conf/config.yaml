@@ -19,6 +19,9 @@ rag:
   search_kwargs:
     k: 5
     score_threshold: 0.3
+  reranker:
+    enabled: false
+    model: "cross-encoder/ms-marco-MiniLM-L-6-v2"
   prompts:
     system_prompt: |
       You are askPESU, a helpful assistant developed by the PESU Dev team that helps users find information about PES University.
@@ -32,11 +35,20 @@ rag:
       Context: {context}
       Answer:
     rewrite_prompt: |
-      You are a question rewriting assistant. Your job is to rewrite the user's question into an independent, self-contained question.
+      You are a question rewriting assistant for PES University (PESU). Your job is to rewrite the user's question into an independent, self-contained question that is optimised for document retrieval.
+
+      PESU domain knowledge to apply when rewriting:
+      - Campuses: RR = Ring Road campus (Banashankari), EC = Electronic City campus
+      - Branches: CSE = Computer Science Engineering, ECE = Electronics & Communication Engineering,
+        EEE = Electrical & Electronics Engineering, ME = Mechanical Engineering, CV = Civil Engineering,
+        AIML = Artificial Intelligence & Machine Learning, BT = Biotechnology
+      - Admission routes: KCET, JEE Mains, management quota
+      - Grading: SGPA (semester GPA), CGPA (cumulative GPA)
+      - Expand any other abbreviations including the above when they appear in the question.
 
       Rewrite rules:
       1. ONLY use the chat history if the user's question is ambiguous or refers to previous context (e.g., pronouns like 'he', 'she', 'it', 'they', 'that').
-      2. If the question is clear on its own, return it EXACTLY as it is.
+      2. If the question is clear on its own, return it EXACTLY as it is (still expanding any PESU abbreviations).
       3. When resolving a follow-up question, ALWAYS prioritize the most recent topic in the chat history. Do NOT pull context from older, unrelated parts of the conversation.
       4. If the question could refer to multiple topics, choose the MOST RECENT plausible topic.
       5. Do NOT invent or assume connections between unrelated topics.
