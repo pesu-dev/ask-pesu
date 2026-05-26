@@ -1,5 +1,6 @@
 // Frontend API client. All URLs are relative so the FastAPI backend can
 // serve the built assets on the same origin without any CORS config.
+import { Source } from "@/lib/chat-store";
 
 export interface QuotaInfo {
   available: boolean;
@@ -146,4 +147,29 @@ export async function askStream({
   }
 
   return { status: resp.status, ok: true };
+}
+
+export function extractSources(content: string): { cleanContent: string; sources: Source[] } {
+  // Match the **Sources** section and everything after it
+  const sourcesSectionMatch = content.match(/\*\*Sources\*\*\s*\n\n([\s\S]*?)$/i);
+
+  if (!sourcesSectionMatch) {
+    return { cleanContent: content, sources: [] };
+  }
+
+  const cleanContent = content.replace(/\*\*Sources\*\*\s*\n\n[\s\S]*?$/i, "").trim();
+  const sourcesText = sourcesSectionMatch[1];
+
+  // Extract URLs from markdown list items (e.g., "- https://example.com")
+  const urlMatches = sourcesText.match(/[-*]\s+(https?:\/\/[^\s\n]+)/g) || [];
+  const sources: Source[] = urlMatches.map((match) => {
+    const url = match.replace(/^[-*]\s+/, "").trim();
+    return {
+      title: new URL(url).hostname || url,
+      url,
+      snippet: "Source from the response",
+    };
+  });
+
+  return { cleanContent, sources };
 }

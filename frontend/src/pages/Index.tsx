@@ -2,7 +2,11 @@ import { useState, useRef, useCallback, useEffect } from "react";
 import { AnimatePresence, motion, PanInfo } from "framer-motion";
 import { toast } from "sonner";
 import { AppSidebar } from "@/components/AppSidebar";
-import { ChatInput, ChatInputTextArea, ChatInputSubmit } from "@/components/chat/ChatInput";
+import {
+  ChatInput,
+  ChatInputTextArea,
+  ChatInputSubmit,
+} from "@/components/chat/ChatInput";
 import { ChatMessage } from "@/components/chat/ChatMessage";
 import { WelcomeScreen } from "@/components/chat/WelcomeScreen";
 import { CommandSearch } from "@/components/chat/CommandSearch";
@@ -20,13 +24,20 @@ import {
   createConversation,
   createId,
 } from "@/lib/chat-store";
-import { askStream, rewriteQuery, HistoryEntry } from "@/lib/api";
+import {
+  askStream,
+  rewriteQuery,
+  HistoryEntry,
+  extractSources,
+} from "@/lib/api";
 import { loadConversations, saveConversations } from "@/lib/chat-persistence";
 
 const SIDEBAR_W = 280;
 
 export default function Index() {
-  const [conversations, setConversations] = useState<Conversation[]>(() => loadConversations());
+  const [conversations, setConversations] = useState<Conversation[]>(() =>
+    loadConversations(),
+  );
   const [activeId, setActiveId] = useState<string | null>(null);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -52,16 +63,20 @@ export default function Index() {
   // Surface health failures in the banner; cleared on recovery.
   useEffect(() => {
     if (healthError) {
-      setErrorMsg("Backend service is unreachable. Check your connection or try again.");
+      setErrorMsg(
+        "Backend service is unreachable. Check your connection or try again.",
+      );
     } else if (serviceAvailable) {
       setErrorMsg((prev) =>
-        prev && prev.startsWith("Backend service is unreachable") ? null : prev
+        prev && prev.startsWith("Backend service is unreachable") ? null : prev,
       );
     }
   }, [healthError, serviceAvailable]);
 
-  const activeConversation = conversations.find((c) => c.id === activeId) ?? null;
-  const hasMessages = activeConversation && activeConversation.messages.length > 0;
+  const activeConversation =
+    conversations.find((c) => c.id === activeId) ?? null;
+  const hasMessages =
+    activeConversation && activeConversation.messages.length > 0;
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -82,7 +97,10 @@ export default function Index() {
 
   const scrollToBottom = useCallback(() => {
     setTimeout(() => {
-      scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+      scrollRef.current?.scrollTo({
+        top: scrollRef.current.scrollHeight,
+        behavior: "smooth",
+      });
     }, 50);
   }, []);
 
@@ -95,18 +113,20 @@ export default function Index() {
   const updateAssistantMessage = (
     convId: string,
     msgId: string,
-    updater: (m: Message) => Message
+    updater: (m: Message) => Message,
   ) => {
     setConversations((prev) =>
       prev.map((c) =>
         c.id === convId
           ? {
               ...c,
-              messages: c.messages.map((m) => (m.id === msgId ? updater(m) : m)),
+              messages: c.messages.map((m) =>
+                m.id === msgId ? updater(m) : m,
+              ),
               updatedAt: new Date(),
             }
-          : c
-      )
+          : c,
+      ),
     );
   };
 
@@ -114,7 +134,7 @@ export default function Index() {
     trimmed: string,
     convId: string,
     assistantId: string,
-    history: HistoryEntry[]
+    history: HistoryEntry[],
   ) => {
     // Buffer tokens in a ref and flush on animation frames so the UI
     // appends smoothly even when tokens arrive in tight bursts.
@@ -176,10 +196,15 @@ export default function Index() {
           } else if (evt.type === "done") {
             streamClosed = true;
             flush();
-            updateAssistantMessage(convId, assistantId, (m) => ({
-              ...m,
-              status: undefined,
-            }));
+            updateAssistantMessage(convId, assistantId, (m) => {
+              const { cleanContent, sources } = extractSources(m.content);
+              return {
+                ...m,
+                content: cleanContent,
+                sources,
+                status: undefined,
+              };
+            });
           } else if (evt.type === "error") {
             failStream(evt.content || "The model returned an error.");
           }
@@ -271,9 +296,13 @@ export default function Index() {
     setConversations((prev) =>
       prev.map((c) =>
         c.id === convId
-          ? { ...c, messages: [...c.messages, userMsg, assistantMsg], updatedAt: new Date() }
-          : c
-      )
+          ? {
+              ...c,
+              messages: [...c.messages, userMsg, assistantMsg],
+              updatedAt: new Date(),
+            }
+          : c,
+      ),
     );
     setInput("");
     setLoading(true);
@@ -286,7 +315,9 @@ export default function Index() {
         .then((title) => {
           if (title && title.trim()) {
             setConversations((prev) =>
-              prev.map((c) => (c.id === convId ? { ...c, title: title.trim() } : c))
+              prev.map((c) =>
+                c.id === convId ? { ...c, title: title.trim() } : c,
+              ),
             );
           }
         })
@@ -310,10 +341,14 @@ export default function Index() {
     }
     // Find the last assistant message and retry with its preceding history.
     const msgs = activeConversation.messages;
-    const lastAssistantIdx = [...msgs].reverse().findIndex((m) => m.role === "assistant");
+    const lastAssistantIdx = [...msgs]
+      .reverse()
+      .findIndex((m) => m.role === "assistant");
     if (lastAssistantIdx === -1) return;
     const realIdx = msgs.length - 1 - lastAssistantIdx;
-    const lastUser = [...msgs.slice(0, realIdx)].reverse().find((m) => m.role === "user");
+    const lastUser = [...msgs.slice(0, realIdx)]
+      .reverse()
+      .find((m) => m.role === "user");
     if (!lastUser) return;
 
     setRetrying(true);
@@ -331,7 +366,12 @@ export default function Index() {
       error: undefined,
     }));
     setLoading(true);
-    await runQuery(lastUser.content, activeConversation.id, assistantId, history);
+    await runQuery(
+      lastUser.content,
+      activeConversation.id,
+      assistantId,
+      history,
+    );
     setLoading(false);
     setRetrying(false);
     scrollToBottom();
@@ -348,7 +388,9 @@ export default function Index() {
   };
 
   const handleRename = (id: string, title: string) => {
-    setConversations((prev) => prev.map((c) => (c.id === id ? { ...c, title } : c)));
+    setConversations((prev) =>
+      prev.map((c) => (c.id === id ? { ...c, title } : c)),
+    );
   };
 
   const handleSwipeDrag = (_: any, info: PanInfo) => {
@@ -466,7 +508,10 @@ export default function Index() {
             <div className="mx-auto flex min-h-full max-w-2xl flex-col px-4 py-4 md:py-6">
               <AnimatePresence mode="wait">
                 {!hasMessages && (
-                  <WelcomeScreen visible={!hasMessages} onSuggestionClick={handleSuggestionClick} />
+                  <WelcomeScreen
+                    visible={!hasMessages}
+                    onSuggestionClick={handleSuggestionClick}
+                  />
                 )}
               </AnimatePresence>
 
@@ -496,7 +541,7 @@ export default function Index() {
 
               {loading &&
                 !activeConversation?.messages.some(
-                  (m) => m.role === "assistant" && (m.content || m.status)
+                  (m) => m.role === "assistant" && (m.content || m.status),
                 ) && (
                   <div className="mb-5 md:mb-6">
                     <LoadingBreadcrumb text="Thinking" />
@@ -509,9 +554,7 @@ export default function Index() {
             <div className="mx-auto max-w-2xl space-y-2">
               <ErrorBanner
                 message={errorMsg}
-                onRetry={
-                  hasMessages && !loading ? handleRetry : undefined
-                }
+                onRetry={hasMessages && !loading ? handleRetry : undefined}
                 onDismiss={() => setErrorMsg(null)}
                 retrying={retrying}
               />
