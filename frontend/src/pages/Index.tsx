@@ -265,14 +265,24 @@ export default function Index() {
     assistantId: string,
     userMessage: string,
   ) => {
+    setLoading(true);
     setThinkingEnabled(true);
 
     // Get current conversation
     const conversation = conversations.find((c) => c.id === convId);
-    if (!conversation) return;
+    if (!conversation) {
+      setLoading(false);
+      return;
+    }
 
-    const history = conversation.messages
-      .filter((m) => m.id !== assistantId)
+    // Build history excluding the current assistant message being deepened
+    // Include ONLY messages before this assistant message, mapped to clean HistoryEntry
+    const assistantMsgIndex = conversation.messages.findIndex(
+      (m) => m.id === assistantId,
+    );
+    const userMsgIndex = assistantMsgIndex - 1;
+    const history: HistoryEntry[] = conversation.messages
+      .slice(0, userMsgIndex)
       .map((m) => ({ role: m.role, content: m.content }));
 
     // Create a new assistant message for the thinking response
@@ -298,7 +308,10 @@ export default function Index() {
       ),
     );
 
-    // Call askStream with thinking: true
+    // Create a NEW AbortController for the thinking request
+    const ac = new AbortController();
+    abortRef.current = ac;
+
     let pendingTokens = "";
     let flushScheduled = false;
     let streamClosed = false;
@@ -324,8 +337,8 @@ export default function Index() {
       await askStream({
         query: userMessage,
         thinking: true,
-        history,
-        signal: abortRef.current?.signal,
+        history, // Now includes only previous messages, not the one being deepened
+        signal: ac.signal, // NEW AbortController signal
         onEvent: (evt) => {
           if (streamClosed) return;
           if (evt.type === "token") {
@@ -346,8 +359,18 @@ export default function Index() {
           }
         },
       });
+    } catch (err: any) {
+      if (err?.name !== "AbortError") {
+        updateAssistantMessage(convId, thinkingResponseId, (m) => ({
+          ...m,
+          status: undefined,
+          error: "Think longer request failed. Please try again.",
+        }));
+      }
     } finally {
       setThinkingEnabled(false);
+      setLoading(false);
+      abortRef.current = null;
     }
   };
 
@@ -637,6 +660,7 @@ export default function Index() {
                               }
                             : undefined
                         }
+                        isLoading={loading}
                       />
                     </div>
                   ))}
@@ -679,6 +703,11 @@ export default function Index() {
                 />
                 <ChatInputSubmit />
               </ChatInput>
+
+              <div className="text-center text-xs text-muted-foreground px-3 py-2">
+                I am a bot, and I can make mistakes. Please double-check
+                responses.
+              </div>
             </div>
           </div>
         </div>

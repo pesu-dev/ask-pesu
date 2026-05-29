@@ -15,6 +15,7 @@ interface ChatMessageProps {
   isLatest?: boolean;
   onRetry?: () => void;
   onThinkLonger?: () => void;
+  isLoading?: boolean;
 }
 
 const streamedAssistantMessageIds = new Set<string>();
@@ -23,7 +24,13 @@ function splitIntoWordChunks(content: string) {
   return content.match(/\S+\s*/g) ?? [];
 }
 
-export function ChatMessage({ message, isLatest = false, onRetry, onThinkLonger }: ChatMessageProps) {
+export function ChatMessage({
+  message,
+  isLatest = false,
+  onRetry,
+  onThinkLonger,
+  isLoading = false,
+}: ChatMessageProps) {
   const isUser = message.role === "user";
   // Skip the fake word-by-word animation when the message is being delivered
   // by the real /ask stream -- tokens already arrive incrementally.
@@ -32,7 +39,9 @@ export function ChatMessage({ message, isLatest = false, onRetry, onThinkLonger 
     isLatest &&
     !message.streamed &&
     !streamedAssistantMessageIds.has(message.id);
-  const [visibleContent, setVisibleContent] = useState(shouldStream ? "" : message.content);
+  const [visibleContent, setVisibleContent] = useState(
+    shouldStream ? "" : message.content,
+  );
   const [streamingComplete, setStreamingComplete] = useState(!shouldStream);
   const assistantMessageRef = useRef<HTMLDivElement>(null);
 
@@ -105,7 +114,9 @@ export function ChatMessage({ message, isLatest = false, onRetry, onThinkLonger 
     >
       {isUser ? (
         <div className="max-w-[85%] md:max-w-[70%] rounded-2xl bg-primary px-4 py-2.5 text-primary-foreground shadow-md shadow-primary/15">
-          <p className="whitespace-pre-wrap text-base leading-relaxed">{message.content}</p>
+          <p className="whitespace-pre-wrap text-base leading-relaxed">
+            {message.content}
+          </p>
         </div>
       ) : (
         <div ref={assistantMessageRef} className="w-full max-w-none">
@@ -115,12 +126,18 @@ export function ChatMessage({ message, isLatest = false, onRetry, onThinkLonger 
             </p>
           )}
           <div className="prose">
-            <ReactMarkdown remarkPlugins={[remarkMath, remarkGfm]} rehypePlugins={[rehypeKatex]}>
+            <ReactMarkdown
+              remarkPlugins={[remarkMath, remarkGfm]}
+              rehypePlugins={[rehypeKatex]}
+            >
               {visibleContent}
             </ReactMarkdown>
             {((shouldStream && !streamingComplete) ||
               (message.streamed && isLatest && message.status)) && (
-              <span aria-hidden="true" className="ml-0.5 inline-block h-4 w-px align-middle bg-primary/60 animate-pulse" />
+              <span
+                aria-hidden="true"
+                className="ml-0.5 inline-block h-4 w-px align-middle bg-primary/60 animate-pulse"
+              />
             )}
           </div>
 
@@ -140,14 +157,24 @@ export function ChatMessage({ message, isLatest = false, onRetry, onThinkLonger 
             </div>
           )}
 
-          {streamingComplete && message.content && !message.error && (
-            <>
-            <ChatSources sources={message.sources} />
-            </>
-          )}
-          {streamingComplete && !message.status && message.content && !message.error && (
-            <MessageActions content={message.content} onThinkLonger={onThinkLonger} />
-          )}
+          {streamingComplete &&
+            message.content &&
+            !message.error &&
+            !isLoading && (
+              <>
+                <ChatSources sources={message.sources} />
+              </>
+            )}
+          {streamingComplete &&
+            !message.status &&
+            message.content &&
+            !message.error &&
+            !isLoading && (
+              <MessageActions
+                content={message.content}
+                onThinkLonger={onThinkLonger}
+              />
+            )}
         </div>
       )}
     </motion.div>
