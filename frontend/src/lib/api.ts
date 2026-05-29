@@ -73,10 +73,22 @@ export async function askStream({
   signal,
   onEvent,
 }: AskOptions): Promise<AskResult> {
+
+  const formattedHistory = history.map((entry, idx) => {
+    if (entry.role === "user") {
+      return { query: entry.content, answer: "" };
+    } else {
+      // Get previous user message's content as the query
+      const prevUserIdx = idx - 1;
+      const prevQuery = history[prevUserIdx]?.content || "";
+      return { query: prevQuery, answer: entry.content };
+    }
+  });
+
   const resp = await fetch("/ask", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ query, thinking, history }),
+    body: JSON.stringify({ query, thinking, history: formattedHistory }),
     signal,
   });
 
