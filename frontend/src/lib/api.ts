@@ -150,26 +150,54 @@ export async function askStream({
 }
 
 export function extractSources(content: string): { cleanContent: string; sources: Source[] } {
-  // Match the **Sources** section and everything after it
-  const sourcesSectionMatch = content.match(/\*\*Sources\*\*\s*\n\n([\s\S]*?)$/i);
+  const sources: Source[] = [];
 
-  if (!sourcesSectionMatch) {
-    return { cleanContent: content, sources: [] };
+  // First, extract from **Sources:** section if it exists
+  const sourcesSectionMatch = content.match(
+    /\n*\*?\*?Sources?\*?\*?:?\s*\n+([\s\S]*?)$/i
+  );
+
+  if (sourcesSectionMatch) {
+    const sourcesText = sourcesSectionMatch[1];
+    const markdownMatches = sourcesText.matchAll(/\[-•*]?\s*\[([^\]]+)\]\((https?:\/\/[^\)]+)\)/g);
+    for (const match of markdownMatches) {
+      const [, linkText, url] = match;
+      sources.push({
+        title: linkText.trim(),
+        url,
+        snippet: linkText.trim(),
+      });
+    }
   }
 
-  const cleanContent = content.replace(/\*\*Sources\*\*\s*\n\n[\s\S]*?$/i, "").trim();
-  const sourcesText = sourcesSectionMatch[1];
+  // If no sources found in dedicated section, extract from inline markdown links
+  if (sources.length === 0) {
+    const inlineMatches = content.matchAll(/[-•*]\s+\[([^\]]+)\]\((https?:\/\/[^\)]+)\)/g);
+    for (const match of inlineMatches) {
+      const [, linkText, url] = match;
+      sources.push({
+        title: linkText.trim(),
+        url,
+        snippet: linkText.trim(),
+      });
+    }
+  }
 
-  // Extract URLs from markdown list items (e.g., "- https://example.com")
-  const urlMatches = sourcesText.match(/[-*]\s+(https?:\/\/[^\s\n]+)/g) || [];
-  const sources: Source[] = urlMatches.map((match) => {
-    const url = match.replace(/^[-*]\s+/, "").trim();
-    return {
-      title: new URL(url).hostname || url,
-      url,
-      snippet: "Source from the response",
-    };
-  });
+  // Remove the Sources section and any inline source-like markdown links
+  let cleanContent = content
+    .replace(/\n*\*?\*?Sources?\*?\*?:?\s*\n+([\s\S]*)$/i, "") // Remove Sources section
+    .trim();
+
+  // Remove lines that are just markdown links (source citations)
+  cleanContent = cleanContent
+    .split('\n')
+    .filter(line => {
+      const trimmed = line.trim();
+      // Skip lines that are just bullet-pointed markdown links
+      return !trimmed.match(/^[-•*]\s+\[([^\]]+)\]\((https?:\/\/[^\)]+)\)$/);
+    })
+    .join('\n')
+    .trim();
 
   return { cleanContent, sources };
 }

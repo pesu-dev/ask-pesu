@@ -11,9 +11,9 @@ import { ChatMessage } from "@/components/chat/ChatMessage";
 import { WelcomeScreen } from "@/components/chat/WelcomeScreen";
 import { CommandSearch } from "@/components/chat/CommandSearch";
 import { LoadingBreadcrumb } from "@/components/chat/Loader";
-import { SettingsDialog } from "@/components/chat/SettingsDialog";
 import { ErrorBanner } from "@/components/chat/ErrorBanner";
 import { Menu, Settings as SettingsIcon } from "lucide-react";
+import { Moon, Sun } from "lucide-react";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useTheme } from "@/hooks/use-theme";
 import { useSidebarState } from "@/hooks/use-sidebar-state";
@@ -43,7 +43,6 @@ export default function Index() {
   const [loading, setLoading] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [retrying, setRetrying] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -54,6 +53,9 @@ export default function Index() {
   const { theme, setTheme } = useTheme();
   const { collapsed, setCollapsed } = useSidebarState();
   const { available: serviceAvailable, error: healthError } = useHealth();
+
+  // Thinking state
+  const [thinkingEnabled, setThinkingEnabled] = useState(false);
 
   // Persist conversations to localStorage on change
   useEffect(() => {
@@ -180,7 +182,7 @@ export default function Index() {
     try {
       const result = await askStream({
         query: trimmed,
-        thinking: false,
+        thinking: thinkingEnabled,
         history,
         signal: ac.signal,
         onEvent: (evt) => {
@@ -255,6 +257,97 @@ export default function Index() {
       return { ok: true as const };
     } finally {
       abortRef.current = null;
+    }
+  };
+
+  const handleThinkLonger = async (
+    convId: string,
+    assistantId: string,
+    userMessage: string,
+  ) => {
+    setThinkingEnabled(true);
+
+    // Get current conversation
+    const conversation = conversations.find((c) => c.id === convId);
+    if (!conversation) return;
+
+    const history = conversation.messages
+      .filter((m) => m.id !== assistantId)
+      .map((m) => ({ role: m.role, content: m.content }));
+
+    // Create a new assistant message for the thinking response
+    const thinkingResponseId = createId();
+    setConversations((prev) =>
+      prev.map((c) =>
+        c.id === convId
+          ? {
+              ...c,
+              messages: [
+                ...c.messages,
+                {
+                  id: thinkingResponseId,
+                  role: "assistant" as const,
+                  content: "",
+                  timestamp: new Date(),
+                  status: "Thinking with extended reasoning...",
+                },
+              ],
+              updatedAt: new Date(),
+            }
+          : c,
+      ),
+    );
+
+    // Call askStream with thinking: true
+    let pendingTokens = "";
+    let flushScheduled = false;
+    let streamClosed = false;
+
+    const flush = () => {
+      flushScheduled = false;
+      if (!pendingTokens) return;
+      const chunk = pendingTokens;
+      pendingTokens = "";
+      updateAssistantMessage(convId, thinkingResponseId, (m) => ({
+        ...m,
+        content: m.content + chunk,
+      }));
+    };
+
+    const scheduleFlush = () => {
+      if (flushScheduled || streamClosed) return;
+      flushScheduled = true;
+      requestAnimationFrame(flush);
+    };
+
+    try {
+      await askStream({
+        query: userMessage,
+        thinking: true,
+        history,
+        signal: abortRef.current?.signal,
+        onEvent: (evt) => {
+          if (streamClosed) return;
+          if (evt.type === "token") {
+            pendingTokens += evt.content;
+            scheduleFlush();
+          } else if (evt.type === "done") {
+            streamClosed = true;
+            flush();
+            updateAssistantMessage(convId, thinkingResponseId, (m) => {
+              const { cleanContent, sources } = extractSources(m.content);
+              return {
+                ...m,
+                content: cleanContent,
+                sources,
+                status: undefined,
+              };
+            });
+          }
+        },
+      });
+    } finally {
+      setThinkingEnabled(false);
     }
   };
 
@@ -495,15 +588,6 @@ export default function Index() {
             <Menu className="h-5 w-5 text-foreground" />
           </button>
 
-          {/* Top-right settings button */}
-          <button
-            onClick={() => setSettingsOpen(true)}
-            aria-label="Settings"
-            className="absolute right-3 top-3 z-20 flex h-9 w-9 items-center justify-center rounded-full border border-border bg-card/80 text-muted-foreground shadow-sm backdrop-blur-md transition-all hover:text-foreground hover:bg-muted/60 md:right-4 md:top-4"
-          >
-            <SettingsIcon className="h-4 w-4" />
-          </button>
-
           <div ref={scrollRef} className="flex-1 overflow-y-auto">
             <div className="mx-auto flex min-h-full max-w-2xl flex-col px-4 py-4 md:py-6">
               <AnimatePresence mode="wait">
@@ -531,6 +615,26 @@ export default function Index() {
                         onRetry={
                           msg.role === "assistant" && msg.error && !loading
                             ? handleRetry
+                            : undefined
+                        }
+                        onThinkLonger={
+                          msg.role === "assistant" && !msg.error && !loading
+                            ? () => {
+                                const userMsg = activeConversation.messages
+                                  .slice(
+                                    0,
+                                    activeConversation.messages.indexOf(msg),
+                                  )
+                                  .reverse()
+                                  .find((m) => m.role === "user");
+                                if (userMsg) {
+                                  handleThinkLonger(
+                                    activeConversation.id,
+                                    msg.id,
+                                    userMsg.content,
+                                  );
+                                }
+                              }
                             : undefined
                         }
                       />
@@ -588,13 +692,6 @@ export default function Index() {
           setActiveId(id);
           setSearchOpen(false);
         }}
-      />
-
-      <SettingsDialog
-        open={settingsOpen}
-        onOpenChange={setSettingsOpen}
-        theme={theme}
-        onThemeChange={setTheme}
       />
     </div>
   );

@@ -14,6 +14,7 @@ interface ChatMessageProps {
   message: Message;
   isLatest?: boolean;
   onRetry?: () => void;
+  onThinkLonger?: () => void;
 }
 
 const streamedAssistantMessageIds = new Set<string>();
@@ -22,7 +23,7 @@ function splitIntoWordChunks(content: string) {
   return content.match(/\S+\s*/g) ?? [];
 }
 
-export function ChatMessage({ message, isLatest = false, onRetry }: ChatMessageProps) {
+export function ChatMessage({ message, isLatest = false, onRetry, onThinkLonger }: ChatMessageProps) {
   const isUser = message.role === "user";
   // Skip the fake word-by-word animation when the message is being delivered
   // by the real /ask stream -- tokens already arrive incrementally.
@@ -140,10 +141,12 @@ export function ChatMessage({ message, isLatest = false, onRetry }: ChatMessageP
           )}
 
           {streamingComplete && message.content && !message.error && (
+            <>
             <ChatSources sources={message.sources} />
+            </>
           )}
           {streamingComplete && !message.status && message.content && !message.error && (
-            <MessageActions content={message.content} />
+            <MessageActions content={message.content} onThinkLonger={onThinkLonger} />
           )}
         </div>
       )}

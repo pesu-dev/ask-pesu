@@ -13,8 +13,8 @@ import {
   Moon,
   Sun,
   MessageSquare,
-  Github,
 } from "lucide-react";
+import { SiGithub } from "@icons-pack/react-simple-icons";
 import {
   Tooltip,
   TooltipContent,
@@ -106,7 +106,7 @@ export function AppSidebar({
       transition={SIDEBAR_TRANSITION}
       className={cn(
         "flex h-full shrink-0 flex-col overflow-hidden bg-background text-foreground",
-        mobile && "rounded-none"
+        mobile && "rounded-none",
       )}
     >
       {/* Header row -- when collapsed the toggle is centered in the
@@ -115,7 +115,7 @@ export function AppSidebar({
       <div
         className={cn(
           "flex h-14 items-center pt-3 transition-[padding,justify-content] duration-300",
-          isCollapsed ? "px-0 justify-center" : "px-2 justify-between"
+          isCollapsed ? "px-0 justify-center" : "px-2 justify-between",
         )}
       >
         {/* askPESU brand -- only present when expanded */}
@@ -198,7 +198,7 @@ export function AppSidebar({
           }}
           className={cn(
             "h-full overflow-y-auto pr-1",
-            isCollapsed && "pointer-events-none"
+            isCollapsed && "pointer-events-none",
           )}
         >
           {conversations.length === 0 ? (
@@ -221,7 +221,7 @@ export function AppSidebar({
                       "group flex cursor-pointer items-center rounded-lg px-2.5 py-2 text-sm transition-colors duration-150",
                       activeId === conv.id
                         ? "text-foreground font-medium"
-                        : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
+                        : "text-muted-foreground hover:text-foreground hover:bg-muted/50",
                     )}
                     onClick={() => onSelect(conv.id)}
                   >
@@ -231,6 +231,7 @@ export function AppSidebar({
                         onClick={(e) => e.stopPropagation()}
                       >
                         <input
+                          title="Conversation Title"
                           value={editTitle}
                           onChange={(e) => setEditTitle(e.target.value)}
                           onKeyDown={(e) =>
@@ -242,12 +243,14 @@ export function AppSidebar({
                         <button
                           onClick={confirmRename}
                           className="text-primary p-1"
+                          title="Confirm Rename"
                         >
                           <Check className="h-3.5 w-3.5" />
                         </button>
                         <button
                           onClick={() => setEditingId(null)}
                           className="opacity-60 p-1"
+                          title="Cancel Rename"
                         >
                           <X className="h-3.5 w-3.5" />
                         </button>
@@ -258,6 +261,7 @@ export function AppSidebar({
                         <span className="flex-1 truncate">{conv.title}</span>
                         <div className="ml-1 hidden items-center gap-0.5 group-hover:flex">
                           <button
+                            title="Rename"
                             onClick={(e) => {
                               e.stopPropagation();
                               startRename(conv);
@@ -267,6 +271,7 @@ export function AppSidebar({
                             <Pencil className="h-3 w-3 opacity-60" />
                           </button>
                           <button
+                            title="Delete"
                             onClick={(e) => {
                               e.stopPropagation();
                               onDelete(conv.id);
@@ -304,7 +309,9 @@ export function AppSidebar({
                 aria-label="Toggle theme"
                 className={cn(
                   "flex h-9 min-w-0 items-center rounded-lg border-0 bg-transparent outline-none transition-colors hover:bg-muted/50 focus:outline-none focus-visible:ring-0",
-                  isCollapsed ? "w-9 justify-center px-0" : "w-full justify-start gap-2 px-2"
+                  isCollapsed
+                    ? "w-9 justify-center px-0"
+                    : "w-full justify-start gap-2 px-2",
                 )}
               >
                 <span className="relative flex h-4 w-4 shrink-0 items-center justify-center">
@@ -313,7 +320,7 @@ export function AppSidebar({
                       "absolute h-4 w-4 transition-all duration-300",
                       theme === "light"
                         ? "scale-100 rotate-0 opacity-100"
-                        : "scale-0 rotate-90 opacity-0"
+                        : "scale-0 rotate-90 opacity-0",
                     )}
                   />
                   <Moon
@@ -321,13 +328,16 @@ export function AppSidebar({
                       "absolute h-4 w-4 transition-all duration-300",
                       theme === "dark"
                         ? "scale-100 rotate-0 opacity-100"
-                        : "-rotate-90 scale-0 opacity-0"
+                        : "-rotate-90 scale-0 opacity-0",
                     )}
                   />
                 </span>
                 <motion.span
                   initial={false}
-                  animate={{ opacity: isCollapsed ? 0 : 1, width: isCollapsed ? 0 : "auto" }}
+                  animate={{
+                    opacity: isCollapsed ? 0 : 1,
+                    width: isCollapsed ? 0 : "auto",
+                  }}
                   transition={{ duration: 0.25, delay: isCollapsed ? 0 : 0.15 }}
                   className="overflow-hidden whitespace-nowrap text-xs capitalize text-muted-foreground"
                 >
@@ -335,7 +345,9 @@ export function AppSidebar({
                 </motion.span>
               </button>
             </TooltipTrigger>
-            {isCollapsed && <TooltipContent side="right">Toggle theme</TooltipContent>}
+            {isCollapsed && (
+              <TooltipContent side="right">Toggle theme</TooltipContent>
+            )}
           </Tooltip>
 
           {/* GitHub -- only visible when expanded */}
@@ -346,17 +358,18 @@ export function AppSidebar({
             className="min-w-0 overflow-hidden"
           >
             <a
-              href="https://github.com/pesu-dev"
+              href="https://github.com/pesu-dev/ask-pesu"
               target="_blank"
               rel="noopener noreferrer"
               className="flex h-9 w-9 items-center justify-center rounded-lg transition-colors hover:bg-muted/50"
               aria-label="GitHub"
             >
-              <Github className="h-3.5 w-3.5 text-muted-foreground" />
+              <SiGithub className="h-3.5 w-3.5 text-muted-foreground" />
             </a>
           </motion.div>
         </motion.div>
       </div>
+      {/* Theme toggle at bottom */}
     </motion.aside>
   );
 }
@@ -384,15 +397,13 @@ function SidebarButton({
           onClick={onClick}
           className={cn(
             "w-full overflow-hidden transition-colors rounded-lg",
-            className
+            className,
           )}
         >
           <motion.div
             initial={false}
             animate={{
-              gridTemplateColumns: collapsed
-                ? "2.25rem 0fr"
-                : "2.25rem 1fr",
+              gridTemplateColumns: collapsed ? "2.25rem 0fr" : "2.25rem 1fr",
             }}
             transition={SIDEBAR_TRANSITION}
             className="grid w-full items-center"
@@ -435,7 +446,7 @@ function groupConversationsByDate(conversations: Conversation[]) {
   ];
 
   const sorted = [...conversations].sort(
-    (a, b) => b.updatedAt.getTime() - a.updatedAt.getTime()
+    (a, b) => b.updatedAt.getTime() - a.updatedAt.getTime(),
   );
 
   sorted.forEach((conv) => {

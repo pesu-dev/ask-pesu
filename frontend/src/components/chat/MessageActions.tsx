@@ -9,9 +9,10 @@ import {
 
 interface MessageActionsProps {
   content: string;
+  onThinkLonger?: () => void;
 }
 
-export function MessageActions({ content }: MessageActionsProps) {
+export function MessageActions({ content, onThinkLonger }: MessageActionsProps) {
   const [copied, setCopied] = useState(false);
   const [thinking, setThinking] = useState(false);
 
@@ -23,6 +24,7 @@ export function MessageActions({ content }: MessageActionsProps) {
 
   const handleThinkLonger = () => {
     setThinking(true);
+    onThinkLonger?.();
     setTimeout(() => setThinking(false), 3000);
   };
 
