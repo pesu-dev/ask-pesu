@@ -107,7 +107,8 @@ export async function askStream({
 
     // Process buffer in chunks, leaving partial lines for the next read
     let lastNewline = buffer.lastIndexOf("\n");
-    if (lastNewline === -1) continue; // Wait for a full line
+    // Wait for a full line
+    if (lastNewline === -1) continue;
 
     const processable = buffer.substring(0, lastNewline);
     buffer = buffer.substring(lastNewline + 1);
@@ -119,7 +120,7 @@ export async function askStream({
       try {
         events.push(JSON.parse(trimmed) as StreamEvent);
       } catch {
-        // ignore malformed line
+        /*noop*/
       }
     }
 
@@ -195,7 +196,7 @@ export function extractSources(content: string): { cleanContent: string; sources
     }
   }
 
-  // Remove the Sources section and any inline source-like markdown links
+  // Strip source citations from the displayed answer after extraction.
   let cleanContent = content
     .replace(/\n*\*?\*?Sources?\*?\*?:?\s*\n+([\s\S]*)$/i, "") // Remove Sources section
     .trim();

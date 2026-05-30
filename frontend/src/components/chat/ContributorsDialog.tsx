@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { X, Github, Anchor } from "lucide-react";
+import { X, Anchor } from "lucide-react";
+import { SiGithub } from "@icons-pack/react-simple-icons";
 
 interface Contributor {
   name: string;
@@ -54,6 +55,7 @@ export function ContributorsDialog({ open, onOpenChange }: ContributorsDialogPro
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-base font-semibold text-foreground">Contributors</h3>
                 <button
+                  title="Close"
                   onClick={() => onOpenChange(false)}
                   className="rounded-lg p-1 hover:bg-muted transition-colors"
                 >
@@ -81,7 +83,7 @@ export function ContributorsDialog({ open, onOpenChange }: ContributorsDialogPro
                             className="rounded-lg p-1.5 hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
                           >
                             {link.icon === "github" ? (
-                              <Github className="h-3.5 w-3.5" />
+                              <SiGithub className="h-3.5 w-3.5" />
                             ) : (
                               <Anchor className="h-3.5 w-3.5" />
                             )}

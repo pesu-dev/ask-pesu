@@ -32,8 +32,6 @@ export function ChatMessage({
   isLoading = false,
 }: ChatMessageProps) {
   const isUser = message.role === "user";
-  // Skip the fake word-by-word animation when the message is being delivered
-  // by the real /ask stream -- tokens already arrive incrementally.
   const shouldStream =
     !isUser &&
     isLatest &&
