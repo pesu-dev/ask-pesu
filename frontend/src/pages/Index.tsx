@@ -1,6 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { AnimatePresence, motion, PanInfo } from "framer-motion";
-import { toast } from "sonner";
 import { AppSidebar } from "@/components/AppSidebar";
 import {
   ChatInput,
@@ -12,8 +11,7 @@ import { WelcomeScreen } from "@/components/chat/WelcomeScreen";
 import { CommandSearch } from "@/components/chat/CommandSearch";
 import { LoadingBreadcrumb } from "@/components/chat/Loader";
 import { ErrorBanner } from "@/components/chat/ErrorBanner";
-import { Menu, Settings as SettingsIcon } from "lucide-react";
-import { Moon, Sun } from "lucide-react";
+import { Menu } from "lucide-react";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useTheme } from "@/hooks/use-theme";
 import { useSidebarState } from "@/hooks/use-sidebar-state";
