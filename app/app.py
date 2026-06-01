@@ -81,7 +81,7 @@ app.add_middleware(
 
 
 # Initialize globals
-DIST_DIR = "frontend/out"  # Directory for static files (built from frontend)
+DIST_DIR = "frontend/dist"  # Directory for static files (built from frontend)
 IST = pytz.timezone("Asia/Kolkata")  # Indian Standard Time timezone
 rag: RetrievalAugmentedGenerator | None = None  # Global variable to hold the RAG instance
 
@@ -91,7 +91,11 @@ THINKING_STATE = QuotaState(name="thinking", cooldown_hours=24)
 PRIMARY_STATE = QuotaState(name="primary", cooldown_hours=24)
 
 # Mount static files
-app.mount("/static", StaticFiles(directory=DIST_DIR), name="static")
+app.mount(
+    "/assets",
+    StaticFiles(directory=f"{DIST_DIR}/assets"),
+    name="assets",
+)
 
 
 async def test_stream() -> AsyncIterator[str]:
