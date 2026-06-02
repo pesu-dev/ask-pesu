@@ -147,7 +147,7 @@ class RetrievalAugmentedGenerator:
             RunnablePassthrough.assign(docs=history_aware_retriever)
             | RunnableLambda(self._rerank)
             | {
-                "context": itemgetter("docs") | self.format_docs,
+                "context": itemgetter("docs") | RunnableLambda(self.format_docs),
                 "question": itemgetter("input"),
             }
             | self.prompt
