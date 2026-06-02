@@ -20,7 +20,7 @@ rag:
     k: 5
     score_threshold: 0.3
   reranker:
-    enabled: false
+    enabled: true
     model: "cross-encoder/ms-marco-MiniLM-L-6-v2"
   prompts:
     system_prompt: |

@@ -119,7 +119,7 @@ class RetrievalAugmentedGenerator:
             import torch
             from sentence_transformers import CrossEncoder
 
-            self.cross_encoder = CrossEncoder(reranker_cfg["model"], activation_fct=torch.nn.Sigmoid())
+            self.cross_encoder = CrossEncoder(reranker_cfg["model"], activation_fn=torch.nn.Sigmoid())
             logging.info(f"Cross-encoder reranker loaded: {reranker_cfg['model']}")
         else:
             self.cross_encoder = None
