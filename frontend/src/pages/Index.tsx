@@ -95,6 +95,13 @@ export default function Index() {
     return () => document.removeEventListener("keydown", handler);
   }, []);
 
+  useEffect(() => {
+    (window as any).__chatEditHandler = handleEditMessage;
+    return () => {
+      delete (window as any).__chatEditHandler;
+    };
+  }, [activeConversation, setInput]);
+
   // Refocus on conversation change
   useEffect(() => {
     const textarea = document.querySelector(
@@ -549,6 +556,45 @@ export default function Index() {
 
   const handleSuggestionClick = (text: string) => {
     setInput(text);
+  };
+
+  const handleEditMessage = (content: string, messageId: string) => {
+    if (!activeConversation) return;
+
+    // Find the index of the message being edited
+    const messageIndex = activeConversation.messages.findIndex(
+      (m) => m.id === messageId,
+    );
+
+    if (messageIndex === -1) return;
+
+    // Delete all messages from this message onwards
+    const updatedMessages = activeConversation.messages.slice(0, messageIndex);
+
+    setConversations((prev) =>
+      prev.map((c) =>
+        c.id === activeConversation.id
+          ? {
+              ...c,
+              messages: updatedMessages,
+              updatedAt: new Date(),
+            }
+          : c,
+      ),
+    );
+
+    // Populate input with the edited message
+    setInput(content);
+
+    // Focus on input
+    setTimeout(() => {
+      const textarea = document.querySelector(
+        'textarea[data-chat-input="true"]',
+      ) as HTMLTextAreaElement;
+      if (textarea) {
+        textarea.focus();
+      }
+    }, 50);
   };
 
   return (
