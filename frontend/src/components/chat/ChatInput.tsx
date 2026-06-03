@@ -3,7 +3,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { useTextareaResize } from "@/hooks/use-textarea-resize";
 import { ArrowUpIcon } from "lucide-react";
-import React, { createContext, useContext } from "react";
+import React, { createContext, useContext, useEffect } from "react";
 
 interface ChatInputContextValue {
   value?: string;
@@ -80,6 +80,7 @@ function ChatInputTextArea({
   onChange: onChangeProp,
   className,
   variant: variantProp,
+  autoFocus,
   ...props
 }: ChatInputTextAreaProps) {
   const context = useContext(ChatInputContext);
@@ -92,6 +93,12 @@ function ChatInputTextArea({
     variantProp ?? (context.variant === "default" ? "unstyled" : "default");
 
   const textareaRef = useTextareaResize(value, rows);
+
+  useEffect(() => {
+    if (autoFocus && textareaRef.current) {
+      textareaRef.current.focus();
+    }
+  }, [autoFocus]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (!onSubmit) return;
@@ -109,8 +116,10 @@ function ChatInputTextArea({
       onChange={onChange}
       onKeyDown={handleKeyDown}
       rows={rows}
+      autoFocus={autoFocus}
+      data-chat-input="true"
       className={cn(
-        "flex-1 resize-none border-0 bg-transparent px-0 py-1 text-sm leading-6 placeholder:text-muted-foreground/60 focus-visible:ring-0 focus-visible:ring-offset-0 min-h-[32px] max-h-[120px]",
+        "flex-1 resize-none border-0 bg-transparent px-0 py-1 text-sm leading-6 placeholder:text-muted-foreground/60 focus-visible:ring-0 focus-visible:ring-offset-0 min-h-[32px] max-h-[320px]",
         className
       )}
       {...props}

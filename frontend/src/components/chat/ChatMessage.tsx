@@ -4,6 +4,7 @@ import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import { cn } from "@/lib/utils";
+import { ChevronDown } from "lucide-react";
 import { Message } from "@/lib/chat-store";
 import { MessageActions } from "./MessageActions";
 import { ChatSources } from "./ChatSources";
@@ -42,6 +43,7 @@ export function ChatMessage({
   );
   const [streamingComplete, setStreamingComplete] = useState(!shouldStream);
   const assistantMessageRef = useRef<HTMLDivElement>(null);
+  const [showThinking, setShowThinking] = useState(false);
 
   useEffect(() => {
     if (!shouldStream) {
@@ -111,7 +113,7 @@ export function ChatMessage({
       className={cn("flex w-full", isUser ? "justify-end" : "justify-start")}
     >
       {isUser ? (
-        <div className="max-w-[85%] md:max-w-[70%] rounded-2xl bg-primary px-4 py-2.5 text-primary-foreground shadow-md shadow-primary/15">
+        <div className="max-w-[85%] md:max-w-[70%] rounded-2xl bg-primary px-4 py-3 text-primary-foreground shadow-md shadow-primary/15">
           <p className="whitespace-pre-wrap text-base leading-relaxed">
             {message.content}
           </p>
@@ -123,6 +125,34 @@ export function ChatMessage({
               {message.status}
             </p>
           )}
+
+          {/* Thinking dropdown - show if thinking steps exist */}
+          {message.thinkingSteps && message.thinkingSteps.length > 0 && (
+            <div className="mb-4 border border-border rounded-lg bg-muted/30 overflow-hidden">
+              <button
+                onClick={() => setShowThinking(!showThinking)}
+                className="w-full flex items-center justify-between px-4 py-3 hover:bg-muted/50 transition-colors"
+              >
+                <span className="text-sm font-medium text-muted-foreground">
+                  Show thinking process
+                </span>
+                <ChevronDown
+                  className={`h-4 w-4 text-muted-foreground transition-transform ${
+                    showThinking ? "rotate-180" : ""
+                  }`}
+                />
+              </button>
+
+              {showThinking && (
+                <div className="px-4 pb-3 border-t border-border text-sm text-muted-foreground max-h-96 overflow-y-auto">
+                  <p className="leading-relaxed">
+                    {message.thinkingSteps.join("")}
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="prose">
             <ReactMarkdown
               remarkPlugins={[remarkMath, remarkGfm]}

@@ -95,6 +95,37 @@ export default function Index() {
     return () => document.removeEventListener("keydown", handler);
   }, []);
 
+  // Refocus on conversation change
+  useEffect(() => {
+    const textarea = document.querySelector(
+      'textarea[data-chat-input="true"]',
+    ) as HTMLTextAreaElement;
+    if (textarea) {
+      setTimeout(() => textarea.focus(), 50);
+    }
+  }, [activeId]);
+
+  // Focus on initial page load with retry
+  useEffect(() => {
+    let attempts = 0;
+    const maxAttempts = 3;
+
+    const tryFocus = () => {
+      const textarea = document.querySelector(
+        'textarea[data-chat-input="true"]',
+      ) as HTMLTextAreaElement;
+
+      if (textarea) {
+        textarea.focus();
+      } else if (attempts < maxAttempts) {
+        attempts++;
+        setTimeout(tryFocus, 50);
+      }
+    };
+
+    tryFocus();
+  }, []);
+
   const scrollToBottom = useCallback(() => {
     setTimeout(() => {
       scrollRef.current?.scrollTo({
@@ -266,15 +297,12 @@ export default function Index() {
     setLoading(true);
     setThinkingEnabled(true);
 
-    // Get current conversation
     const conversation = conversations.find((c) => c.id === convId);
     if (!conversation) {
       setLoading(false);
       return;
     }
 
-    // Build history excluding the current assistant message being deepened
-    // Include ONLY messages before this assistant message, mapped to clean HistoryEntry
     const assistantMsgIndex = conversation.messages.findIndex(
       (m) => m.id === assistantId,
     );
@@ -283,7 +311,6 @@ export default function Index() {
       .slice(0, userMsgIndex)
       .map((m) => ({ role: m.role, content: m.content }));
 
-    // Create a new assistant message for the thinking response
     const thinkingResponseId = createId();
     setConversations((prev) =>
       prev.map((c) =>
@@ -298,6 +325,7 @@ export default function Index() {
                   content: "",
                   timestamp: new Date(),
                   status: "Thinking with extended reasoning...",
+                  thinkingSteps: [], // NEW: Initialize steps array
                 },
               ],
               updatedAt: new Date(),
@@ -306,7 +334,6 @@ export default function Index() {
       ),
     );
 
-    // Create a NEW AbortController for the thinking request
     const ac = new AbortController();
     abortRef.current = ac;
 
@@ -335,25 +362,26 @@ export default function Index() {
       await askStream({
         query: userMessage,
         thinking: true,
-        history, // Now includes only previous messages, not the one being deepened
-        signal: ac.signal, // NEW AbortController signal
+        history,
+        signal: ac.signal,
         onEvent: (evt) => {
           if (streamClosed) return;
-          if (evt.type === "token") {
+          if (evt.type === "step") {
+            // NEW: Capture thinking steps
+            updateAssistantMessage(convId, thinkingResponseId, (m) => ({
+              ...m,
+              thinkingSteps: [...(m.thinkingSteps || []), evt.content],
+            }));
+          } else if (evt.type === "token") {
             pendingTokens += evt.content;
             scheduleFlush();
           } else if (evt.type === "done") {
             streamClosed = true;
             flush();
-            updateAssistantMessage(convId, thinkingResponseId, (m) => {
-              const { cleanContent, sources } = extractSources(m.content);
-              return {
-                ...m,
-                content: cleanContent,
-                sources,
-                status: undefined,
-              };
-            });
+            updateAssistantMessage(convId, thinkingResponseId, (m) => ({
+              ...m,
+              status: undefined,
+            }));
           }
         },
       });
@@ -629,7 +657,7 @@ export default function Index() {
                   transition={{ duration: 0.25, ease: [0.4, 0, 0.2, 1] }}
                 >
                   {activeConversation?.messages.map((msg, i) => (
-                    <div key={msg.id} className="mb-5 md:mb-6">
+                    <div key={msg.id} className="mb-12 md:mb-14">
                       <ChatMessage
                         message={msg}
                         isLatest={i === activeConversation.messages.length - 1}
@@ -669,7 +697,7 @@ export default function Index() {
                 !activeConversation?.messages.some(
                   (m) => m.role === "assistant" && (m.content || m.status),
                 ) && (
-                  <div className="mb-5 md:mb-6">
+                  <div className="mb-12 md:mb-14">
                     <LoadingBreadcrumb text="Thinking" />
                   </div>
                 )}
@@ -677,7 +705,7 @@ export default function Index() {
           </div>
 
           <div className="shrink-0 px-3 pb-3 pt-2 md:px-4 md:pb-4">
-            <div className="mx-auto max-w-2xl space-y-2">
+            <div className="mx-auto max-w-3xl space-y-2">
               <ErrorBanner
                 message={errorMsg}
                 onRetry={hasMessages && !loading ? handleRetry : undefined}
@@ -698,6 +726,7 @@ export default function Index() {
                       : "Service unavailable..."
                   }
                   disabled={!serviceAvailable}
+                  autoFocus={true}
                 />
                 <ChatInputSubmit />
               </ChatInput>
