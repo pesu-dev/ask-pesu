@@ -55,6 +55,9 @@ export default function Index() {
   // Thinking state
   const [thinkingEnabled, setThinkingEnabled] = useState(false);
 
+  // Editing state
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+
   // Persist conversations to localStorage on change
   useEffect(() => {
     saveConversations(conversations);
@@ -409,6 +412,32 @@ export default function Index() {
 
   const handleSubmit = async () => {
     const trimmed = input.trim();
+    if (editingMessageId && activeConversation) {
+      const messageIndex = activeConversation.messages.findIndex(
+        (m) => m.id === editingMessageId,
+      );
+
+      if (messageIndex !== -1) {
+        const updatedMessages = activeConversation.messages.slice(
+          0,
+          messageIndex,
+        );
+
+        setConversations((prev) =>
+          prev.map((c) =>
+            c.id === activeConversation.id
+              ? {
+                  ...c,
+                  messages: updatedMessages,
+                  updatedAt: new Date(),
+                }
+              : c,
+          ),
+        );
+      }
+
+      setEditingMessageId(null);
+    }
     if (!trimmed || loading) return;
 
     let conv = activeConversation;
@@ -561,39 +590,15 @@ export default function Index() {
   const handleEditMessage = (content: string, messageId: string) => {
     if (!activeConversation) return;
 
-    // Find the index of the message being edited
-    const messageIndex = activeConversation.messages.findIndex(
-      (m) => m.id === messageId,
-    );
-
-    if (messageIndex === -1) return;
-
-    // Delete all messages from this message onwards
-    const updatedMessages = activeConversation.messages.slice(0, messageIndex);
-
-    setConversations((prev) =>
-      prev.map((c) =>
-        c.id === activeConversation.id
-          ? {
-              ...c,
-              messages: updatedMessages,
-              updatedAt: new Date(),
-            }
-          : c,
-      ),
-    );
-
-    // Populate input with the edited message
+    setEditingMessageId(messageId);
     setInput(content);
 
-    // Focus on input
     setTimeout(() => {
       const textarea = document.querySelector(
         'textarea[data-chat-input="true"]',
       ) as HTMLTextAreaElement;
-      if (textarea) {
-        textarea.focus();
-      }
+
+      textarea?.focus();
     }, 50);
   };
 
