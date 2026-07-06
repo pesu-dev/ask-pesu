@@ -32,6 +32,19 @@ import { loadConversations, saveConversations } from "@/lib/chat-persistence";
 
 const SIDEBAR_W = 280;
 
+function finalizeAssistantContent(m: Message): Message {
+  const { cleanContent, sources } = extractSources(m.content);
+
+  console.log("CONTENT:");
+  console.log(m.content);
+
+  console.log("SOURCES:");
+  console.log(sources);
+
+  console.log("FINAL SOURCES:", sources);
+  return { ...m, content: cleanContent, sources, status: undefined };
+}
+
 export default function Index() {
   const [conversations, setConversations] = useState<Conversation[]>(() =>
     loadConversations(),
@@ -237,15 +250,11 @@ export default function Index() {
           } else if (evt.type === "done") {
             streamClosed = true;
             flush();
-            updateAssistantMessage(convId, assistantId, (m) => {
-              const { cleanContent, sources } = extractSources(m.content);
-              return {
-                ...m,
-                content: cleanContent,
-                sources,
-                status: undefined,
-              };
-            });
+            updateAssistantMessage(
+              convId,
+              assistantId,
+              finalizeAssistantContent,
+            );
           } else if (evt.type === "error") {
             failStream(evt.content || "The model returned an error.");
           }
@@ -388,10 +397,11 @@ export default function Index() {
           } else if (evt.type === "done") {
             streamClosed = true;
             flush();
-            updateAssistantMessage(convId, thinkingResponseId, (m) => ({
-              ...m,
-              status: undefined,
-            }));
+            updateAssistantMessage(
+              convId,
+              thinkingResponseId,
+              finalizeAssistantContent,
+            );
           }
         },
       });

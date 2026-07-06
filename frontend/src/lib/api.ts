@@ -73,7 +73,6 @@ export async function askStream({
   signal,
   onEvent,
 }: AskOptions): Promise<AskResult> {
-
   const formattedHistory = history.map((entry, idx) => {
     if (entry.role === "user") {
       return { query: entry.content, answer: "" };
@@ -162,55 +161,69 @@ export async function askStream({
   return { status: resp.status, ok: true };
 }
 
-export function extractSources(content: string): { cleanContent: string; sources: Source[] } {
+export function extractSources(content: string): {
+  cleanContent: string;
+  sources: Source[];
+} {
+  console.log("======== RAW ========");
+  console.log(JSON.stringify(content));
+  console.log("=====================");
+
   const sources: Source[] = [];
 
-  // First, extract from **Sources:** section if it exists
-  const sourcesSectionMatch = content.match(
-    /\n*\*?\*?Sources?\*?\*?:?\s*\n+([\s\S]*?)$/i
-  );
+  // Find the LAST "Sources:" heading (case-insensitive)
+  const match = content.match(/\*\*Sources:\*\*|Sources:/i);
 
-  if (sourcesSectionMatch) {
-    const sourcesText = sourcesSectionMatch[1];
-    const markdownMatches = sourcesText.matchAll(/\[-•*]?\s*\[([^\]]+)\]\((https?:\/\/[^\)]+)\)/g);
-    for (const match of markdownMatches) {
-      const [, linkText, url] = match;
-      sources.push({
-        title: linkText.trim(),
-        url,
-        snippet: linkText.trim(),
-      });
-    }
+  if (!match || match.index === undefined) {
+    return {
+      cleanContent: content.trim(),
+      sources: [],
+    };
   }
 
-  // If no sources found in dedicated section, extract from inline markdown links
+  const answer = content.substring(0, match.index).trim();
+  const sourceText = content
+    .substring(match.index + match[0].length)
+    .trim();
+
+  console.log("SOURCE TEXT:");
+  console.log(sourceText);
+
+  // Markdown links:
+  // [Title](https://...)
+  const markdownLinks = [
+    ...sourceText.matchAll(
+      /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g
+    ),
+  ];
+
+  for (const m of markdownLinks) {
+    sources.push({
+      title: m[1].trim(),
+      url: m[2].trim(),
+      snippet: m[1].trim(),
+    });
+  }
+
+  // Fallback for plain URLs if no markdown links exist
   if (sources.length === 0) {
-    const inlineMatches = content.matchAll(/[-•*]\s+\[([^\]]+)\]\((https?:\/\/[^\)]+)\)/g);
-    for (const match of inlineMatches) {
-      const [, linkText, url] = match;
+    const plainUrls = [
+      ...sourceText.matchAll(/https?:\/\/[^\s)]+/g),
+    ];
+
+    for (const m of plainUrls) {
       sources.push({
-        title: linkText.trim(),
-        url,
-        snippet: linkText.trim(),
+        title: m[0],
+        url: m[0],
+        snippet: m[0],
       });
     }
   }
 
-  // Strip source citations from the displayed answer after extraction.
-  let cleanContent = content
-    .replace(/\n*\*?\*?Sources?\*?\*?:?\s*\n+([\s\S]*)$/i, "") // Remove Sources section
-    .trim();
+  console.log("FOUND SOURCES:", sources);
 
-  // Remove lines that are just markdown links (source citations)
-  cleanContent = cleanContent
-    .split('\n')
-    .filter(line => {
-      const trimmed = line.trim();
-      // Skip lines that are just bullet-pointed markdown links
-      return !trimmed.match(/^[-•*]\s+\[([^\]]+)\]\((https?:\/\/[^\)]+)\)$/);
-    })
-    .join('\n')
-    .trim();
-
-  return { cleanContent, sources };
+  return {
+    cleanContent: answer,
+    sources,
+  };
 }
