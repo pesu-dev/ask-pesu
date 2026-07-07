@@ -16,6 +16,7 @@ export interface Message {
   status?: string;
   /** Set when the stream aborted mid-flight (backend error, network drop, /ask returned non-2xx). */
   error?: string;
+  thinkingSteps?: string[];
 }
 
 export interface Conversation {

@@ -4,11 +4,11 @@ import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import { cn } from "@/lib/utils";
+import { ChevronDown, AlertTriangle, RefreshCw } from "lucide-react";
 import { Message } from "@/lib/chat-store";
 import { MessageActions } from "./MessageActions";
 import { ChatSources } from "./ChatSources";
 import { motion } from "framer-motion";
-import { AlertTriangle, RefreshCw } from "lucide-react";
 
 interface ChatMessageProps {
   message: Message;
@@ -42,6 +42,7 @@ export function ChatMessage({
   );
   const [streamingComplete, setStreamingComplete] = useState(!shouldStream);
   const assistantMessageRef = useRef<HTMLDivElement>(null);
+  const [showThinking, setShowThinking] = useState(false);
 
   useEffect(() => {
     if (!shouldStream) {
@@ -111,10 +112,37 @@ export function ChatMessage({
       className={cn("flex w-full", isUser ? "justify-end" : "justify-start")}
     >
       {isUser ? (
-        <div className="max-w-[85%] md:max-w-[70%] rounded-2xl bg-primary px-4 py-2.5 text-primary-foreground shadow-md shadow-primary/15">
+        <div className="group relative max-w-[85%] md:max-w-[70%] rounded-2xl bg-primary px-4 py-3 text-primary-foreground shadow-md shadow-primary/15">
           <p className="whitespace-pre-wrap text-base leading-relaxed">
             {message.content}
           </p>
+          {/* Edit button for editing user query */}
+          {!isLatest && (
+            <button
+              onClick={() => {
+                const editHandler = (window as any).__chatEditHandler;
+                if (editHandler) {
+                  editHandler(message.content, message.id);
+                }
+              }}
+              className="absolute -right-10 top-1/2 -translate-y-1/2 transition-colors p-2 rounded-lg text-foreground/50 hover:text-foreground hover:bg-muted"
+              title="Edit message"
+            >
+              <svg
+                className="h-4 w-4"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
+                />
+              </svg>
+            </button>
+          )}
         </div>
       ) : (
         <div ref={assistantMessageRef} className="w-full max-w-none">
@@ -123,6 +151,34 @@ export function ChatMessage({
               {message.status}
             </p>
           )}
+
+          {/* Thinking dropdown - show if thinking steps exist */}
+          {message.thinkingSteps && message.thinkingSteps.length > 0 && (
+            <div className="mb-4 border border-border rounded-lg bg-muted/30 overflow-hidden">
+              <button
+                onClick={() => setShowThinking(!showThinking)}
+                className="w-full flex items-center justify-between px-4 py-3 hover:bg-muted/50 transition-colors"
+              >
+                <span className="text-sm font-medium text-muted-foreground">
+                  Show thinking process
+                </span>
+                <ChevronDown
+                  className={`h-4 w-4 text-muted-foreground transition-transform ${
+                    showThinking ? "rotate-180" : ""
+                  }`}
+                />
+              </button>
+
+              {showThinking && (
+                <div className="px-4 pb-3 border-t border-border text-sm text-muted-foreground max-h-96 overflow-y-auto">
+                  <p className="leading-relaxed">
+                    {message.thinkingSteps.join("")}
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="prose">
             <ReactMarkdown
               remarkPlugins={[remarkMath, remarkGfm]}
