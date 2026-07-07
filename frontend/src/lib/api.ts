@@ -165,13 +165,8 @@ export function extractSources(content: string): {
   cleanContent: string;
   sources: Source[];
 } {
-  console.log("======== RAW ========");
-  console.log(JSON.stringify(content));
-  console.log("=====================");
-
   const sources: Source[] = [];
 
-  // Find the LAST "Sources:" heading (case-insensitive)
   const match = content.match(/\*\*Sources:\*\*|Sources:/i);
 
   if (!match || match.index === undefined) {
@@ -185,9 +180,6 @@ export function extractSources(content: string): {
   const sourceText = content
     .substring(match.index + match[0].length)
     .trim();
-
-  console.log("SOURCE TEXT:");
-  console.log(sourceText);
 
   // Markdown links:
   // [Title](https://...)
@@ -220,7 +212,6 @@ export function extractSources(content: string): {
     }
   }
 
-  console.log("FOUND SOURCES:", sources);
 
   return {
     cleanContent: answer,

@@ -422,6 +422,7 @@ export default function Index() {
 
   const handleSubmit = async () => {
     const trimmed = input.trim();
+    if (loading) return;
     if (editingMessageId && activeConversation) {
       const messageIndex = activeConversation.messages.findIndex(
         (m) => m.id === editingMessageId,
@@ -448,7 +449,7 @@ export default function Index() {
 
       setEditingMessageId(null);
     }
-    if (!trimmed || loading) return;
+    if (!trimmed) return;
 
     let conv = activeConversation;
     let isNewConv = false;

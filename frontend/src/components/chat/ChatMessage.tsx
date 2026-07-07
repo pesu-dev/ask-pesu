@@ -4,12 +4,11 @@ import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import { cn } from "@/lib/utils";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, AlertTriangle, RefreshCw } from "lucide-react";
 import { Message } from "@/lib/chat-store";
 import { MessageActions } from "./MessageActions";
 import { ChatSources } from "./ChatSources";
 import { motion } from "framer-motion";
-import { AlertTriangle, RefreshCw, PencilIcon } from "lucide-react";
 
 interface ChatMessageProps {
   message: Message;
