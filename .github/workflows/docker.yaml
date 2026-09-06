@@ -1,3 +1,5 @@
+# NOTE: the workflow name is matched by deploy-staging.yaml's `workflow_run`
+# trigger. Do not rename it without updating that file.
 name: Docker Container Build
 
 on:
@@ -7,7 +9,7 @@ on:
       - completed
 
 jobs:
-  build:
+  build-api:
     runs-on: ubuntu-latest
     if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'dev' }}
     steps:
@@ -16,13 +18,13 @@ jobs:
         id: vars
         run: echo "tag=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
       - name: Build the Docker image
-        run: docker build . --tag ask-pesu
+        run: docker build services/api --tag ask-pesu
       - name: Spawn a container
         run: |
           docker run --name ask-pesu -d -p 7860:7860 \
             -e QDRANT_API_KEY="${{ secrets.QDRANT_API_KEY }}" \
             -e QDRANT_URL="${{ secrets.QDRANT_URL }}" \
-            -e GEMINI_API_KEY="${{ secrets.GEMINI_API_KEY }}" \
+            -e HF_TOKEN="${{ secrets.HF_TOKEN }}" \
             ask-pesu
       - name: Wait for the container to be ready
         run: |
@@ -35,6 +37,46 @@ jobs:
             sleep 15
           done
           echo "❌ Service did not start in time."
+          docker logs ask-pesu
           exit 1
       - name: Stop the container
+        if: always()
         run: docker stop ask-pesu
+
+  build-db:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'dev' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Get short commit hash
+        id: vars
+        run: echo "tag=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Build the Docker image
+        run: docker build services/db --tag ask-pesu-db
+      - name: Run container
+        run: |
+          docker run --name ask-pesu-db -d -p 7860:7860 \
+            -e reddit_client_id="${{ secrets.REDDIT_CLIENT_ID }}" \
+            -e reddit_client_secret="${{ secrets.REDDIT_CLIENT_SECRET }}" \
+            -e qdrant_url="${{ secrets.QDRANT_URL }}" \
+            -e qdrant_api_key="${{ secrets.QDRANT_API_KEY }}" \
+            ask-pesu-db
+      - name: Wait for the container to be ready
+        run: |
+          for i in {1..60}; do
+            if curl --silent http://localhost:7860/health > /dev/null; then
+              echo "✅ Service is up!"
+              exit 0
+            fi
+            echo "⏳ Waiting for service..."
+            sleep 15
+          done
+          echo "❌ Service did not start in time."
+          docker logs ask-pesu-db
+          exit 1
+      - name: Stop container
+        if: always()
+        run: docker stop ask-pesu-db
+      - name: Remove container
+        if: always()
+        run: docker rm ask-pesu-db

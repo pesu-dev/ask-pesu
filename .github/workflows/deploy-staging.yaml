@@ -30,7 +30,11 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Push to hub
+      # The Space expects the API service at its root, so push only that
+      # subtree. `git subtree split` needs full history, hence fetch-depth: 0.
+      - name: Push API subtree to hub
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        run: git push https://pesu-dev:$HF_TOKEN@huggingface.co/spaces/pesu-dev/askpesu-dev dev:main --force
+        run: |
+          git subtree split --prefix=services/api HEAD -b deploy-api
+          git push https://pesu-dev:$HF_TOKEN@huggingface.co/spaces/pesu-dev/askpesu-dev deploy-api:main --force
