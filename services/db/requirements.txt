@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+praw
+anytree
+langchain
+langchain-community
+langchain-qdrant
+qdrant-client
+sentence-transformers
