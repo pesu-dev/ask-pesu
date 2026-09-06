@@ -6,19 +6,29 @@
 ## GitHub Configuration and Templates
 .github/ @aditeyabaral
 
-## Project Configuration
+## Shared Project Configuration
 pyproject.toml @aditeyabaral @joshua-rajj
-requirements.txt @aditeyabaral @joshua-rajj
 .pre-commit-config.yaml @aditeyabaral
-.env.example @aditeyabaral @joshua-rajj
-conf/  @aditeyabaral @joshua-rajj
+conf/ @aditeyabaral @joshua-rajj
+
+## API service
+services/api/pyproject.toml @aditeyabaral @joshua-rajj
+services/api/requirements.txt @aditeyabaral @joshua-rajj
+services/api/.env.example @aditeyabaral @joshua-rajj
+services/api/conf/ @aditeyabaral @joshua-rajj
+services/api/Dockerfile @aditeyabaral @joshua-rajj
+services/api/README.md @aditeyabaral
+
+## DB service
+services/db/pyproject.toml @aditeyabaral @joshua-rajj
+services/db/requirements.txt @aditeyabaral @joshua-rajj
+services/db/.env.example @aditeyabaral @joshua-rajj
+services/db/Dockerfile @aditeyabaral @joshua-rajj
+services/db/README.md @aditeyabaral
 
 ## Documentation and Legal
 README.md @aditeyabaral
 LICENSE @aditeyabaral
-
-## Infrastructure and Deployment
-Dockerfile @aditeyabaral @joshua-rajj
 
 ## Testing
 tests/ @aditeyabaral

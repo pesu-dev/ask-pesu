@@ -1,0 +1,36 @@
+# Shared Qdrant collection contract.
+#
+# services/db WRITES this collection; services/api READS it. Both must agree on
+# every value below -- a mismatch in the embedding model or vector dimensions
+# corrupts retrieval silently, and a mismatch in vector naming fails hard at API
+# startup. Change it here, once, rather than in either service alone.
+#
+# NOTE: as of the monorepo migration this file documents the contract; the two
+# services still carry these values in their own config/source. Wiring both to
+# read from here is a small follow-up, and lands with the hybrid retrieval work
+# that extends this contract with a named sparse vector.
+
+collection:
+  name: "ask-pesu"
+
+  dense:
+    model: "Alibaba-NLP/gte-modernbert-base"
+    size: 768
+    distance: "Cosine"
+    # Empty string is langchain_qdrant's VECTOR_NAME default (the unnamed vector).
+    vector_name: ""
+
+  # Payload keys written by services/db on every point. services/api reads
+  # `url` today; `permalink` is the more reliable citation target, since `url`
+  # points outward for link posts.
+  metadata:
+    - root_comment_id
+    - post_id
+    - author
+    - url
+    - permalink
+    - score
+    - upvote_ratio
+    - created_utc
+    - flair
+    - nsfw

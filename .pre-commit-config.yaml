@@ -1,4 +1,4 @@
-exclude: ^node_modules/
+exclude: node_modules/
 
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit

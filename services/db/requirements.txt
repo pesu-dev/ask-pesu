@@ -1,9 +1,9 @@
-fastapi
-uvicorn
-praw
 anytree
+fastapi
 langchain
 langchain-community
 langchain-qdrant
+praw
 qdrant-client
 sentence-transformers
+uvicorn

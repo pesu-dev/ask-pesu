@@ -1,17 +1,17 @@
 import os
-import praw
-from fastapi import FastAPI
-from fastapi.responses import JSONResponse
-from langchain_qdrant import QdrantVectorStore
-from langchain_community.embeddings import HuggingFaceEmbeddings
-from qdrant_client import QdrantClient
-from qdrant_client.models import VectorParams
 import threading
-from app.utils import build_thread_string, convert_to_uuid
-import uvicorn
-from dotenv import load_dotenv
 import traceback
 
+import praw
+import uvicorn
+from app.utils import build_thread_string, convert_to_uuid
+from dotenv import load_dotenv
+from fastapi import FastAPI
+from fastapi.responses import JSONResponse
+from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_qdrant import QdrantVectorStore
+from qdrant_client import QdrantClient
+from qdrant_client.models import VectorParams
 
 app = FastAPI()
 

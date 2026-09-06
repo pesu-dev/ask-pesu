@@ -39,17 +39,17 @@ pyrightconfig.json
 # Node / Frontend
 # =========================
 node_modules/
-frontend/node_modules/
+services/api/frontend/node_modules/
 *.lockb
 
 dist/
-frontend/dist/
+services/api/frontend/dist/
 
 dist-ssr/
-frontend/dist-ssr/
+services/api/frontend/dist-ssr/
 
 .next/
-frontend/.next/
+services/api/frontend/.next/
 
 # Package manager logs
 npm-debug.log*

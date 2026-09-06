@@ -1,7 +1,17 @@
 [project]
 name = "ask-pesu-db"
 version = "0.1.0"
-description = "Add your description here"
+description = "Reddit listener that keeps askPESU's Qdrant collection up to date."
 readme = "README.md"
-requires-python = ">=3.13"
-dependencies = []
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "praw",
+    "anytree",
+    "langchain",
+    "langchain-community",
+    "langchain-qdrant",
+    "qdrant-client",
+    "sentence-transformers",
+]
