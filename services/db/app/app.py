@@ -4,6 +4,7 @@ import traceback
 
 import praw
 import uvicorn
+from app.contract import CollectionContract, ContractViolationError
 from app.utils import build_thread_string, convert_to_uuid
 from dotenv import load_dotenv
 from fastapi import FastAPI
@@ -11,14 +12,23 @@ from fastapi.responses import JSONResponse
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
-from qdrant_client.models import VectorParams
 
 app = FastAPI()
 
 vector_store = None
 reddit = None
 subreddit = None
-collection_name = "ask-pesu"
+
+# The collection this service writes is contracted with services/api rather than
+# configured here -- name, embedding model, vector geometry and payload schema
+# all come from conf/collection.yaml and are enforced at startup and on write.
+contract = CollectionContract.load()
+
+# Set when the listener dies on a contract violation. Retrying would just write
+# more bad payloads, so the thread stops and /health starts failing instead of
+# leaving a live-looking Space with a dead writer.
+listener_error = None
+
 client_id = os.getenv("reddit_client_id")
 client_secret = os.getenv("reddit_client_secret")
 qdrant_url = os.getenv("qdrant_url")
@@ -27,6 +37,7 @@ qdrant_api_key = os.getenv("qdrant_api_key")
 
 def update_chunk(chunk_id: str, text: str, metadata: dict):
     """Overwrite if chunk exists, else add to Qdrant."""
+    contract.validate_payload(metadata)
     vector_store.add_texts(
         texts=[text],
         metadatas=[metadata],
@@ -44,6 +55,7 @@ def get_root_comment(comment):
 
 def listen_comments():
     """Main listener loop for new comments."""
+    global listener_error
     while True:
         try:
             for comment in subreddit.stream.comments(skip_existing=True):
@@ -80,6 +92,13 @@ def listen_comments():
                     convert_to_uuid(root_comment.id), chunk, metadata
                 )  # using UUID as Qdrant expects UUID as the point/vector id in the DB
                 print("Updated chunk.")
+        except ContractViolationError as error:
+            # A payload schema mismatch is a code/contract bug, not a transient
+            # failure -- retrying cannot fix it, so stop and surface it.
+            listener_error = str(error)
+            print("FATAL: contract violation in listener, stopping:")
+            traceback.print_exc()
+            return
         except Exception:
             print("Unexpected error in listener:")
             traceback.print_exc()
@@ -102,23 +121,22 @@ async def startup_event():
     )
 
     embeddings = HuggingFaceEmbeddings(
-        model_name="Alibaba-NLP/gte-modernbert-base",
+        model_name=contract.model,
         # model_kwargs={"device": "cpu"}
     )
+    contract.validate_embedding(embeddings)
 
-    try:
-        client.create_collection(
-            collection_name=collection_name,
-            vectors_config=VectorParams(size=768, distance="Cosine"),
-        )
-        print("Collection created")
-    except Exception:
-        print("Collection already exists")
+    # Creates the collection from the contract when absent; when it already
+    # exists, checks its geometry and raises rather than writing into a
+    # collection services/api will not be able to read.
+    created = contract.ensure_collection(client)
+    print(f"Collection {contract.name!r} {'created' if created else 'already exists and matches the contract'}")
 
     vector_store = QdrantVectorStore(
         client=client,
-        collection_name=collection_name,
+        collection_name=contract.name,
         embedding=embeddings,
+        vector_name=contract.vector_name,
     )
 
     reddit = praw.Reddit(
@@ -134,6 +152,8 @@ async def startup_event():
 
 @app.get("/health")
 async def health():
+    if listener_error:
+        return JSONResponse({"status": "error", "detail": listener_error}, status_code=503)
     return JSONResponse({"status": "ok"})
 
 

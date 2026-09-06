@@ -1,3 +1,13 @@
+# ---------------------------------------------------------------------------
+# GENERATED FILE -- DO NOT EDIT.
+#
+# Source of truth: conf/collection.yaml
+# Regenerate with: python scripts/sync_contract.py
+#
+# This copy exists because the service is deployed as a `git subtree split`,
+# which ships only services/<name>/. The repo-root contract never reaches the
+# running Space, so it is vendored here instead.
+# ---------------------------------------------------------------------------
 # Shared Qdrant collection contract.
 #
 # services/db WRITES this collection; services/api READS it. Both must agree on

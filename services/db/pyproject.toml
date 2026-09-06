@@ -11,7 +11,9 @@ dependencies = [
     "anytree",
     "langchain",
     "langchain-community",
+    "langchain-core",
     "langchain-qdrant",
+    "pyyaml",
     "qdrant-client",
     "sentence-transformers",
 ]

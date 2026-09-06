@@ -1,0 +1,49 @@
+name: Contract Checks
+
+# The Qdrant collection contract is authored once at conf/ and vendored into
+# each service, because `git subtree split` ships only services/<name>/ and the
+# repo root never reaches the deployed Space. These checks are what make the
+# vendoring trustworthy: the copies cannot drift, and they cannot go missing
+# from the tree that actually gets deployed.
+on: [ push, pull_request ]
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check vendored contract copies are in sync
+        run: python scripts/sync_contract.py --check
+
+      # Deliberately a thin dependency set: the contract module must not need
+      # the api's full LangChain/torch stack to be testable.
+      - name: Install test dependencies
+        run: pip install pytest pyyaml qdrant-client langchain-core
+
+      - name: Run contract tests
+        run: pytest tests/ -q
+
+      - name: Check each deployable subtree ships the contract
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          status=0
+          for svc in api db; do
+            git subtree split --prefix="services/$svc" HEAD -b "verify-$svc" >/dev/null
+            for path in conf/collection.yaml app/contract.py; do
+              if git cat-file -e "verify-$svc:$path" 2>/dev/null; then
+                echo "✅ services/$svc subtree ships $path"
+              else
+                echo "❌ services/$svc subtree is missing $path — it would deploy without the contract"
+                status=1
+              fi
+            done
+          done
+          exit $status

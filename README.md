@@ -13,27 +13,53 @@ Hugging Face Spaces but share one Qdrant collection, and therefore one schema co
 | [`services/api`](services/api) | FastAPI + LangChain RAG backend, and the React frontend it serves | [`askpesu`](https://huggingface.co/spaces/pesu-dev/askpesu) (prod), [`askpesu-dev`](https://huggingface.co/spaces/pesu-dev/askpesu-dev) (staging) |
 | [`services/db`](services/db) | Reddit listener that streams new r/PESU comment threads into Qdrant | [`askpesu-db`](https://huggingface.co/spaces/pesu-dev/askpesu-db) |
 
+## The collection contract
+
 `services/db` **writes** the Qdrant collection; `services/api` **reads** it. They must agree on
-the collection name, embedding model, vector dimensions, distance metric, and vector naming.
-That agreement is written down in [`conf/collection.yaml`](conf/collection.yaml) — change it
-there, for both services, rather than in either service alone.
+the collection name, embedding model, vector dimensions, distance metric, vector naming, and
+payload schema. A mismatch corrupts retrieval quietly, so the agreement is written down once in
+[`conf/collection.yaml`](conf/collection.yaml) and enforced by [`conf/contract.py`](conf/contract.py):
+
+- **The writer** creates the collection from the contract, refuses to write into one whose
+  geometry disagrees, and rejects any payload whose key set differs from the contracted list.
+- **The reader** refuses to start unless the live collection matches the contract, the loaded
+  embedding model is the contracted one at the contracted dimension, and every payload key it
+  consumes is one the contract guarantees is written.
+- **CI** checks the contract in [`tests/`](tests/test_contract.py).
+
+Change it in `conf/`, never in a service.
 
 ## Layout
 
 ```
 .
-├── conf/collection.yaml     # shared Qdrant schema contract
+├── conf/
+│   ├── collection.yaml      # the shared Qdrant contract (authored here)
+│   └── contract.py          # loader + startup enforcement (authored here)
+├── scripts/sync_contract.py # vendors both into each service; --check gates CI
 ├── pyproject.toml           # shared ruff + pytest configuration (no runtime deps)
+├── tests/                   # contract tests
 ├── .pre-commit-config.yaml
 └── services/
-    ├── api/                 # own README, Dockerfile, deps
-    └── db/                  # own README, Dockerfile, deps
+    ├── api/                 # own README, Dockerfile, deps + vendored contract
+    └── db/                  # own README, Dockerfile, deps + vendored contract
 ```
 
 Each service directory is self-contained and shaped like a repository root — its own
 `README.md` (carrying that Space's frontmatter), `Dockerfile`, and dependencies. Deploy
 workflows use `git subtree split` to push a single service directory to its Space, so the
 Space receives a tree identical to what that service would look like standing alone.
+
+That is also why the contract is **vendored**: a subtree split ships only `services/<name>/`,
+so a repo-root file would simply not exist at runtime. `services/*/conf/collection.yaml` and
+`services/*/app/contract.py` are generated copies — edit the originals under `conf/` and run:
+
+```bash
+python scripts/sync_contract.py
+```
+
+The pre-commit hook does this automatically, and CI fails on drift or on a subtree that would
+deploy without the contract.
 
 ## Development
 

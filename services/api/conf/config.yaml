@@ -1,6 +1,7 @@
 rag:
-  embedding: "Alibaba-NLP/gte-modernbert-base"
-  qdrant_collection: "ask-pesu"
+  # NOTE: the embedding model and the Qdrant collection name are NOT configured
+  # here. They are half of the writer/reader contract shared with services/db and
+  # live in conf/collection.yaml, which is enforced at startup.
   llm:
 
     primary:

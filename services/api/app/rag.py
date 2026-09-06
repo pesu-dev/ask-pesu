@@ -23,10 +23,17 @@ from langchain_huggingface.embeddings import HuggingFaceEmbeddings
 from langchain_qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
 
+from app.contract import CollectionContract
+
 load_dotenv()
 
 THINK_START = "<think>"
 THINK_END = "</think>"
+
+# Payload keys read out of retrieved documents. Checked against the contract at
+# startup so removing one from conf/collection.yaml fails here rather than as a
+# KeyError on the first query.
+REQUIRED_METADATA = ("url",)
 
 
 class ScoredRetriever(BaseRetriever):
@@ -60,13 +67,25 @@ class RetrievalAugmentedGenerator:
         with open(config_path) as file:
             self.config = yaml.safe_load(file)
 
-        self.embedding = HuggingFaceEmbeddings(model_name=self.config["rag"]["embedding"])
+        # The collection name, embedding model and vector geometry are contracted
+        # with services/db, not configured per service. Everything is checked
+        # before the first query, so a writer/reader mismatch is a startup crash
+        # naming the offending value rather than quietly wrong retrieval.
+        self.contract = CollectionContract.load()
+        self.contract.require_metadata(*REQUIRED_METADATA)
+
+        self.embedding = HuggingFaceEmbeddings(model_name=self.contract.model)
+        self.contract.validate_embedding(self.embedding)
 
         self.qdrant_client = QdrantClient(url=os.getenv("QDRANT_URL"), api_key=os.getenv("QDRANT_API_KEY"))
+        self.contract.validate_collection(self.qdrant_client)
+        logging.info(f"Qdrant collection {self.contract.name!r} matches conf/collection.yaml.")
+
         self.vector_store = QdrantVectorStore(
-            collection_name=self.config["rag"]["qdrant_collection"],
+            collection_name=self.contract.name,
             embedding=self.embedding,
             client=self.qdrant_client,
+            vector_name=self.contract.vector_name,
         )
 
         # Primary LLM — used for normal mode AND question rewriting in all modes

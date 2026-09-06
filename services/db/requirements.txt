@@ -2,8 +2,10 @@ anytree
 fastapi
 langchain
 langchain-community
+langchain-core
 langchain-qdrant
 praw
+pyyaml
 qdrant-client
 sentence-transformers
 uvicorn

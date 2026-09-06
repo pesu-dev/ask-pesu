@@ -14,6 +14,11 @@
 ## Shared Project Configuration
 /pyproject.toml @aditeyabaral @joshua-rajj
 /.pre-commit-config.yaml @aditeyabaral
+/scripts/ @aditeyabaral @joshua-rajj
+
+# The Qdrant collection contract: conf/collection.yaml is the writer/reader
+# agreement, conf/contract.py enforces it. Both are authored here and vendored
+# into the services below, so this is the only place either should be edited.
 /conf/ @aditeyabaral @joshua-rajj
 
 ## API service
@@ -21,6 +26,7 @@ services/api/pyproject.toml @aditeyabaral @joshua-rajj
 services/api/requirements.txt @aditeyabaral @joshua-rajj
 services/api/.env.example @aditeyabaral @joshua-rajj
 services/api/conf/ @aditeyabaral @joshua-rajj
+services/api/app/contract.py @aditeyabaral @joshua-rajj
 services/api/Dockerfile @aditeyabaral @joshua-rajj
 services/api/README.md @aditeyabaral
 
@@ -28,6 +34,8 @@ services/api/README.md @aditeyabaral
 services/db/pyproject.toml @aditeyabaral @joshua-rajj
 services/db/requirements.txt @aditeyabaral @joshua-rajj
 services/db/.env.example @aditeyabaral @joshua-rajj
+services/db/conf/ @aditeyabaral @joshua-rajj
+services/db/app/contract.py @aditeyabaral @joshua-rajj
 services/db/Dockerfile @aditeyabaral @joshua-rajj
 services/db/README.md @aditeyabaral
 
