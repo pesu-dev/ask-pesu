@@ -1,15 +1,20 @@
 # Maintainers for all files in the repository
 * @pesu-dev/ask-pesu-maintainers
 
-# Repository owner review for critical files
+# Repository owner review for critical files.
+#
+# NOTE: CODEOWNERS uses gitignore-style matching and the LAST matching rule
+# wins. A bare name like `README.md` matches every README.md at any depth, so
+# repository-root entries are anchored with a leading `/` to keep them from
+# silently overriding the per-service rules below.
 
 ## GitHub Configuration and Templates
-.github/ @aditeyabaral
+/.github/ @aditeyabaral
 
 ## Shared Project Configuration
-pyproject.toml @aditeyabaral @joshua-rajj
-.pre-commit-config.yaml @aditeyabaral
-conf/ @aditeyabaral @joshua-rajj
+/pyproject.toml @aditeyabaral @joshua-rajj
+/.pre-commit-config.yaml @aditeyabaral
+/conf/ @aditeyabaral @joshua-rajj
 
 ## API service
 services/api/pyproject.toml @aditeyabaral @joshua-rajj
@@ -27,8 +32,8 @@ services/db/Dockerfile @aditeyabaral @joshua-rajj
 services/db/README.md @aditeyabaral
 
 ## Documentation and Legal
-README.md @aditeyabaral
-LICENSE @aditeyabaral
+/README.md @aditeyabaral
+/LICENSE @aditeyabaral
 
 ## Testing
-tests/ @aditeyabaral
+/tests/ @aditeyabaral

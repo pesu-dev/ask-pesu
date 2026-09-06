@@ -7,11 +7,19 @@ on:
     workflows: [ "Pre-Commit Checks" ]
     types:
       - completed
+  # The workflow_run chain above has never actually fired: its head_branch
+  # guard does not match, because the Pre-Commit Checks runs that succeed are
+  # on fork PR branches. Manual dispatch is currently the only way to exercise
+  # these container builds at all.
+  workflow_dispatch:
 
 jobs:
   build-api:
     runs-on: ubuntu-latest
-    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'dev' }}
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'dev')
     steps:
       - uses: actions/checkout@v4
       - name: Get short commit hash
@@ -45,7 +53,10 @@ jobs:
 
   build-db:
     runs-on: ubuntu-latest
-    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'dev' }}
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'dev')
     steps:
       - uses: actions/checkout@v4
       - name: Get short commit hash
