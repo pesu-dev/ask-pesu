@@ -113,11 +113,15 @@ class CollectionContract:
         model_name = getattr(embedding, "model_name", None)
         if model_name is not None and model_name != self.model:
             raise ContractViolationError(f"Embedding model {model_name!r} != contracted {self.model!r}.")
-        encoder = getattr(embedding, "client", None)
-        dimension = getattr(encoder, "get_sentence_embedding_dimension", lambda: None)()
-        if dimension is not None and int(dimension) != self.size:
+        # Measured with a probe through the public Embeddings interface rather than
+        # read off the wrapped SentenceTransformer: the two services use different
+        # HuggingFaceEmbeddings classes, and they keep that object under different
+        # attribute names (`client` vs `_client`), so reaching for it makes the
+        # check silently no-op on whichever side does not match.
+        dimension = len(embedding.embed_query("contract dimension probe"))
+        if dimension != self.size:
             raise ContractViolationError(
-                f"Embedding model {self.model!r} produces {int(dimension)}-dim vectors, but "
+                f"Embedding model {self.model!r} produces {dimension}-dim vectors, but "
                 f"conf/collection.yaml contracts size {self.size}."
             )
 

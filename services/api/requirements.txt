@@ -27,8 +27,9 @@ cffi==2.0.0
     # via cryptography
 charset-normalizer==3.4.5
     # via requests
-click==8.3.1
+click==8.5.0
     # via
+    #   huggingface-hub
     #   typer
     #   uvicorn
 cryptography==46.0.5
@@ -67,7 +68,7 @@ h11==0.16.0
     #   uvicorn
 h2==4.3.0
     # via httpx
-hf-xet==1.4.2
+hf-xet==1.6.0
     # via huggingface-hub
 hpack==4.1.0
     # via h2
@@ -79,7 +80,7 @@ httpx==0.28.1
     #   langgraph-sdk
     #   langsmith
     #   qdrant-client
-huggingface-hub==1.7.1
+huggingface-hub==1.30.0
     # via
     #   ask-pesu (pyproject.toml)
     #   langchain-huggingface
@@ -313,9 +314,7 @@ transformers==5.3.0
 triton==3.6.0
     # via torch
 typer==0.24.1
-    # via
-    #   huggingface-hub
-    #   transformers
+    # via transformers
 typing-extensions==4.15.0
     # via
     #   aiosignal

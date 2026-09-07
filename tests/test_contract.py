@@ -118,20 +118,20 @@ class TestReaderDependencies:
         contract.require_metadata(*declared)
 
 
-class FakeEncoder:
-    def __init__(self, dimension):
-        self.dimension = dimension
-
-    def get_sentence_embedding_dimension(self):
-        return self.dimension
-
-
 class FakeEmbeddings:
-    """Stands in for HuggingFaceEmbeddings so the tests never download a model."""
+    """Stands in for HuggingFaceEmbeddings so the tests never download a model.
+
+    Deliberately exposes only the public `Embeddings` surface. The dimension check
+    must not depend on the wrapped SentenceTransformer, which langchain_community
+    exposes as `.client` and langchain_huggingface as `._client`.
+    """
 
     def __init__(self, model_name, dimension):
         self.model_name = model_name
-        self.client = FakeEncoder(dimension)
+        self.dimension = dimension
+
+    def embed_query(self, text):
+        return [0.0] * self.dimension
 
 
 class TestEmbeddingModel:
@@ -145,3 +145,11 @@ class TestEmbeddingModel:
     def test_rejects_wrong_dimension(self, contract):
         with pytest.raises(ContractViolationError, match="1024-dim"):
             contract.validate_embedding(FakeEmbeddings(contract.model, 1024))
+
+    def test_dimension_check_uses_only_the_public_interface(self, contract):
+        """Regression guard: reading the wrapped encoder off an attribute made this
+        check silently pass for langchain_huggingface, which names it `_client`."""
+        embedding = FakeEmbeddings(contract.model, 1024)
+        assert not hasattr(embedding, "client") and not hasattr(embedding, "_client")
+        with pytest.raises(ContractViolationError):
+            contract.validate_embedding(embedding)
