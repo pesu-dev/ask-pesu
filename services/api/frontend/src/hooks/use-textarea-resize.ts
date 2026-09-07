@@ -1,3 +1,5 @@
+// Grows the composer textarea with its content up to a cap, so long questions
+// stay visible without the box taking over the screen.
 import { useRef, useEffect, useCallback } from "react";
 
 export function useTextareaResize(value: string, minRows: number = 1) {

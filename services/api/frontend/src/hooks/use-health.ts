@@ -1,3 +1,5 @@
+// Polls /health so the UI can show when the backend is unreachable rather than
+// letting the first question fail with no explanation.
 import useSWR from "swr";
 import { fetchHealth, HealthResponse } from "@/lib/api";
 

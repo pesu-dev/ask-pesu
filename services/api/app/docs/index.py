@@ -1,4 +1,7 @@
-"""Custom docs for the / endpoint."""
+"""OpenAPI examples for /, which serves the compiled single-page app.
+
+Documented as an HTML response so the schema does not imply a JSON body.
+"""
 
 from app.docs.base import ApiDocs
 

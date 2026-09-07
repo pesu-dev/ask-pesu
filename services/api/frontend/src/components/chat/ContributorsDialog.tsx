@@ -1,3 +1,4 @@
+// Credits dialog listing project contributors.
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { X, Anchor } from "lucide-react";

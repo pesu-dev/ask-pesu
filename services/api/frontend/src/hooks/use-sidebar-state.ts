@@ -1,3 +1,4 @@
+// Remembers whether the conversation sidebar is collapsed, across reloads.
 import { useState, useEffect } from "react";
 
 const STORAGE_KEY = "askpesu-sidebar-collapsed";

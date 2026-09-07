@@ -1,3 +1,5 @@
+// Polls /quota so a model already in cooldown can be disabled in the UI, instead
+// of letting the user send a question that is certain to come back 429.
 import useSWR from "swr";
 import { fetchQuota, QuotaResponse } from "@/lib/api";
 

@@ -1,3 +1,13 @@
+// The chat screen: conversation list, message thread, composer.
+//
+// Owns the streaming lifecycle. Two paths call askStream -- handleSubmit for a
+// normal question and handleThinkLonger for re-answering an existing reply with
+// the thinking model -- and both must handle all four event types, since a
+// dropped `error` event leaves a failure invisible.
+//
+// Tokens are buffered and flushed on requestAnimationFrame: the model emits far
+// faster than the browser can usefully repaint, so applying every token as its
+// own state update would thrash React for no visible gain.
 import { useState, useRef, useCallback, useEffect } from "react";
 import { AnimatePresence, motion, PanInfo } from "framer-motion";
 import { AppSidebar } from "@/components/AppSidebar";
@@ -338,8 +348,16 @@ export default function Index() {
         history, // Now includes only previous messages, not the one being deepened
         signal: ac.signal, // NEW AbortController signal
         onEvent: (evt) => {
-          if (streamClosed) return;
-          if (evt.type === "token") {
+          if (streamClosed) return; // ignore anything arriving after fail/done
+          if (evt.type === "step") {
+            // Reasoning text from the thinking model. Dropping these was
+            // especially wrong here: this handler exists to run that model, so
+            // it was the one path guaranteed to produce steps.
+            updateAssistantMessage(convId, thinkingResponseId, (m) => ({
+              ...m,
+              status: evt.content,
+            }));
+          } else if (evt.type === "token") {
             pendingTokens += evt.content;
             scheduleFlush();
           } else if (evt.type === "done") {
@@ -354,6 +372,18 @@ export default function Index() {
                 status: undefined,
               };
             });
+          } else if (evt.type === "error") {
+            // The backend reports a mid-stream failure as an error event and
+            // then done. Without this branch, done finalised an empty message
+            // and the failure was invisible. Closing the stream here makes the
+            // trailing done a no-op.
+            streamClosed = true;
+            flush();
+            updateAssistantMessage(convId, thinkingResponseId, (m) => ({
+              ...m,
+              status: undefined,
+              error: evt.content || "The model returned an error.",
+            }));
           }
         },
       });

@@ -1,7 +1,11 @@
-"""Custom docs for the /ask route."""
+"""OpenAPI examples for the /ask route.
+
+The 200 response is a newline-delimited JSON stream, not a JSON document, so the
+example below is a literal transcript of the wire format rather than an object.
+"""
 
 from app.docs.base import ApiDocs
-from app.models import AskResponseModel
+from app.models import AskErrorResponseModel
 
 ask_docs = ApiDocs(
     request_examples={
@@ -24,48 +28,51 @@ ask_docs = ApiDocs(
     },
     response_examples={
         200: {
-            "description": "Successful Question Answering",
-            "model": AskResponseModel,
+            "description": (
+                "Newline-delimited JSON. One object per line, streamed as generation proceeds. "
+                "`step` events appear only in thinking mode. `done` is always last, including after `error`."
+            ),
             "content": {
-                "application/json": {
-                    "example": {
-                        "status": True,
-                        "message": "Answer generated successfully.",
-                        "answer": (
-                            "Bootstrap at PES University is a week-long (typically 5-day) series of activities "
-                            "for freshers, usually held before regular classes commence. Its main purpose is to "
-                            "help students socialize, make new friends, and network with batchmates and seniors. "
-                            "It also allows them to explore various academic branches through simple and engaging "
-                            "activities."
-                        ),
-                        "timestamp": "2024-07-28T22:30:10.103368+05:30",
-                        "latency": 1.234,
-                    }
+                "text/plain": {
+                    "schema": {"type": "string", "format": "ndjson"},
+                    "example": (
+                        '{"type": "step", "content": "Searching documents..."}\n'
+                        '{"type": "token", "content": "Bootstrap at PES University is "}\n'
+                        '{"type": "token", "content": "a week-long series of activities for freshers."}\n'
+                        '{"type": "done"}\n'
+                    ),
                 }
             },
         },
         429: {
-            "description": "Quota Exceeded",
-            "model": AskResponseModel,
+            "description": "The requested model is in quota cooldown. Nothing is streamed.",
+            "model": AskErrorResponseModel,
             "content": {
                 "application/json": {
                     "example": {
                         "status": False,
-                        "message": "Thinking mode temporarily unavailable due to quota limits. Please try again later.",
+                        "message": "Thinking mode is temporarily unavailable due to quota limits.",
+                        "quota": {
+                            "thinking": {"available": False, "next_available": "2025-09-15T00:42:19+05:30"},
+                            "primary": {"available": True},
+                        },
                         "timestamp": "2024-07-28T22:35:10.103368+05:30",
                     }
                 }
             },
         },
         500: {
-            "description": "Internal Server Error",
-            "model": AskResponseModel,
+            "description": (
+                "The request failed before streaming began. A failure *during* generation cannot use this "
+                "shape -- the status line is already sent -- and arrives as an `error` event instead."
+            ),
+            "model": AskErrorResponseModel,
             "content": {
                 "application/json": {
                     "example": {
                         "status": False,
-                        "message": "Internal Server Error. Please try again later.",
-                        "timestamp": "2024-07-28T22:30:10.103368+05:30",
+                        "message": "An unexpected error occurred.",
+                        "timestamp": "2024-07-28T22:40:10.103368+05:30",
                     }
                 }
             },

@@ -1,4 +1,7 @@
-"""Custom docs for the /health route."""
+"""OpenAPI examples for /health.
+
+Kept beside the route rather than inline so the decorator stays readable.
+"""
 
 from app.docs.base import ApiDocs
 from app.models import HealthResponseModel

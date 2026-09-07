@@ -1,4 +1,8 @@
-"""Model representing the response for the /health route."""
+"""What /health returns.
+
+A liveness answer only: reaching this code means the process started, which
+already implies the collection contract check passed.
+"""
 
 from datetime import datetime
 

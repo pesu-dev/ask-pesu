@@ -1,4 +1,9 @@
-"""Helpers for rendering a Reddit comment thread into an indexable string."""
+"""Helpers for turning a Reddit comment thread into one indexable string.
+
+A thread is a tree, but an embedding model takes flat text. These render the tree
+as indentation, which preserves who replied to whom well enough for the model to
+follow a conversation.
+"""
 
 import uuid
 
@@ -7,12 +12,30 @@ from praw.models import Comment
 
 
 def convert_to_uuid(string: str) -> str:
-    """Convert Reddit comment ID to UUID."""
+    """Derive a stable UUID from a Reddit id.
+
+    Qdrant point ids must be a UUID or an unsigned integer, and Reddit's base-36
+    ids are neither. uuid5 is a hash, not random, so the same comment id always
+    yields the same point id -- which is what makes re-indexing a thread an
+    overwrite instead of a duplicate.
+    """
     return str(uuid.uuid5(uuid.NAMESPACE_OID, string))
 
 
 def build_anytree(comment: Comment, parent_node: Node | None = None) -> Node | None:
-    """Build an anytree node for a comment and, recursively, its replies."""
+    """Mirror a comment and its replies into an anytree node.
+
+    Deleted comments and network failures raise part-way through a tree, so
+    failures are swallowed per node: losing one reply is much better than losing
+    the whole thread.
+
+    Args:
+        comment: The comment to convert.
+        parent_node: Node to attach to; None for the root.
+
+    Returns:
+        The node, or None if this comment could not be read.
+    """
     try:
         node = Node(f"{comment.body}", parent=parent_node)
         for reply in comment.replies:
@@ -24,7 +47,16 @@ def build_anytree(comment: Comment, parent_node: Node | None = None) -> Node | N
 
 
 def build_thread_string(root_comment: Comment) -> str:
-    """Render a comment thread as indented text, or a placeholder if it cannot be read."""
+    """Render a whole thread as indented plain text.
+
+    ``refresh()`` is required: praw returns comment trees lazily and truncated,
+    so without it the replies are simply absent.
+
+    Returns:
+        The indented thread, or ``"COMMENT TREE UNAVAILABLE"`` if it could not be
+        read -- a placeholder rather than an exception, so the submission title
+        and body still get indexed.
+    """
     try:
         root_comment.refresh()
     except Exception as e:

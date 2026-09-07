@@ -1,4 +1,9 @@
-"""This module defines the class for API documentation purposes across different routes."""
+"""The container every route's OpenAPI examples are packed into.
+
+FastAPI takes request examples through ``openapi_extra`` and response examples
+through ``responses``; pairing them in one frozen object keeps a route's
+documentation in a single import.
+"""
 
 from dataclasses import dataclass
 

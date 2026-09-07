@@ -1,4 +1,8 @@
-"""Custom docs for the /quota route."""
+"""OpenAPI examples for /quota.
+
+Shows both shapes a model can be in: available, and in cooldown with a
+``next_available`` timestamp.
+"""
 
 from app.docs.base import ApiDocs
 from app.models import QuotaResponseModel

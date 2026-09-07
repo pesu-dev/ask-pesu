@@ -1,4 +1,17 @@
-"""Reddit listener that keeps askPESU's shared Qdrant collection up to date."""
+"""Reddit listener that keeps askPESU's shared Qdrant collection up to date.
+
+Runs as a Hugging Face Space, which expects a web server, so this is a FastAPI
+app whose only real job happens on a background thread: consume new r/PESU
+comments forever and upsert the thread each one belongs to.
+
+The unit of indexing is a **thread**, not a comment. When any comment arrives the
+whole thread is re-rendered and written under a point id derived from the root
+comment, so a busy thread is repeatedly overwritten rather than duplicated, and
+retrieval returns a conversation with its context instead of an orphan reply.
+
+What it writes is fixed by ``conf/collection.yaml`` and enforced on every upsert;
+see :mod:`app.contract`.
+"""
 
 import os
 import threading
@@ -44,7 +57,20 @@ qdrant_api_key = os.getenv("QDRANT_API_KEY")
 
 
 def update_chunk(chunk_id: str, text: str, metadata: dict) -> None:
-    """Overwrite if chunk exists, else add to Qdrant."""
+    """Embed and upsert one thread, replacing any previous version of it.
+
+    Qdrant upserts by id, so passing a stable id makes re-processing idempotent.
+
+    Args:
+        chunk_id: Point id -- a UUID derived from the root comment id.
+        text: The rendered thread; this is what gets embedded and later retrieved.
+        metadata: Payload stored alongside the vector. Validated against the
+            contract first, so a drifting schema fails here rather than being
+            discovered later by a reader that cannot find a key it needs.
+
+    Raises:
+        ContractViolationError: If the payload's keys differ from the contract.
+    """
     contract_mod.validate_payload(contract, metadata)
     vector_store.add_texts(
         texts=[text],
@@ -54,7 +80,17 @@ def update_chunk(chunk_id: str, text: str, metadata: dict) -> None:
 
 
 def get_root_comment(comment: Comment) -> Comment:
-    """Get root comment of the comment thread."""
+    """Walk up to the top-level comment that starts this thread.
+
+    Each ``parent()`` call may hit the network, so this is a few requests deep on
+    a nested reply -- acceptable because it runs once per new comment.
+
+    Args:
+        comment: Any comment in the thread.
+
+    Returns:
+        The top-level comment; the same object if it was already root.
+    """
     parent = comment
     while not parent.is_root:
         parent = parent.parent()
@@ -62,11 +98,23 @@ def get_root_comment(comment: Comment) -> Comment:
 
 
 def listen_comments() -> None:
-    """Main listener loop for new comments."""
+    """Consume new r/PESU comments forever, indexing the thread each belongs to.
+
+    ``skip_existing=True`` means only comments posted *after* startup are seen;
+    this service never backfills.
+
+    Two failure modes, deliberately treated differently. Network and Reddit errors
+    are transient, so the stream is simply re-entered. A contract violation is a
+    bug that retrying cannot fix, so the loop stops and records the reason for
+    /health to report -- better a visibly dead writer than one silently writing
+    payloads the reader cannot use.
+    """
     global listener_error
     while not shutdown.is_set():
         try:
             for comment in subreddit.stream.comments(skip_existing=True):
+                # AutoModerator posts boilerplate on many threads; indexing it
+                # would put the same text in front of unrelated questions.
                 author = str(comment.author).lower()
                 if author == "automoderator":
                     continue
@@ -77,6 +125,8 @@ def listen_comments() -> None:
                 print("Root comment:", root_comment.body)
                 print("Root ID:", root_comment.id)
 
+                # Title and body give the thread its topic; without them a reply
+                # like "yes, around 8.5" embeds with no idea what it is about.
                 chunk = (
                     f"TITLE: {submission.title}\n"
                     f"CONTENT: {submission.selftext}\n"
@@ -96,9 +146,10 @@ def listen_comments() -> None:
                     "nsfw": submission.over_18,
                 }
 
-                update_chunk(
-                    convert_to_uuid(root_comment.id), chunk, metadata
-                )  # using UUID as Qdrant expects UUID as the point/vector id in the DB
+                # Qdrant point ids must be a UUID or an unsigned integer, and
+                # Reddit ids are neither -- hashing gives a stable UUID, so the
+                # same thread always lands on the same point and overwrites it.
+                update_chunk(convert_to_uuid(root_comment.id), chunk, metadata)
                 print("Updated chunk.")
         except contract_mod.ContractViolationError as error:
             # A payload schema mismatch is a code/contract bug, not a transient
@@ -113,7 +164,11 @@ def listen_comments() -> None:
 
 
 def background_listener() -> None:
-    """Run listener in a thread so FastAPI stays responsive."""
+    """Start the listener on a daemon thread.
+
+    The stream blocks, so it cannot share the event loop. Daemon means a stopping
+    process is never held up by a thread parked waiting for the next comment.
+    """
     thread = threading.Thread(target=listen_comments, daemon=True)
     thread.start()
 

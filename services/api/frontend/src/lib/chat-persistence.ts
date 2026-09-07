@@ -1,3 +1,9 @@
+// Conversation persistence, in the browser only.
+//
+// There is no server-side chat storage: conversations live in localStorage under
+// a single key, and the client replays the relevant history with each /ask call.
+// That means history is per-device and clearing site data loses it -- a
+// deliberate trade for storing nothing about users on the server.
 import { Conversation } from "./chat-store";
 
 const STORAGE_KEY = "askpesu-conversations";

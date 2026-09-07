@@ -1,5 +1,11 @@
-// Frontend API client. All URLs are relative so the FastAPI backend can
-// serve the built assets on the same origin without any CORS config.
+// Frontend API client.
+//
+// All URLs are relative. In production FastAPI serves these built assets from
+// the same origin, and in development Vite proxies these paths to the backend
+// (see vite.config.ts), so neither case is a cross-origin request.
+//
+// The interesting part is askStream: /ask replies with newline-delimited JSON
+// rather than a JSON document, so the response is consumed incrementally.
 import { Source } from "@/lib/chat-store";
 
 export interface QuotaInfo {
@@ -24,6 +30,8 @@ export interface HistoryEntry {
   content: string;
 }
 
+// One line of the /ask stream. Mirrors AskStreamEventModel in
+// services/api/app/models/response/ask.py -- change both together.
 export type StreamEvent =
   | { type: "step"; content: string }
   | { type: "token"; content: string }
@@ -74,16 +82,25 @@ export async function askStream({
   onEvent,
 }: AskOptions): Promise<AskResult> {
 
-  const formattedHistory = history.map((entry, idx) => {
-    if (entry.role === "user") {
-      return { query: entry.content, answer: "" };
-    } else {
-      // Get previous user message's content as the query
-      const prevUserIdx = idx - 1;
-      const prevQuery = history[prevUserIdx]?.content || "";
-      return { query: prevQuery, answer: entry.content };
-    }
-  });
+  // The backend wants one {query, answer} per exchange, but the UI stores a flat
+  // list of messages. Pair each user message with the assistant reply that
+  // follows it.
+  //
+  // Mapping per-message instead sent every exchange twice -- once as
+  // {query, answer: ""} for the user message and again as {query, answer} for
+  // the reply -- so the model saw the whole conversation duplicated, half of it
+  // with blank answers.
+  const formattedHistory: { query: string; answer: string }[] = [];
+  for (let i = 0; i < history.length; i++) {
+    if (history[i].role !== "user") continue;
+    const reply = history[i + 1];
+    formattedHistory.push({
+      query: history[i].content,
+      // A trailing user message with no reply yet (an aborted or failed turn)
+      // still carries useful context, so keep it with an empty answer.
+      answer: reply?.role === "assistant" ? reply.content : "",
+    });
+  }
 
   const resp = await fetch("/ask", {
     method: "POST",
@@ -96,6 +113,10 @@ export async function askStream({
     return { status: resp.status, ok: false };
   }
 
+  // Read the body as it arrives. A chunk is an arbitrary slice of bytes, so it
+  // can split a JSON object -- or even a multi-byte character -- in half.
+  // `stream: true` lets the decoder hold a partial character back, and `buffer`
+  // does the same for a partial line.
   const reader = resp.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
@@ -125,7 +146,10 @@ export async function askStream({
     }
 
     if (events.length > 0) {
-      // Batch 'token' events for smoother rendering
+      // Coalesce runs of tokens into one event. Each event triggers a React
+      // state update, and the model emits tokens far faster than the browser can
+      // usefully repaint; merging them cuts renders without changing the text.
+      // Non-token events act as boundaries so ordering is preserved.
       const batchedEvents: StreamEvent[] = [];
       let tokenBuffer = "";
 
@@ -149,7 +173,8 @@ export async function askStream({
     }
   }
 
-  // flush any trailing buffered line
+  // The stream ended without a trailing newline after the last object -- emit it
+  // rather than dropping it, since that last line is usually `done`.
   const tail = buffer.trim();
   if (tail) {
     try {
@@ -162,6 +187,14 @@ export async function askStream({
   return { status: resp.status, ok: true };
 }
 
+/**
+ * Pull the citation list out of an answer and return the prose without it.
+ *
+ * The system prompt asks the model to end with a `**Sources:**` list of markdown
+ * links, which the UI renders as source cards instead of raw text. Models do not
+ * follow that format perfectly, so this tolerates variations in the heading and
+ * falls back to scanning for bullet-pointed links anywhere in the answer.
+ */
 export function extractSources(content: string): { cleanContent: string; sources: Source[] } {
   const sources: Source[] = [];
 

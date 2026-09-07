@@ -1,3 +1,4 @@
+// Surfaces stream and connectivity failures inline in the thread.
 import { AlertTriangle, RefreshCw, X } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";

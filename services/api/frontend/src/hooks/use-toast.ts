@@ -1,3 +1,4 @@
+// Vendored from shadcn/ui: toast state store. Paired with components/ui/toaster.
 import * as React from "react";
 
 import type { ToastActionElement, ToastProps } from "@/components/ui/toast";

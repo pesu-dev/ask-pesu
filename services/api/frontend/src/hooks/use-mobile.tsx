@@ -1,3 +1,5 @@
+// Tracks a viewport breakpoint so layout can switch between the desktop sidebar
+// and the mobile drawer.
 import * as React from "react";
 
 const MOBILE_BREAKPOINT = 768;

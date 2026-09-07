@@ -1,3 +1,5 @@
+// Fallback for unknown client-side routes. The backend serves index.html for
+// the root and lets the SPA route from there.
 import { useLocation } from "react-router-dom";
 import { useEffect } from "react";
 

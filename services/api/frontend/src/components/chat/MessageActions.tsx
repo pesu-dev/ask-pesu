@@ -1,3 +1,4 @@
+// Per-message actions: copy, and re-answer with the thinking model.
 import { useState } from "react";
 import { Copy, Check, Brain } from "lucide-react";
 import { cn } from "@/lib/utils";

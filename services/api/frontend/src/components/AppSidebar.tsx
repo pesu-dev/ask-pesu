@@ -1,3 +1,4 @@
+// Conversation list sidebar: switch, rename and delete saved conversations.
 import { useState } from "react";
 import { cn } from "@/lib/utils";
 import { Conversation } from "@/lib/chat-store";

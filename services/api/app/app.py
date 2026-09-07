@@ -1,4 +1,20 @@
-"""FastAPI application for AskPESU backend APIs."""
+"""HTTP surface of askPESU: routes, lifespan, and static file serving.
+
+This one process serves both the API and the compiled React frontend from the
+same origin, which is why production needs no CORS configuration and the client
+can use relative URLs.
+
+Routes:
+
+- ``GET  /``             the SPA entrypoint
+- ``POST /ask``          question answering, streamed as NDJSON
+- ``POST /rewriteQuery`` condense a question into a conversation title
+- ``GET  /health``       liveness
+- ``GET  /quota``        per-model cooldown state
+
+The expensive machinery -- embedding model, reranker, Qdrant client -- is built
+once in :func:`lifespan` and shared by every request.
+"""
 
 import argparse
 import asyncio
@@ -19,7 +35,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.docs import ask_docs, health_docs, index_docs, quota_docs
-from app.models import AskRequestModel, AskResponseModel, HealthResponseModel, QuotaResponseModel, ShortenQueryModel
+from app.models import AskRequestModel, HealthResponseModel, QuotaResponseModel, ShortenQueryModel
 from app.quota import QuotaExceededError, QuotaState
 from app.rag import RetrievalAugmentedGenerator
 
@@ -28,7 +44,14 @@ load_dotenv()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Lifespan event handler for startup and shutdown events."""
+    """Build the RAG pipeline before the server accepts traffic.
+
+    Everything expensive or fallible happens here rather than per request:
+    loading the embedding model and reranker, connecting to Qdrant, and checking
+    the collection contract. Anything raised aborts startup, so a deployment
+    pointed at a missing or mismatched collection never binds a port -- which is
+    what we want, because the alternative is answering from the wrong data.
+    """
     # Startup
     logging.info("AskPESU API startup")
 
@@ -62,12 +85,16 @@ app = FastAPI(
 )
 
 
+# CORS is a development-only convenience. In production FastAPI serves the built
+# frontend from this same origin, and `npm run dev` proxies /ask, /health, /quota
+# and /rewriteQuery to this server (see frontend/vite.config.ts), so neither path
+# makes a cross-origin request. These entries only matter if you point a frontend
+# on another origin at this API.
 origins = [
-    "http://localhost:3000",
-    "http://localhost:5173",
-    "http://127.0.0.1:3000",
+    "http://localhost:8080",  # the port vite.config.ts serves on
+    "http://127.0.0.1:8080",
+    "http://localhost:5173",  # vite's own default, if the port is overridden
     "http://127.0.0.1:5173",
-    "https://huggingface.co",
 ]
 
 app.add_middleware(
@@ -79,17 +106,24 @@ app.add_middleware(
 )
 
 
-# Initialize globals
-DIST_DIR = "frontend/dist"  # Directory for static files (built from frontend)
-IST = pytz.timezone("Asia/Kolkata")  # Indian Standard Time timezone
-rag: RetrievalAugmentedGenerator | None = None  # Global variable to hold the RAG instance
+# Where the Dockerfile's frontend build stage leaves the compiled SPA. Relative
+# to the working directory, which is /app in the image.
+DIST_DIR = "frontend/dist"
+# All user-facing timestamps are Indian Standard Time; the audience is one campus.
+IST = pytz.timezone("Asia/Kolkata")
+# Populated by the lifespan handler. None only before startup completes.
+rag: RetrievalAugmentedGenerator | None = None
 
-# Global state to track if 'thinking' mode is enabled
+# Cooldowns are tracked per model, so exhausting the thinking model's quota does
+# not take normal mode down with it. This lives in process memory: a restart
+# clears it, and multiple replicas would not share it.
 THINKING_STATE = QuotaState(name="thinking", cooldown_hours=24)
-# Global state to track if primary LLM is enabled
 PRIMARY_STATE = QuotaState(name="primary", cooldown_hours=24)
 
-# Mount static files
+# Hashed asset bundles are served directly. Everything else falls through to the
+# routes below, so client-side routing still works. This mount fails loudly at
+# import if the frontend was never built -- the clearest signal that a deploy
+# shipped without its dist/ directory.
 app.mount(
     "/assets",
     StaticFiles(directory=f"{DIST_DIR}/assets"),
@@ -98,7 +132,12 @@ app.mount(
 
 
 async def test_stream() -> AsyncIterator[str]:
-    """Simulate a streaming response for the /ask endpoint."""
+    """Replay a canned answer in the real NDJSON format, for ``ENV=test``.
+
+    Lets the frontend be developed against realistic streaming -- including
+    thinking steps, markdown, LaTeX and a Sources list -- without a Qdrant
+    instance, an HF token, or spending inference quota.
+    """
     # Step 1
     yield json.dumps({"type": "step", "content": "Searching documents...\n"}) + "\n"
     await asyncio.sleep(0.02)
@@ -150,7 +189,11 @@ def get_quota_status() -> dict:
 
 @app.exception_handler(QuotaExceededError)
 async def quota_exceeded_exception_handler(_request: Request, exc: QuotaExceededError) -> JSONResponse:
-    """Handler for LLM quota cooldown errors."""
+    """Turn a quota cooldown into a 429 carrying the full quota snapshot.
+
+    The snapshot lets the client tell the user *when* to come back, and whether
+    the other mode is still usable, without a follow-up call to /quota.
+    """
     logging.warning(f"Quota exceeded: {exc}")
     return JSONResponse(
         status_code=429,
@@ -165,7 +208,12 @@ async def quota_exceeded_exception_handler(_request: Request, exc: QuotaExceeded
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(_request: Request, _exc: Exception) -> JSONResponse:
-    """Handler for unhandled exceptions."""
+    """Return a generic 500 for anything unhandled.
+
+    The exception is logged in full but deliberately not returned: tracebacks can
+    carry connection strings and prompt content. Note this cannot catch failures
+    inside a response that has already started streaming.
+    """
     logging.exception("Unhandled exception occurred.")
     return JSONResponse(
         status_code=500,
@@ -184,29 +232,53 @@ async def unhandled_exception_handler(_request: Request, _exc: Exception) -> JSO
     responses=index_docs.response_examples,
 )
 async def index() -> FileResponse:
-    """Serve the main entrypoint (index.html) from the built static files."""
+    """Serve the compiled single-page app.
+
+    Only the root path is served here; hashed bundles come from the /assets
+    mount. The SPA handles its own routing once loaded.
+    """
     return FileResponse(f"{DIST_DIR}/index.html")
 
 
-@app.post("/rewriteQuery", response_model=ShortenQueryModel)
-async def rewrite_query(payload: AskRequestModel) -> JSONResponse:
-    """Endpoint to shorten query to name the chat."""
+@app.post(
+    "/rewriteQuery",
+    response_model=ShortenQueryModel,
+    tags=["Generation"],
+)
+async def rewrite_query(payload: AskRequestModel) -> ShortenQueryModel:
+    """Condense a question into a short title for the conversation sidebar.
+
+    Only ``query`` is read; ``thinking`` and ``history`` are ignored. The request
+    model is shared with /ask so the client can post the same object it already
+    has, without a second schema.
+    """
     return ShortenQueryModel(query=await rag.shorten_query(payload.query))
 
 
 @app.post(
     "/ask",
-    response_model=AskResponseModel,
-    response_class=JSONResponse,
+    # No response_model: the body is a newline-delimited JSON stream, which
+    # FastAPI cannot validate against a model. The shape is documented through
+    # `responses` instead -- see app/docs/ask.py. response_class keeps FastAPI
+    # from advertising a default application/json body it never returns.
+    response_class=StreamingResponse,
     openapi_extra=ask_docs.request_examples,
     responses=ask_docs.response_examples,
     tags=["Generation"],
 )
 async def ask(payload: AskRequestModel) -> StreamingResponse:
-    """Endpoint to handle question-answering requests.
+    """Answer a question, streaming the result as newline-delimited JSON.
 
-    Automatically manages LLM quota with cooldowns.
-    May raise 429 if 'thinking' or 'primary' mode is temporarily unavailable.
+    Returns as soon as the first token is ready rather than waiting for the whole
+    answer, so the UI can render progressively.
+
+    Quota is checked *before* streaming starts, because that is the only point at
+    which a 429 can still be sent -- once the response has begun the status line
+    is committed, and failures can only be reported as an `error` event.
+
+    Raises:
+        QuotaExceededError: If the requested model is in cooldown. The handler
+            turns this into a 429 carrying the current quota snapshot.
     """
     global THINKING_STATE, PRIMARY_STATE
     logging.debug(f"Received /ask question: {payload.query}")
@@ -232,8 +304,21 @@ async def ask(payload: AskRequestModel) -> StreamingResponse:
 
     if os.getenv("ENV") == "test":
         return StreamingResponse(test_stream(), media_type="text/plain")
+
+    # A quota failure surfaces mid-stream, so the pipeline calls back here to
+    # start the cooldown; without this the state machine could never trip and
+    # /quota would always report available.
+    state = THINKING_STATE if payload.thinking else PRIMARY_STATE
     return StreamingResponse(
-        rag.generate(query=payload.query, thinking=payload.thinking, history=payload.history),
+        rag.generate(
+            query=payload.query,
+            thinking=payload.thinking,
+            history=payload.history,
+            on_quota_exceeded=state.disable,
+        ),
+        # text/plain rather than application/x-ndjson: intermediaries are more
+        # likely to stream it through unbuffered, and the client splits on
+        # newlines regardless of the declared type.
         media_type="text/plain",
         status_code=200,
     )
@@ -248,7 +333,12 @@ async def ask(payload: AskRequestModel) -> StreamingResponse:
     tags=["Monitoring"],
 )
 async def health() -> JSONResponse:
-    """Health check endpoint."""
+    """Report that the process is up.
+
+    Liveness only. It does not probe Qdrant or the inference provider, because
+    the contract check at startup means the process would not be running at all
+    if the collection were wrong.
+    """
     logging.debug("Health check requested.")
     response = HealthResponseModel(
         status=True,
@@ -267,7 +357,11 @@ async def health() -> JSONResponse:
     tags=["Monitoring"],
 )
 async def quota() -> JSONResponse:
-    """Quota status endpoint."""
+    """Report per-model cooldown state so the UI can disable a mode before it is used.
+
+    Refreshes first, so a cooldown that has expired is reported as available
+    rather than waiting for the next request to clear it.
+    """
     logging.debug("Quota status requested.")
     response = QuotaResponseModel(
         status=True,

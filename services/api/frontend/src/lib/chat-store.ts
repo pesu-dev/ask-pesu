@@ -1,3 +1,6 @@
+// Types and helpers for the conversation model held in React state.
+// A conversation is a list of messages plus the sources attached to assistant
+// replies; nothing here talks to the network or to storage.
 export interface Source {
   title: string;
   url: string;

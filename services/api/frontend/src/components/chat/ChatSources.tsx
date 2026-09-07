@@ -1,3 +1,4 @@
+// Source cards built from the citations extractSources() pulled out of an answer.
 import { useState } from "react";
 import { Source } from "@/lib/chat-store";
 import { ChevronDown, ExternalLink, FileText, FileX } from "lucide-react";

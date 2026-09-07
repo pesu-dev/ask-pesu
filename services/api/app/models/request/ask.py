@@ -1,4 +1,8 @@
-"""Model representing a request made to the /ask route."""
+"""What clients send to /ask (and, reusing the same body, /rewriteQuery).
+
+``strict=True`` makes pydantic refuse silent coercions -- a string "true" is
+rejected rather than becoming ``True`` -- so a malformed client fails visibly.
+"""
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -38,17 +42,4 @@ class AskRequestModel(BaseModel):
                 {"query": "hello", "answer": "world"},
             ]
         },
-    )
-
-
-class ShortenQueryModel(BaseModel):
-    """Model to shorten the query."""
-
-    model_config = ConfigDict(strict=True)
-
-    query: str = Field(
-        ...,
-        title="Query",
-        description="User's input query for the chatbot.",
-        json_schema_extra={"example": "What is bootstrap?"},
     )

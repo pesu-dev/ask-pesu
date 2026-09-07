@@ -1,3 +1,4 @@
+// Light/dark theme, persisted per browser and defaulting to the OS preference.
 import { useState, useEffect } from "react";
 
 type Theme = "light" | "dark";

@@ -1,3 +1,4 @@
+// Animated placeholder shown between sending a question and the first token.
 import { cn } from "@/lib/utils";
 
 interface LoadingBreadcrumbProps {

@@ -1,3 +1,4 @@
+// Empty state with example questions, shown before the first message.
 import { motion } from "framer-motion";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { BookOpen, GraduationCap, Calendar, HelpCircle } from "lucide-react";

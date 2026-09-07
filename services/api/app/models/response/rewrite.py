@@ -1,4 +1,8 @@
-"""Model representing the response for the /rewrite route."""
+"""What /rewriteQuery returns: a short conversation title.
+
+A distinct model from the request despite the identical field name -- this one
+carries the shortened text, not the user's original question.
+"""
 
 from pydantic import BaseModel, ConfigDict, Field
 

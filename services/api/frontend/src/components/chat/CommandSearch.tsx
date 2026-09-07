@@ -1,3 +1,4 @@
+// Command palette for switching between saved conversations.
 import { useEffect, useState, useRef, useCallback } from "react";
 import { Conversation } from "@/lib/chat-store";
 import { Search, MessageSquare, CornerDownLeft } from "lucide-react";

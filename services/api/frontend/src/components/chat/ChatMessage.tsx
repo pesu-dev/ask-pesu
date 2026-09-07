@@ -1,3 +1,5 @@
+// Renders one message: markdown with LaTeX for assistant replies, plus the
+// status line shown while the model is still reasoning.
 import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkMath from "remark-math";

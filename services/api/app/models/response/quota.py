@@ -1,4 +1,8 @@
-"""Models representing the response for the /quota route."""
+"""What /quota returns: per-model cooldown state.
+
+Keyed by mode ("primary", "thinking") so the UI can disable one without the
+other. ``next_available`` appears only while a model is blocked.
+"""
 
 from datetime import datetime
 
