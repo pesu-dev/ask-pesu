@@ -1,0 +1,40 @@
+name: Deploy API to Dev
+
+# Deploys services/api to its dev Space on merges that could change it.
+#
+# Split from the db deploy because the two have very different costs. This one
+# restarts a staging reader; the other restarts the single writer that fills the
+# collection production serves from. Redeploying both on every merge meant a
+# frontend change restarted the live writer for no reason -- and because the
+# listener opens its stream with skip_existing=True, every restart permanently
+# drops the r/PESU comments posted while it was down.
+#
+# The paths are deliberately generous. An unnecessary deploy costs a rebuild; a
+# missing one means someone merges and nothing happens, with nothing to say why.
+on:
+  push:
+    branches: [ dev ]
+    paths:
+      - 'services/api/**'
+      - 'conf/**'                             # the contract, vendored into the tree
+      - 'requirements.txt'                    # what the image installs
+      - 'LICENSE'                             # vendored
+      - '.env.example'                        # vendored
+      - '.github/actions/deploy-space/**'     # the deploy mechanism itself
+      - '.github/workflows/deploy-dev-api.yaml'
+  workflow_dispatch:                          # ignores paths; use it to force a deploy
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0                      # `git subtree split` walks the whole history
+          ref: dev                            # so a dispatch from another branch still ships dev
+
+      - uses: ./.github/actions/deploy-space
+        with:
+          service: api
+          space: pesu-dev/askpesu-dev
+          hf-token: ${{ secrets.HF_TOKEN }}

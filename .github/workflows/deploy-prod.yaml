@@ -4,7 +4,7 @@ name: Deploy to Production
 # on dev is ready. The workflow fast-forwards `main` to `dev` and then deploys
 # BOTH services to their production Spaces.
 #
-# The db is deployed here too, to the same single Space that deploy-dev.yaml
+# The db is deployed here too, to the same single Space that deploy-dev-db.yaml
 # targets. After the fast-forward `main` and `dev` are the same commit, so this
 # is normally a no-op redeploy -- kept because it makes the invariant true
 # unconditionally: after a production deploy, every production Space is running

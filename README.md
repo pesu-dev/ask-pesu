@@ -666,12 +666,13 @@ pre-commit run --all-files             # or on demand
 | `pre-commit.yaml` | Push, PR | Every pre-commit hook, on all files |
 | `contract.yaml` | Push, PR | Asserts each shared file is tracked exactly once; recompiles `requirements.txt` and fails on drift; rehearses the deploy vendoring and checks each split tree is a complete Space root |
 | `docker.yaml` | Manual, or after Pre-Commit on `dev` | Builds both images, boots each container, polls `/health` |
-| `deploy-dev.yaml` | Push to `dev` | Deploys the api to `askpesu-dev` **and the db to `askpesu-db`** — the only db Space there is |
+| `deploy-dev-api.yaml` | Push to `dev` touching the api | Deploys the api to `askpesu-dev` |
+| `deploy-dev-db.yaml` | Push to `dev` touching the db | Deploys the db to `askpesu-db` — the only db Space there is |
 | `deploy-prod.yaml` | Manual | Fast-forwards `dev` → `main`, then deploys **both** services to `askpesu` and `askpesu-db` |
 
 `deploy-prod.yaml` refuses to run unless `github.actor` is listed in
-`vars.PROD_DEPLOYMENT_ALLOWED_USERS`. `deploy-dev.yaml` is not gated — merging to `dev` is the
-gate.
+`vars.PROD_DEPLOYMENT_ALLOWED_USERS`. The dev deploys are not gated — merging to `dev` is the
+gate, which is why the write path requires owner review in [`CODEOWNERS`](.github/CODEOWNERS).
 
 Both deploys call one composite action,
 [`.github/actions/deploy-space`](.github/actions/deploy-space/action.yml), so the vendoring and
@@ -689,10 +690,16 @@ deploy replaces the Space's history. Each deploy job first copies the four share
 (`conf/collection.yaml`, `requirements.txt`, `LICENSE`, `.env.example`) into the service tree,
 and refuses to push a tree missing any of them.
 
-| Branch | Deploys | To | Collection |
+| Branch | What deploys | To | Collection |
 |---|---|---|---|
-| `dev` | api **and** db | `askpesu-dev`, `askpesu-db` | `ask-pesu-prod` |
-| `main` | api **and** db | `askpesu`, `askpesu-db` | `ask-pesu-prod` |
+| `dev` | whichever services the merge touched | `askpesu-dev`, `askpesu-db` | `ask-pesu-prod` |
+| `main` | both, unconditionally | `askpesu`, `askpesu-db` | `ask-pesu-prod` |
+
+The dev deploys are **path-filtered**, one workflow per service. A merge that only touches the
+frontend leaves the writer alone; a merge that touches `conf/` or `requirements.txt` deploys
+both, because both consume them. `workflow_dispatch` ignores the filters, so either service can
+be redeployed on demand. The production deploy is not filtered — a promotion should put `main`
+on every production Space regardless of what changed.
 
 1. **Merge a PR into `dev`.** `Deploy to Dev` fires on the push. Confirm `askpesu-dev` serves
    `/health`, `/docs`, the frontend and `/assets`, and streams one real answer; confirm
@@ -711,6 +718,10 @@ production reads. That is deliberate, and the reasoning is worth keeping:
   change merged to `dev` runs nowhere, so the promotion gate would be reached having observed
   nothing about it — a delay, not a check. Worse, writer changes would accumulate and ship as one
   untested batch.
+- **Unrelated merges must not touch it.** Each deploy restarts the listener, and because the
+  stream opens with `skip_existing=True`, every r/PESU comment posted during a restart is lost
+  for good — only a backfill recovers it. That is why the dev deploys are split per service and
+  path-filtered: a frontend change has no business restarting the writer.
 - **What contains a bad writer is the contract, not the delay.** A payload whose keys drift stops
   the listener and turns `/health` into a 503 before anything is stored; a wrong embedding model,
   vector geometry or credential aborts startup. Neither reaches the collection.

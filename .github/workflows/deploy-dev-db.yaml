@@ -1,0 +1,52 @@
+name: Deploy DB to Dev
+
+# Deploys services/db on merges that could change it.
+#
+# READ THIS BEFORE CHANGING THE TARGET. It is `askpesu-db`, with no `-dev`
+# suffix, and that is not a mistake: the free tier allows three CPU Spaces,
+# spent on two api environments and ONE writer. There is no dev db Space.
+# Merging to `dev` updates the writer that fills the collection production
+# reads.
+#
+# That is deliberate. Deploying the db only from `main` looks safer and is not:
+# with no dev writer, a services/db change merged to `dev` would run nowhere, so
+# the promotion gate would be reached having observed nothing about it -- a
+# delay, not a check -- and writer changes would ship as one untested batch.
+# What contains a bad writer is the contract, not the wait: a payload whose keys
+# drift stops the listener and turns /health into a 503 before anything is
+# stored, and a wrong model, geometry or credential aborts startup.
+#
+# The failure that gets through is a write which is schema-valid but
+# semantically wrong -- a broken thread rendering -- which lands silently and is
+# undone only by re-running the backfill. That is why services/db/app/ and
+# services/db/scripts/ require owner review in CODEOWNERS.
+#
+# Path-filtered because each run restarts the live listener, and skip_existing
+# means the comments posted during a restart are never picked up.
+on:
+  push:
+    branches: [ dev ]
+    paths:
+      - 'services/db/**'
+      - 'conf/**'                             # the contract, vendored into the tree
+      - 'requirements.txt'                    # what the image installs
+      - 'LICENSE'                             # vendored
+      - '.env.example'                        # vendored
+      - '.github/actions/deploy-space/**'     # the deploy mechanism itself
+      - '.github/workflows/deploy-dev-db.yaml'
+  workflow_dispatch:                          # ignores paths; use it to force a deploy
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0                      # `git subtree split` walks the whole history
+          ref: dev                            # so a dispatch from another branch still ships dev
+
+      - uses: ./.github/actions/deploy-space
+        with:
+          service: db
+          space: pesu-dev/askpesu-db
+          hf-token: ${{ secrets.HF_TOKEN }}
