@@ -126,6 +126,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """
     global vector_store, reddit, subreddit
 
+    # A previous lifespan in this process would otherwise leave this set, and
+    # the listener would start and exit immediately while /health still said ok.
+    shutdown.clear()
+
     client = QdrantClient(
         url=qdrant_url,
         api_key=qdrant_api_key,

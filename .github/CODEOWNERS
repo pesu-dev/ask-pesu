@@ -31,7 +31,6 @@ services/api/README.md @aditeyabaral
 services/db/pyproject.toml @aditeyabaral @joshua-rajj
 services/db/requirements.txt @aditeyabaral @joshua-rajj
 services/db/.env.example @aditeyabaral @joshua-rajj
-services/db/conf/ @aditeyabaral @joshua-rajj
 services/db/app/contract.py @aditeyabaral @joshua-rajj
 services/db/Dockerfile @aditeyabaral @joshua-rajj
 services/db/README.md @aditeyabaral

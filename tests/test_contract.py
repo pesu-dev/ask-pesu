@@ -56,18 +56,74 @@ class TestSingleSourceOfTruth:
         ).stdout.split()
         assert tracked == ["conf/collection.yaml"], tracked
 
-    def test_both_services_resolve_the_same_contract(self):
-        """Compares content, not paths.
+    def test_both_services_load_exactly_the_authored_file(self):
+        """Compares every field, not just the path.
 
-        After a local image build or deploy rehearsal each service has its own
-        vendored copy and legitimately resolves to that one instead of the root.
-        What must hold either way is that they agree, and agree with the
-        authored file.
+        After an image build each service has a vendored copy that the loader
+        finds first. Checking the whole contract means a stale copy fails here
+        rather than quietly changing which collection a service talks to.
         """
         authored = yaml.safe_load((REPO_ROOT / "conf" / "collection.yaml").read_text())["collection"]
-        assert api.load() == db.load()
-        assert api.load().name == authored["name"]
-        assert api.load().model == authored["dense"]["model"]
+        expected = (
+            authored["name"],
+            authored["dense"]["model"],
+            int(authored["dense"]["size"]),
+            str(authored["dense"]["distance"]),
+            authored["dense"].get("vector_name", ""),
+            tuple(authored["metadata"]),
+        )
+        assert tuple(api.load()) == expected
+        assert tuple(db.load()) == expected
+
+    def test_a_stale_vendored_copy_is_rejected_not_silently_preferred(self, tmp_path):
+        """The regression this design could have introduced.
+
+        The service-local copy sits below the authored one in the walk, so it
+        wins. Identical copies are fine; a differing one must be an error.
+        """
+        service = tmp_path / "services" / "api"
+        (service / "app").mkdir(parents=True)
+        (service / "conf").mkdir()
+        (tmp_path / "conf").mkdir()
+        source = (REPO_ROOT / "services/api/app/contract.py").read_text()
+        (service / "app" / "contract.py").write_text(source)
+        authored = (REPO_ROOT / "conf" / "collection.yaml").read_text()
+        (tmp_path / "conf" / "collection.yaml").write_text(authored)
+
+        spec = importlib.util.spec_from_file_location("stale_probe", service / "app" / "contract.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        (service / "conf" / "collection.yaml").write_text(authored)  # identical: fine
+        assert mod.load().name == api.load().name
+
+        (service / "conf" / "collection.yaml").write_text(authored.replace("ask-pesu", "stale"))
+        with pytest.raises(mod.ContractViolationError, match="Conflicting contracts"):
+            mod.contract_path()
+
+    def test_the_two_loaders_cannot_drift_in_logic(self):
+        """Both services carry their own loader, so guard the duplication.
+
+        Compares the AST of every shared function with string constants
+        normalised away: error wording and docstrings may differ per role, the
+        behaviour may not.
+        """
+        sources = {name: (REPO_ROOT / f"services/{name}/app/contract.py").read_text() for name in ("api", "db")}
+
+        def normalised(source):
+            tree = ast.parse(source)
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                    node.value = ""
+            return {
+                fn.name: ast.dump(fn) for fn in tree.body if isinstance(fn, ast.FunctionDef)
+            }
+
+        api_fns, db_fns = normalised(sources["api"]), normalised(sources["db"])
+        shared = set(api_fns) & set(db_fns)
+        assert shared >= {"contract_path", "load", "validate_collection", "validate_embedding"}
+        for name in sorted(shared):
+            assert api_fns[name] == db_fns[name], f"{name}() has drifted between the two services"
 
     def test_loader_walks_up_from_the_service(self, mod):
         """Deployed, the file sits at /app/conf/; in the monorepo, at the repo root."""
@@ -77,9 +133,11 @@ class TestSingleSourceOfTruth:
 
 
 class TestCollectionGeometry:
-    def test_reader_refuses_missing_collection(self, client):
-        with pytest.raises(api.ContractViolationError, match="does not exist"):
-            api.validate_collection(api.load(), client)
+    def test_missing_collection_is_a_contract_error_in_both_services(self, mod, client):
+        """Not parametrised originally, which is how the db came to raise a bare
+        ValueError here while the api raised a contract error."""
+        with pytest.raises(mod.ContractViolationError, match="does not exist"):
+            mod.validate_collection(mod.load(), client)
 
     def test_writer_creates_then_reader_accepts(self, client):
         contract = db.load()
