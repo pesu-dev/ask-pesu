@@ -7,11 +7,6 @@
 # containing a [tool.ruff] table, so the service pyprojects -- which have none --
 # correctly resolve to this one.
 
-[tool.pytest.ini_options]
-markers = [
-    "secret_required: marks tests that require secrets or environment variables (e.g. HF_TOKEN).",
-]
-
 [tool.ruff.lint]
 select = [
     "E", # Pycodestyle errors

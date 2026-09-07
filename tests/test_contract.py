@@ -43,6 +43,19 @@ def client():
     return QdrantClient(":memory:")
 
 
+def make_collection(client, contract, size=None, distance=Distance.COSINE, vector_name=None):
+    """Create a collection in the contract's shape, with any field overridden.
+
+    Tests build the geometry they assert on rather than assuming whatever
+    conf/collection.yaml currently says, so switching the contract between a
+    named and an unnamed vector does not invalidate them.
+    """
+    name = contract.vector_name if vector_name is None else vector_name
+    params = VectorParams(size=size or contract.size, distance=distance)
+    client.create_collection(contract.name, vectors_config={name: params} if name else params)
+    return client
+
+
 class TestSingleSourceOfTruth:
     def test_only_one_contract_file_is_tracked(self):
         """The whole point: one authored file, not a vendored copy per service.
@@ -173,29 +186,27 @@ class TestCollectionGeometry:
 
     def test_rejects_wrong_vector_size(self, mod, client):
         contract = mod.load()
-        client.create_collection(contract.name, vectors_config=VectorParams(size=384, distance=Distance.COSINE))
+        make_collection(client, contract, size=384)
         with pytest.raises(mod.ContractViolationError, match="vector size 384"):
             mod.validate_collection(contract, client)
 
     def test_rejects_wrong_distance(self, mod, client):
         contract = mod.load()
-        client.create_collection(contract.name, vectors_config=VectorParams(size=contract.size, distance=Distance.DOT))
+        make_collection(client, contract, distance=Distance.DOT)
         with pytest.raises(mod.ContractViolationError, match="distance"):
             mod.validate_collection(contract, client)
 
     def test_rejects_named_vector_when_contract_expects_unnamed(self, mod, client):
-        """The shape a hybrid re-index would leave behind if the contract were not updated."""
-        contract = mod.load()
-        client.create_collection(
-            contract.name, vectors_config={"dense": VectorParams(size=contract.size, distance=Distance.COSINE)}
-        )
+        """Built explicitly rather than from the shipped contract, so these hold
+        whichever way conf/collection.yaml is currently configured."""
+        unnamed = mod.load()._replace(vector_name="")
+        make_collection(client, unnamed, vector_name="dense")
         with pytest.raises(mod.ContractViolationError, match="named vectors"):
-            mod.validate_collection(contract, client)
+            mod.validate_collection(unnamed, client)
 
     def test_rejects_unnamed_vector_when_contract_expects_named(self, mod, client):
-        contract = mod.load()
-        db.ensure_collection(contract, client)
-        named = contract._replace(vector_name="dense")
+        named = mod.load()._replace(vector_name="dense")
+        make_collection(client, named, vector_name="")
         with pytest.raises(mod.ContractViolationError, match="has no named vector 'dense'"):
             mod.validate_collection(named, client)
 

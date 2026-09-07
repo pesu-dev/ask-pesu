@@ -17,8 +17,12 @@ collection:
     model: "Alibaba-NLP/gte-modernbert-base"
     size: 768
     distance: "Cosine"
-    # Empty string is langchain_qdrant's VECTOR_NAME default (the unnamed vector).
-    vector_name: ""
+    # A NAMED vector, not langchain_qdrant's unnamed default. langchain writes
+    # hybrid points as {vector_name: dense, sparse_vector_name: sparse} -- a
+    # named-vector dict -- so a collection built on the unnamed vector cannot
+    # serve hybrid retrieval and would need a second full re-index when the
+    # planned BM25 work lands. Naming it now costs nothing.
+    vector_name: "dense"
 
   # Payload keys written by services/db on every point, enforced exactly: the
   # writer refuses to upsert a payload whose key set differs from this list, and

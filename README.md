@@ -109,7 +109,7 @@ payload schema. A mismatch corrupts retrieval quietly, so all of it is written d
 | Collection | `ask-pesu` |
 | Embedding model | `Alibaba-NLP/gte-modernbert-base` |
 | Vector size / distance | 768 / Cosine |
-| Vector name | `""` (langchain_qdrant's unnamed-vector default) |
+| Vector name | `dense` (named, so hybrid retrieval can be added without re-indexing) |
 | Payload keys | `root_comment_id`, `post_id`, `author`, `url`, `permalink`, `score`, `upvote_ratio`, `created_utc`, `flair`, `nsfw` |
 
 It is enforced, not just documented:
@@ -345,12 +345,13 @@ All three Spaces are fed by force-pushing a `git subtree split` of one service d
 deploy replaces the Space's history. Each deploy job first copies `conf/collection.yaml` into the
 service tree and refuses to push a tree without it.
 
-> **One-time step before the next deploy.** `services/db` used to read `qdrant_url`,
-> `qdrant_api_key`, `reddit_client_id` and `reddit_client_secret`; it now reads the same
-> uppercase names as everything else. Rename those four secrets in the **askpesu-db** Space
-> (Settings → Variables and secrets) to `QDRANT_URL`, `QDRANT_API_KEY`, `REDDIT_CLIENT_ID` and
-> `REDDIT_CLIENT_SECRET`. There is deliberately no fallback to the old names, so a missed rename
-> fails loudly at startup rather than running with `None` credentials.
+Each Space needs its own secrets set under **Settings → Variables and secrets**, using exactly
+the names in [Environment variables](#environment-variables):
+
+| Space | Secrets |
+|---|---|
+| `askpesu`, `askpesu-dev` | `HF_TOKEN`, `QDRANT_URL`, `QDRANT_API_KEY` |
+| `askpesu-db` | `QDRANT_URL`, `QDRANT_API_KEY`, `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET` |
 
 Order matters on a fresh collection — **the writer creates it, the reader requires it**:
 
