@@ -188,10 +188,12 @@ collection at any time. Add one only when a filter actually exists to justify it
 
 ### Why builds copy it
 
-`conf/collection.yaml` lives at the repo root, but each service is deployed with
-`git subtree split --prefix=services/<name>`, which ships **only that directory** — the repo root
-never reaches the running Space. So image builds and deploys copy the file into
-`services/<name>/conf/` first, and the deploy workflows refuse to push a tree that lacks it.
+`conf/collection.yaml` and `requirements.txt` both live at the repo root, but each service is
+deployed with `git subtree split --prefix=services/<name>`, which ships **only that directory** —
+the repo root never reaches the running Space. So image builds and deploys copy both files into
+the service tree first, and the deploy workflows refuse to push a tree missing either: without
+the contract both services abort at startup, and without the requirements the image will not
+build.
 
 That copy is generated, never committed (`.gitignore` covers it). Running a service directly
 from a checkout needs no copy — the loader walks up from `app/contract.py` and finds the root
@@ -199,7 +201,9 @@ file on its own. Only **Docker builds** need it, because the build context is th
 directory:
 
 ```bash
-mkdir -p services/api/conf && cp conf/collection.yaml services/api/conf/
+mkdir -p services/api/conf
+cp conf/collection.yaml services/api/conf/
+cp requirements.txt services/api/
 docker build services/api --tag ask-pesu
 ```
 
@@ -229,9 +233,25 @@ If both copies exist and differ, the loader raises rather than silently preferri
         └── README.md         # Space frontmatter for askpesu-db
 ```
 
-The root `pyproject.toml` deliberately declares **no `[project]` table**. It exists so ruff and
-pytest resolve one configuration for the whole repo: ruff walks up from each file to the nearest
-`pyproject.toml` containing a `[tool.ruff]` table, and the service pyprojects have none.
+### Dependencies
+
+There is **one** `pyproject.toml` and **one** `requirements.txt`, both at the root. What the two
+services share is the base `dependencies`; what only one needs is an extra (`api` / `db`):
+
+```bash
+uv pip compile pyproject.toml --extra api --extra db \
+    --python-platform linux --python-version 3.12 -o requirements.txt
+```
+
+Note this compiles the **union**, so each image installs a little it does not use — the api
+carries `fastembed`/`onnxruntime` (~190 MB), the db carries `langchain-classic` and friends.
+That is the price of one file, and it buys something worth having: the embedding stack is
+resolved **once**, so the writer and the reader cannot end up on different versions of the
+library that produces the vectors. Separate files made that possible; this makes it impossible.
+
+Neither Dockerfile reads `pyproject.toml` — both `pip install -r requirements.txt` — so it never
+has to reach a Space. `requirements.txt` does, which is why builds and deploys vendor it into
+the service tree alongside `conf/collection.yaml` (see below).
 
 ## Getting started
 

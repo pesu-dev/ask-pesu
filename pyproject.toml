@@ -1,11 +1,82 @@
-# Shared tooling configuration for the ask-pesu monorepo.
+# Shared configuration for the ask-pesu monorepo.
 #
-# Runtime dependencies live in each service's own pyproject.toml
-# (services/api, services/db). This file deliberately declares no [project]
-# table: it exists so that ruff and pytest resolve a single configuration for
-# every service. Ruff walks up from each file to the nearest pyproject.toml
-# containing a [tool.ruff] table, so the service pyprojects -- which have none --
-# correctly resolve to this one.
+# One [project] table covers both services: what they share is the base
+# `dependencies`, and what only one needs is an extra. Neither Dockerfile
+# installs from this file -- both `pip install -r requirements.txt` -- so it
+# never has to reach a Space. It is the *source* those requirements come from:
+#
+#     uv pip compile pyproject.toml --extra api --python-platform linux \
+#         --python-version 3.12 -o services/api/requirements.txt
+#     uv pip compile pyproject.toml --extra db  --python-platform linux \
+#         --python-version 3.12 -o services/db/requirements.txt
+#
+# It also gives ruff and pytest one configuration for every service: ruff walks
+# up from each file to the nearest pyproject.toml containing [tool.ruff], and
+# this is now the only pyproject.toml in the repo.
+
+[project]
+name = "ask-pesu"
+version = "0.1.0"
+description = "Retrieval-augmented question answering for PES University, from r/PESU discussions."
+readme = "README.md"
+requires-python = ">=3.12"
+
+# Needed by BOTH services. The embedding stack especially must stay identical:
+# services/db writes the vectors services/api reads, so a version split here is
+# the same class of silent mismatch that conf/collection.yaml exists to prevent.
+dependencies = [
+    "fastapi>=0.116.1",
+    "uvicorn>=0.35.0",
+    "python-dotenv>=1.1.1",
+    "pyyaml>=6.0.2",
+    "langchain-core>=1.2.19",
+    "langchain-huggingface>=1.2.1",
+    "langchain-qdrant>=1.1.0",
+    "qdrant-client>=1.9.0",
+    "sentence-transformers>=5.1.0",
+    # Not imported directly by services/db -- it arrives via
+    # sentence-transformers -- but declared because [tool.uv.sources] below only
+    # redirects DIRECT dependencies, and without it torch resolves to the 4 GB
+    # CUDA build instead of +cpu.
+    "torch>=2.10.0",
+]
+
+[project.optional-dependencies]
+# The reader: HTTP surface, multi-query retrieval, HF Inference.
+api = [
+    "pydantic>=2.11.7",
+    "pytz>=2025.2",
+    "langchain-classic>=1.0.3",
+    "huggingface-hub>=1.30.0",
+]
+# The writer: Reddit ingestion, and the BM25 sparse embeddings the collection's
+# `sparse` vector needs. fastembed pulls onnxruntime, which is why the db image
+# is the larger of the two.
+db = [
+    "anytree>=2.13.0",
+    "fastembed>=0.8.0",
+    "praw>=7.8.1",
+]
+dev = [
+    "pre-commit>=4.3.0",
+    "ruff>=0.12.12",
+]
+
+[tool.uv]
+# There is no importable `ask_pesu` package at the root. This table describes
+# dependencies; it is not something to build or install.
+package = false
+
+# torch resolves from PyTorch's CPU index. Both Spaces run on CPU, and the CUDA
+# wheels were ~4 GB of image for libraries that are never loaded. `explicit`
+# keeps this index used ONLY for torch, so nothing else resolves against it.
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu" }]
 
 [tool.ruff.lint]
 select = [

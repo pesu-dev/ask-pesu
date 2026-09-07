@@ -23,18 +23,23 @@ runs:
     # push. `git subtree split` needs full history, so callers must check out
     # with fetch-depth: 0.
     #
-    # The split ships only services/<name>/, which means the shared contract at
-    # conf/collection.yaml would never reach the running Space. Copy it in first
-    # and commit locally on the runner; that commit is never pushed to GitHub.
-    - name: Vendor the shared contract into the service tree
+    # The split ships only services/<name>/, so anything authored at the repo
+    # root would never reach the running Space. Two files have to travel with
+    # the service: the collection contract, and the compiled requirements the
+    # Dockerfile installs. Copy them in and commit locally on the runner; that
+    # commit is never pushed to GitHub.
+    - name: Vendor the root-level files into the service tree
       shell: bash
       run: |
         mkdir -p "services/${{ inputs.service }}/conf"
         cp conf/collection.yaml "services/${{ inputs.service }}/conf/collection.yaml"
-        git add -f "services/${{ inputs.service }}/conf/collection.yaml"
+        cp requirements.txt "services/${{ inputs.service }}/requirements.txt"
+        git add -f \
+          "services/${{ inputs.service }}/conf/collection.yaml" \
+          "services/${{ inputs.service }}/requirements.txt"
         git -c user.name="github-actions[bot]" \
             -c user.email="github-actions[bot]@users.noreply.github.com" \
-            commit -q -m "Vendor conf/collection.yaml for deployment"
+            commit -q -m "Vendor root-level files for deployment"
 
     - name: Split the service subtree and push it to the Space
       shell: bash
@@ -44,11 +49,13 @@ runs:
         branch="deploy-${{ inputs.service }}"
         git subtree split --prefix="services/${{ inputs.service }}" HEAD -b "$branch"
 
-        # Refuse to publish a tree without the contract. Both services abort at
-        # startup without it, so this turns a silently broken Space into a
-        # failed job.
-        git cat-file -e "$branch:conf/collection.yaml" \
-          || { echo "::error::${{ inputs.service }} deploy tree is missing conf/collection.yaml"; exit 1; }
+        # Refuse to publish an incomplete tree. Without the contract both
+        # services abort at startup; without requirements.txt the image will not
+        # even build. Better a failed job than a broken Space.
+        for required in conf/collection.yaml requirements.txt; do
+          git cat-file -e "$branch:$required" \
+            || { echo "::error::${{ inputs.service }} deploy tree is missing $required"; exit 1; }
+        done
 
         git push "https://pesu-dev:$HF_TOKEN@huggingface.co/spaces/${{ inputs.space }}" \
           "$branch:main" --force

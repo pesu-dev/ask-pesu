@@ -72,7 +72,9 @@ bruno.json
 *.csv
 *.png
 
-# The shared Qdrant contract is authored once at conf/collection.yaml. Image
-# builds and deploys vendor it into the service tree, because a subtree split
-# ships only services/<name>/ -- but that copy must never be committed.
+# Both of these are authored once at the repo root -- conf/collection.yaml and
+# requirements.txt -- and vendored into the service tree by image builds and
+# deploys, because a subtree split ships only services/<name>/. Those copies are
+# generated and must never be committed.
 services/*/conf/collection.yaml
+services/*/requirements.txt
