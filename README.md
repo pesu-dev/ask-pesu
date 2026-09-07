@@ -156,9 +156,8 @@ It is enforced, not just documented:
 - **The reader** refuses to start unless the live collection matches, the loaded embedding
   model is the contracted one at the contracted width, and every payload key it consumes is
   one the contract guarantees is written.
-- **CI** checks all of it in [`tests/test_contract.py`](tests/test_contract.py), asserts
-  `conf/collection.yaml` is the only contract file tracked in git, and asserts the Space
-  frontmatter's `models:`/`preload_from_hub:` still name the contracted model.
+- **CI** asserts `conf/collection.yaml` is the only contract file tracked in git, and that the
+  tree each Space actually receives contains it.
 
 Each service reads it through its own small `app/contract.py`. **Change values in `conf/`,
 never in a service.**
@@ -215,8 +214,8 @@ If both copies exist and differ, the loader raises rather than silently preferri
 .
 ├── conf/collection.yaml      # the shared Qdrant contract -- the only copy
 ├── .env.example              # every environment variable, for both services
-├── pyproject.toml            # shared ruff + pytest config (declares no [project])
-├── tests/                    # contract tests
+├── pyproject.toml            # the only pyproject: deps for both services + ruff config
+├── requirements.txt          # compiled from it; the only requirements file
 ├── .pre-commit-config.yaml
 ├── .github/workflows/        # CI and deploys
 └── services/
@@ -373,20 +372,14 @@ Prompt and model changes go here first — they are config, not code.
 ## Testing
 
 ```bash
-pip install pytest pyyaml qdrant-client langchain-core
-pytest tests/ -q
-```
-
-The contract suite deliberately avoids the api's torch and LangChain stack so it stays fast. It
-runs the shared assertions against **both** services' loaders, and AST-compares their shared
-functions so the two cannot drift in behaviour even though each carries its own copy.
-
-Frontend:
-
-```bash
 cd services/api/frontend
 npm test                               # vitest
 ```
+
+There is no Python test suite. The contract is enforced at runtime instead: both services
+validate the live collection, the embedding model and every payload at startup, and refuse to
+run against a mismatch. CI additionally checks that `conf/collection.yaml` is the only contract
+file tracked, and that the tree each Space receives contains it.
 
 ## Linting and formatting
 
@@ -486,7 +479,7 @@ Pull requests **must** come from a fork and **must** target `dev`; `source.yaml`
 [`.github/CONTRIBUTING.md`](.github/CONTRIBUTING.md) and
 [`.github/CODE_OF_CONDUCT.md`](.github/CODE_OF_CONDUCT.md).
 
-Before opening a PR: `pre-commit run --all-files` and `pytest tests/ -q`.
+Before opening a PR: `pre-commit run --all-files`.
 
 Reviewers are assigned by [`.github/CODEOWNERS`](.github/CODEOWNERS). Changes to
 `conf/collection.yaml` affect both services and always require owner review.

@@ -41,6 +41,3 @@ services/db/README.md @aditeyabaral
 # Each service ships its own copy in the tree pushed to its Space.
 services/api/LICENSE @aditeyabaral
 services/db/LICENSE @aditeyabaral
-
-## Testing
-/tests/ @aditeyabaral

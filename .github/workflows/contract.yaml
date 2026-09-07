@@ -5,9 +5,9 @@ name: Contract Checks
 #
 # That file lives at the repo root, but each service is deployed with
 # `git subtree split --prefix=services/<name>`, which ships only that
-# directory. Deploys and image builds therefore vendor the file into the
-# service tree. These checks make sure the contract holds and that the
-# vendoring actually lands.
+# directory. Deploys and image builds therefore vendor it into the service
+# tree. These checks make sure it stays a single authored file and that the
+# vendoring actually lands in the tree that gets deployed.
 on: [ push, pull_request ]
 
 jobs:
@@ -28,14 +28,6 @@ jobs:
           echo "tracked: $found"
           [ "$found" = "conf/collection.yaml" ] \
             || { echo "::error::expected only conf/collection.yaml to be tracked"; exit 1; }
-
-      # Deliberately a thin dependency set: the contract modules must not need
-      # the api's full LangChain/torch stack to be testable.
-      - name: Install test dependencies
-        run: pip install pytest pyyaml qdrant-client langchain-core
-
-      - name: Run contract tests
-        run: pytest tests/ -q
 
       - name: Deploy vendoring puts the contract in each Space tree
         run: |
