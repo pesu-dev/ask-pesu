@@ -37,10 +37,10 @@ listener_error = None
 # exit promptly -- it is a daemon, so it never holds up process exit.
 shutdown = threading.Event()
 
-client_id = os.getenv("reddit_client_id")
-client_secret = os.getenv("reddit_client_secret")
-qdrant_url = os.getenv("qdrant_url")
-qdrant_api_key = os.getenv("qdrant_api_key")
+client_id = os.getenv("REDDIT_CLIENT_ID")
+client_secret = os.getenv("REDDIT_CLIENT_SECRET")
+qdrant_url = os.getenv("QDRANT_URL")
+qdrant_api_key = os.getenv("QDRANT_API_KEY")
 
 
 def update_chunk(chunk_id: str, text: str, metadata: dict) -> None:

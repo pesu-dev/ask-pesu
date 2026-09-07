@@ -3,8 +3,22 @@
 A retrieval-augmented question answering system for PES University, answering from
 [r/PESU](https://www.reddit.com/r/PESU/) discussions.
 
-This is a monorepo containing both halves of the system. They are deployed as separate
+This is a monorepo containing both halves of the system. They are deployed as three separate
 Hugging Face Spaces but share one Qdrant collection, and therefore one schema contract.
+
+- **Live:** [askpesu](https://pesu-dev-askpesu.hf.space) · **Staging:** [askpesu-dev](https://pesu-dev-askpesu-dev.hf.space)
+
+---
+
+## Contents
+
+- [Services](#services) · [How it works](#how-it-works) · [The collection contract](#the-collection-contract)
+- [Repository layout](#repository-layout) · [Getting started](#getting-started) · [Environment variables](#environment-variables)
+- [Running the services](#running-the-services) · [Configuration](#configuration) · [Testing](#testing)
+- [Linting and formatting](#linting-and-formatting) · [Continuous integration](#continuous-integration)
+- [Deployment](#deployment) · [Contributing](#contributing) · [Known issues](#known-issues)
+
+---
 
 ## Services
 
@@ -13,6 +27,76 @@ Hugging Face Spaces but share one Qdrant collection, and therefore one schema co
 | [`services/api`](services/api) | FastAPI + LangChain RAG backend, and the React frontend it serves | [`askpesu`](https://huggingface.co/spaces/pesu-dev/askpesu) (prod), [`askpesu-dev`](https://huggingface.co/spaces/pesu-dev/askpesu-dev) (staging) |
 | [`services/db`](services/db) | Reddit listener that streams new r/PESU comment threads into Qdrant | [`askpesu-db`](https://huggingface.co/spaces/pesu-dev/askpesu-db) |
 
+Each service directory is self-contained and shaped like a repository root — its own
+`README.md` (carrying that Space's frontmatter), `Dockerfile`, and dependencies. Deploy
+workflows use `git subtree split` to push a single service directory to its Space, so the
+Space receives a tree identical to what that service would look like standing alone.
+
+## How it works
+
+```
+      r/PESU                                            browser
+        │                                                  │
+        ▼                                                  ▼
+┌───────────────────┐                        ┌──────────────────────────────┐
+│   services/db     │                        │        services/api          │
+│                   │                        │                              │
+│  praw comment     │                        │  React SPA (same origin)     │
+│  stream           │                        │            │                 │
+│      │            │                        │            ▼                 │
+│      ▼            │                        │  POST /ask  (NDJSON stream)  │
+│  build thread     │                        │            │                 │
+│  string + payload │                        │            ▼                 │
+│      │            │                        │  rewrite query w/ history    │
+│      ▼            │                        │            ▼                 │
+│  embed (gte-      │      ┌──────────┐      │  MultiQueryRetriever         │
+│  modernbert-base) │─────▶│  Qdrant  │◀─────│            ▼                 │
+│      │            │      │ ask-pesu │      │  dense search (k=5)          │
+│      ▼            │      └──────────┘      │            ▼                 │
+│  upsert by UUID   │            ▲           │  cross-encoder rerank        │
+└───────────────────┘            │           │            ▼                 │
+                                 │           │  Qwen3-4B → token stream     │
+                        conf/collection.yaml └──────────────────────────────┘
+                        (the shared contract)
+```
+
+**Writer (`services/db`).** A daemon thread consumes `subreddit.stream.comments(skip_existing=True)`.
+For each new comment it walks up to the thread's root comment, renders the whole thread as
+indented text (`anytree`), prefixes the submission title and body, and upserts a single point
+per root comment. The point id is a UUIDv5 of the Reddit comment id, so re-processing a thread
+overwrites rather than duplicates it. AutoModerator comments are skipped.
+
+**Reader (`services/api`).** `/ask` streams newline-delimited JSON. The pipeline:
+
+1. **Rewrite** — the user's question plus chat history is rewritten into a standalone,
+   retrieval-optimised query. PESU abbreviations (RR, EC, CSE, SGPA, …) are expanded here.
+2. **Multi-query expansion** — `MultiQueryRetriever` generates several phrasings and unions
+   their results.
+3. **Dense retrieval** — `k=5` per generated query against the Qdrant collection.
+4. **Rerank** — a `cross-encoder/ms-marco-MiniLM-L-6-v2` scores each (query, document) pair
+   through a sigmoid and drops anything below `score_threshold`.
+5. **Generate** — `Qwen/Qwen3-4B-Instruct-2507` via Hugging Face Inference (`nscale` provider),
+   streamed token by token.
+
+Both retrieval steps always use the **primary** model, never the thinking model, so thinking
+mode never spends its tokens on query rewriting.
+
+**Streaming protocol.** `/ask` returns NDJSON, one JSON object per line:
+
+| `type` | Meaning |
+|---|---|
+| `step` | Reasoning text, emitted only in thinking mode (content between `<think>` and `</think>`) |
+| `token` | A chunk of the answer |
+| `done` | Stream finished |
+| `error` | Generation failed; `content` carries the message |
+
+In thinking mode the backend splits `<think>…</think>` out of the model's output and re-emits
+it as `step` events. Any change here must be made in **both** `services/api/app/rag.py` and
+`services/api/frontend/src/lib/api.ts`.
+
+**Conversations are never stored server-side.** The frontend keeps them in `localStorage`
+under `askpesu-conversations`, and replays the relevant history with each request.
+
 ## The collection contract
 
 `services/db` **writes** the Qdrant collection; `services/api` **reads** it. They must agree on
@@ -20,16 +104,28 @@ the collection name, embedding model, vector dimensions, distance metric, vector
 payload schema. A mismatch corrupts retrieval quietly, so all of it is written down **once**, in
 [`conf/collection.yaml`](conf/collection.yaml), and both services load that file:
 
+| | Value |
+|---|---|
+| Collection | `ask-pesu` |
+| Embedding model | `Alibaba-NLP/gte-modernbert-base` |
+| Vector size / distance | 768 / Cosine |
+| Vector name | `""` (langchain_qdrant's unnamed-vector default) |
+| Payload keys | `root_comment_id`, `post_id`, `author`, `url`, `permalink`, `score`, `upvote_ratio`, `created_utc`, `flair`, `nsfw` |
+
+It is enforced, not just documented:
+
 - **The writer** creates the collection from the contract, refuses to write into one whose
   geometry disagrees, and rejects any payload whose key set differs from the contracted list.
-- **The reader** refuses to start unless the live collection matches the contract, the loaded
-  embedding model is the contracted one at the contracted width, and every payload key it
-  consumes is one the contract guarantees is written.
-- **CI** checks all of it in [`tests/`](tests/test_contract.py), and asserts that
-  `conf/collection.yaml` is the only contract file tracked in git.
+  A payload mismatch stops the listener and flips `/health` to 503 rather than retrying.
+- **The reader** refuses to start unless the live collection matches, the loaded embedding
+  model is the contracted one at the contracted width, and every payload key it consumes is
+  one the contract guarantees is written.
+- **CI** checks all of it in [`tests/test_contract.py`](tests/test_contract.py), asserts
+  `conf/collection.yaml` is the only contract file tracked in git, and asserts the Space
+  frontmatter's `models:`/`preload_from_hub:` still name the contracted model.
 
-Each service reads it through its own small `app/contract.py`. Change values in `conf/`, never
-in a service.
+Each service reads it through its own small `app/contract.py`. **Change values in `conf/`,
+never in a service.**
 
 ### Why builds copy it
 
@@ -38,50 +134,278 @@ in a service.
 never reaches the running Space. So image builds and deploys copy the file into
 `services/<name>/conf/` first, and the deploy workflows refuse to push a tree that lacks it.
 
-That copy is generated, never committed (`.gitignore` covers it). To build or run a service
-locally, do the same thing first:
+That copy is generated, never committed (`.gitignore` covers it). Running a service directly
+from a checkout needs no copy — the loader walks up from `app/contract.py` and finds the root
+file on its own. Only **Docker builds** need it, because the build context is the service
+directory:
 
 ```bash
 mkdir -p services/api/conf && cp conf/collection.yaml services/api/conf/
 docker build services/api --tag ask-pesu
 ```
 
-Running a service directly from a monorepo checkout needs no copy: the loader walks up from
-`app/contract.py` and finds the root `conf/collection.yaml` on its own.
+If both copies exist and differ, the loader raises rather than silently preferring the stale one.
 
-## Layout
+## Repository layout
 
 ```
 .
-├── conf/collection.yaml     # the shared Qdrant contract -- the only copy
-├── pyproject.toml           # shared ruff + pytest configuration (no runtime deps)
-├── tests/                   # contract tests
+├── conf/collection.yaml      # the shared Qdrant contract -- the only copy
+├── .env.example              # every environment variable, for both services
+├── pyproject.toml            # shared ruff + pytest config (declares no [project])
+├── tests/                    # contract tests
 ├── .pre-commit-config.yaml
+├── .github/workflows/        # CI and deploys
 └── services/
-    ├── api/                 # own README, Dockerfile, deps, app/contract.py
-    └── db/                  # own README, Dockerfile, deps, app/contract.py
+    ├── api/
+    │   ├── app/              # app.py (routes), rag.py (pipeline), quota.py,
+    │   │                     # contract.py, models/ (pydantic), docs/ (OpenAPI)
+    │   ├── conf/config.yaml  # prompts, model ids, retrieval knobs
+    │   ├── frontend/         # Vite + React 18 + TypeScript + shadcn/ui
+    │   ├── Dockerfile        # multi-stage: builds the frontend, then the API
+    │   └── README.md         # Space frontmatter for askpesu / askpesu-dev
+    └── db/
+        ├── app/              # app.py (listener), utils.py, contract.py
+        ├── Dockerfile
+        └── README.md         # Space frontmatter for askpesu-db
 ```
 
-Each service directory is self-contained and shaped like a repository root — its own
-`README.md` (carrying that Space's frontmatter), `Dockerfile`, and dependencies. Deploy
-workflows use `git subtree split` to push a single service directory to its Space, so the
-Space receives a tree identical to what that service would look like standing alone.
+The root `pyproject.toml` deliberately declares **no `[project]` table**. It exists so ruff and
+pytest resolve one configuration for the whole repo: ruff walks up from each file to the nearest
+`pyproject.toml` containing a `[tool.ruff]` table, and the service pyprojects have none.
 
-## Development
+## Getting started
 
-Each service is developed from within its own directory; see
-[`services/api/README.md`](services/api/README.md) and
-[`services/db/README.md`](services/db/README.md).
+**Prerequisites:** Python 3.12, Node.js 24 (what the Dockerfile builds with), and a Qdrant instance (the free
+[Qdrant Cloud](https://cloud.qdrant.io/) tier is enough). Docker only if you want to build images.
 
-Linting and formatting are configured once at the repository root and cover both services:
+```bash
+git clone https://github.com/pesu-dev/ask-pesu.git
+cd ask-pesu
+cp .env.example .env          # then fill it in -- see below
+```
+
+The repo targets **Python 3.12 exactly**: `.python-version`, both Dockerfile base images, both
+Space `python_version` declarations, ruff's `target-version` and CI all say 3.12.
+
+## Environment variables
+
+Copy [`.env.example`](.env.example) to `.env` at the repository root and fill it in. **One root
+`.env` serves both services** — `load_dotenv()` searches upwards from the module that calls it,
+so running either service from anywhere in the repo picks it up. `.env` is gitignored.
+
+| Variable | Used by | How to get it |
+|---|---|---|
+| `QDRANT_URL` | api, db | Qdrant Cloud → your cluster → Overview → Endpoint |
+| `QDRANT_API_KEY` | api, db | Qdrant Cloud → your cluster → API keys |
+| `HF_TOKEN` | api | [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens) — a **Read** token suffices |
+| `REDDIT_CLIENT_ID` | db | [reddit.com/prefs/apps](https://www.reddit.com/prefs/apps) → create a **script** app; the id is the string under the app name |
+| `REDDIT_CLIENT_SECRET` | db | Same app, the field labelled **secret** |
+| `ENV` | api | Optional. Set to `test` to stream a canned answer instead of calling the LLM |
+
+Both services read the same names, so each secret is declared exactly once. The Space and
+GitHub secret names are identical to these.
+
+`HF_TOKEN` is **required**: `services/api` reads it with `os.environ[...]` and raises `KeyError`
+at startup if it is missing, so the server never binds. It authenticates both the Inference
+calls and the download of the embedding and reranker models.
+
+In production nothing reads `.env`; each Space injects the same names from its
+**Settings → Secrets**.
+
+## Running the services
+
+### API + frontend
+
+Two terminals. The backend:
+
+```bash
+cd services/api
+pip install -r requirements.txt
+python -m app.app                      # http://localhost:7860
+```
+
+Accepts `--host`, `--port`, `--config`, and `--debug` (debug enables reload and DEBUG logging).
+`/docs` serves Swagger UI.
+
+The frontend dev server:
+
+```bash
+cd services/api/frontend
+npm ci
+npm run dev                            # http://localhost:8080
+```
+
+Vite proxies `/ask`, `/quota`, `/health` and `/rewriteQuery` to `localhost:7860`, so the two
+run together with no CORS configuration.
+
+In production there is no proxy and no second server: the Dockerfile builds the frontend and
+FastAPI serves `frontend/dist` on the same origin as the API, from port 7860.
+
+### DB listener
+
+```bash
+cd services/db
+pip install -r requirements.txt
+python -m app.app                      # http://localhost:7860
+```
+
+On startup it creates the Qdrant collection from the contract if absent, validates it if
+present, then starts the listener thread. It only reacts to **new** comments
+(`skip_existing=True`), so nothing happens until someone posts in r/PESU.
+
+`/health` returns `{"status": "ok"}`, or **503** with a `detail` once the listener has stopped
+on a contract violation — a dead writer is visible rather than silent.
+
+> Run `services/db` **before** `services/api` against a fresh Qdrant. The writer is what creates
+> the collection, and the reader refuses to start without one.
+
+### Docker
+
+```bash
+mkdir -p services/api/conf && cp conf/collection.yaml services/api/conf/
+docker build services/api --tag ask-pesu
+docker run --rm -p 7860:7860 --env-file .env ask-pesu
+```
+
+Substitute `db` for `api` for the listener. Both images pull the **CPU build of torch** from
+PyTorch's own index, which is what keeps them at ~2.8 GB instead of ~16 GB; the Dockerfiles pass
+`--extra-index-url https://download.pytorch.org/whl/cpu` for that reason.
+
+## Configuration
+
+Runtime behaviour that is *not* part of the collection contract lives in
+[`services/api/conf/config.yaml`](services/api/conf/config.yaml):
+
+| Key | Default | Meaning |
+|---|---|---|
+| `llm.primary.repo_id` | `Qwen/Qwen3-4B-Instruct-2507` | Answers, query rewriting, multi-query expansion |
+| `llm.thinking.repo_id` | `Qwen/Qwen3-4B-Thinking-2507` | Answers in thinking mode only |
+| `llm.*.temperature` | `0.3` | Sampling temperature |
+| `llm.*.max_new_tokens` | `2048` | Generation cap |
+| `search_kwargs.k` | `5` | Documents retrieved per generated query |
+| `search_kwargs.score_threshold` | `0.3` | Reranker cutoff (sigmoid) |
+| `reranker.enabled` | `true` | Turn the cross-encoder off to fall back to raw vector scores |
+| `prompts.*` | — | System, answer, and query-rewrite prompts |
+
+Prompt and model changes go here first — they are config, not code.
+
+## Testing
+
+```bash
+pip install pytest pyyaml qdrant-client langchain-core
+pytest tests/ -q
+```
+
+The contract suite deliberately avoids the api's torch and LangChain stack so it stays fast. It
+runs the shared assertions against **both** services' loaders, and AST-compares their shared
+functions so the two cannot drift in behaviour even though each carries its own copy.
+
+Frontend:
+
+```bash
+cd services/api/frontend
+npm test                               # vitest
+```
+
+## Linting and formatting
+
+One ruff configuration covers both services and the tests, with no per-service exemptions.
 
 ```bash
 pip install pre-commit
-pre-commit run --all-files
+pre-commit install                     # run automatically on commit
+pre-commit run --all-files             # or on demand
 ```
+
+`ruff check .` and `ruff format .` from the repository root behave identically to CI.
+
+## Continuous integration
+
+| Workflow | Trigger | What it does |
+|---|---|---|
+| `source.yaml` | PR opened/updated | Rejects PRs that are not from a fork or that target anything other than `dev` |
+| `lint.yaml` | Push (not `main`/`dev`), PR | `ruff check` + `ruff format --check` |
+| `pre-commit.yaml` | Push, PR | Every pre-commit hook, on all files |
+| `contract.yaml` | Push, PR | Contract tests; asserts one tracked `collection.yaml`; rehearses the deploy vendoring and checks each split tree ships the contract |
+| `docker.yaml` | Manual, or after Pre-Commit | Builds both images, boots each container, polls `/health` |
+| `deploy-staging.yaml` | Manual on `dev` | Pushes `services/api` to `askpesu-dev`. Also chained after Docker Container Build, but see Known issues |
+| `deploy-db.yaml` | Manual | Pushes `services/db` to `askpesu-db` |
+| `deploy-prod.yaml` | Manual | Fast-forwards `dev` → `main`, then pushes `services/api` to both Spaces |
+
+`deploy-db.yaml` and `deploy-prod.yaml` additionally refuse to run unless `github.actor` is listed in
+`vars.PROD_DEPLOYMENT_ALLOWED_USERS`. `deploy-staging.yaml` is gated only on the branch being `dev`.
+
+**Required repository secrets:** `HF_TOKEN`, `QDRANT_URL`, `QDRANT_API_KEY`, `REDDIT_CLIENT_ID`,
+`REDDIT_CLIENT_SECRET`.
+
+## Deployment
+
+All three Spaces are fed by force-pushing a `git subtree split` of one service directory, so a
+deploy replaces the Space's history. Each deploy job first copies `conf/collection.yaml` into the
+service tree and refuses to push a tree without it.
+
+> **One-time step before the next deploy.** `services/db` used to read `qdrant_url`,
+> `qdrant_api_key`, `reddit_client_id` and `reddit_client_secret`; it now reads the same
+> uppercase names as everything else. Rename those four secrets in the **askpesu-db** Space
+> (Settings → Variables and secrets) to `QDRANT_URL`, `QDRANT_API_KEY`, `REDDIT_CLIENT_ID` and
+> `REDDIT_CLIENT_SECRET`. There is deliberately no fallback to the old names, so a missed rename
+> fails loudly at startup rather than running with `None` credentials.
+
+Order matters on a fresh collection — **the writer creates it, the reader requires it**:
+
+1. **`Deploy DB`** → `askpesu-db`. Confirm `/health` is 200 and the logs show
+   `Collection 'ask-pesu' created`.
+2. **`Deploy to Staging`** (on `dev`) → `askpesu-dev`. Confirm `/health`, `/docs`, that the
+   frontend and `/assets` load, and that one real question streams end to end.
+3. **`Deploy to Production`** → fast-forwards `dev` into `main`, then pushes to `askpesu-dev`
+   and `askpesu`. If the fast-forward aborts, `dev` and `main` have diverged; resolve rather
+   than forcing.
+
+### Rollback
+
+Every deploy is a force-push, so rolling back is re-pushing a known-good tree:
+
+```bash
+git subtree split --prefix=services/api <good-sha> -b rollback
+git push https://pesu-dev:$HF_TOKEN@huggingface.co/spaces/pesu-dev/askpesu rollback:main --force
+```
+
+On GitHub, revert the merge commit on `dev`. `main` only advances via the production workflow,
+so it stays put until the next dispatch.
 
 ## Contributing
 
-Pull requests **must** come from a fork and **must** target `dev`; CI enforces both.
-`main` is a deploy artifact and is advanced only by the production deploy workflow.
-See [`.github/CONTRIBUTING.md`](.github/CONTRIBUTING.md).
+Pull requests **must** come from a fork and **must** target `dev`; `source.yaml` enforces both.
+`main` is a deploy artifact and is advanced only by the production workflow. See
+[`.github/CONTRIBUTING.md`](.github/CONTRIBUTING.md) and
+[`.github/CODE_OF_CONDUCT.md`](.github/CODE_OF_CONDUCT.md).
+
+Before opening a PR: `pre-commit run --all-files` and `pytest tests/ -q`.
+
+Reviewers are assigned by [`.github/CODEOWNERS`](.github/CODEOWNERS). Changes to
+`conf/collection.yaml` affect both services and always require owner review.
+
+## Known issues
+
+- **The `Pre-Commit → Docker → Deploy to Staging` chain has never fired.** Its `head_branch`
+  guard does not match, because the runs that succeed are on fork PR branches. Manual dispatch
+  is the only working deploy path today.
+- **`services/db` has no automatic container build.** Its pre-monorepo workflow built on every
+  push to `main`; that trigger was not carried over.
+- **The quota state machine is inert.** `QuotaState.disable()` is never called, so `/quota`
+  never reports a cooldown and the 429 path is unreachable.
+- **`AskResponseModel.latency` is declared required and never populated.**
+- **Chat history is sent doubled.** `frontend/src/lib/api.ts` maps per message rather than
+  pairing turns, so the model receives each exchange twice, half of it with blank answers.
+- **`handleThinkLonger` drops `step` and `error` events**, so thinking-mode failures are silent.
+- **`/ask` declares `response_model=AskResponseModel` and returns NDJSON**, and `app/docs/ask.py`
+  still documents the pre-streaming shape.
+- **`origins` in `app.py` is vestigial** — production is same-origin and development goes
+  through the Vite proxy.
+- **Locally built images can bake a `.env`.** There is no `.dockerignore`; `.env` is gitignored
+  so it never reaches a Space.
+
+## License
+
+[MIT](LICENSE).

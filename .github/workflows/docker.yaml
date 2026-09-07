@@ -79,10 +79,10 @@ jobs:
       - name: Run container
         run: |
           docker run --name ask-pesu-db -d -p 7860:7860 \
-            -e reddit_client_id="${{ secrets.REDDIT_CLIENT_ID }}" \
-            -e reddit_client_secret="${{ secrets.REDDIT_CLIENT_SECRET }}" \
-            -e qdrant_url="${{ secrets.QDRANT_URL }}" \
-            -e qdrant_api_key="${{ secrets.QDRANT_API_KEY }}" \
+            -e REDDIT_CLIENT_ID="${{ secrets.REDDIT_CLIENT_ID }}" \
+            -e REDDIT_CLIENT_SECRET="${{ secrets.REDDIT_CLIENT_SECRET }}" \
+            -e QDRANT_URL="${{ secrets.QDRANT_URL }}" \
+            -e QDRANT_API_KEY="${{ secrets.QDRANT_API_KEY }}" \
             ask-pesu-db
       - name: Wait for the container to be ready
         run: |

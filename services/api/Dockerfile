@@ -27,9 +27,6 @@ COPY app /app/app
 COPY conf /app/conf
 COPY requirements.txt /app/requirements.txt
 
-# Copy .env if it exists
-COPY .env* /app/
-
 # Copy the built frontend files from the frontend stage
 COPY --from=frontend-builder /app/frontend/dist frontend/dist
 

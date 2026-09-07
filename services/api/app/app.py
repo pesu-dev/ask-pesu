@@ -230,7 +230,7 @@ async def ask(payload: AskRequestModel) -> StreamingResponse:
         logging.warning("Primary LLM is currently unavailable due to quota limits.")
         raise QuotaExceededError("Primary LLM is temporarily unavailable due to quota limits. Please try again later.")
 
-    if os.getenv("env") == "test":
+    if os.getenv("ENV") == "test":
         return StreamingResponse(test_stream(), media_type="text/plain")
     return StreamingResponse(
         rag.generate(query=payload.query, thinking=payload.thinking, history=payload.history),
