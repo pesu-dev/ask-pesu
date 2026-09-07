@@ -12,11 +12,11 @@ Hugging Face Spaces but share one Qdrant collection, and therefore one schema co
 
 ## Contents
 
-- [Services](#services) · [How it works](#how-it-works) · [The collection contract](#the-collection-contract)
-- [Repository layout](#repository-layout) · [Getting started](#getting-started) · [Environment variables](#environment-variables)
-- [Running the services](#running-the-services) · [Configuration](#configuration) · [Testing](#testing)
-- [Linting and formatting](#linting-and-formatting) · [Continuous integration](#continuous-integration)
-- [Deployment](#deployment) · [Contributing](#contributing) · [Known issues](#known-issues)
+- [Services](#services) · [How it works](#how-it-works) · [Where things live](#where-things-live)
+- [Quota and cooldowns](#quota-and-cooldowns) · [The collection contract](#the-collection-contract) · [Repository layout](#repository-layout)
+- [Getting started](#getting-started) · [Environment variables](#environment-variables) · [Running the services](#running-the-services)
+- [Configuration](#configuration) · [Testing](#testing) · [Linting and formatting](#linting-and-formatting)
+- [Continuous integration](#continuous-integration) · [Deployment](#deployment) · [Contributing](#contributing) · [Known issues](#known-issues)
 
 ---
 
@@ -96,6 +96,36 @@ it as `step` events. Any change here must be made in **both** `services/api/app/
 
 **Conversations are never stored server-side.** The frontend keeps them in `localStorage`
 under `askpesu-conversations`, and replays the relevant history with each request.
+
+### Where things live
+
+| To change… | Edit |
+|---|---|
+| Prompts, model ids, `k`, reranker toggle | `services/api/conf/config.yaml` |
+| The retrieval pipeline itself | `services/api/app/rag.py` |
+| Routes, CORS, static serving, startup | `services/api/app/app.py` |
+| Request/response schemas and OpenAPI examples | `services/api/app/models/`, `services/api/app/docs/` |
+| Cooldown behaviour | `services/api/app/quota.py` |
+| What gets indexed, and how a thread is rendered | `services/db/app/app.py`, `services/db/app/utils.py` |
+| Collection name, embedding model, vector geometry, payload keys | `conf/collection.yaml` |
+| The streaming event contract | `services/api/app/rag.py` **and** `services/api/frontend/src/lib/api.ts` |
+
+The last row is the one to be careful with: the event shape is duplicated between the backend
+that emits it and the client that parses it, and nothing enforces that they agree.
+
+## Quota and cooldowns
+
+The inference provider rate-limits, and retrying into a refusal just produces more failures, so
+each model carries its own cooldown:
+
+- A quota failure surfaces **mid-stream**, after the response headers are already sent, so it
+  cannot become a 429. `generate()` reports it as an `error` event and calls back into
+  `QuotaState.disable()`, which blocks that model for 24 hours.
+- Subsequent requests for that model are refused **before** streaming starts, as a real 429
+  carrying the quota snapshot, so the client can say when to retry.
+- Cooldowns expire lazily: `refresh()` re-enables the model the next time anything looks at it,
+  so there is no background task.
+- The two models are tracked separately — exhausting thinking mode leaves normal mode usable.
 
 ## The collection contract
 
@@ -393,19 +423,17 @@ Reviewers are assigned by [`.github/CODEOWNERS`](.github/CODEOWNERS). Changes to
   guard does not match, because the runs that succeed are on fork PR branches. Manual dispatch
   is the only working deploy path today.
 - **`services/db` has no automatic container build.** Its pre-monorepo workflow built on every
-  push to `main`; that trigger was not carried over.
-- **The quota state machine is inert.** `QuotaState.disable()` is never called, so `/quota`
-  never reports a cooldown and the 429 path is unreachable.
-- **`AskResponseModel.latency` is declared required and never populated.**
-- **Chat history is sent doubled.** `frontend/src/lib/api.ts` maps per message rather than
-  pairing turns, so the model receives each exchange twice, half of it with blank answers.
-- **`handleThinkLonger` drops `step` and `error` events**, so thinking-mode failures are silent.
-- **`/ask` declares `response_model=AskResponseModel` and returns NDJSON**, and `app/docs/ask.py`
-  still documents the pre-streaming shape.
-- **`origins` in `app.py` is vestigial** — production is same-origin and development goes
-  through the Vite proxy.
-- **Locally built images can bake a `.env`.** There is no `.dockerignore`; `.env` is gitignored
-  so it never reaches a Space.
+  push to `main`; that trigger was not carried over. Both of these are tracked together as
+  "CI-based deploys for both services".
+- **Cooldown state is per process.** `QuotaState` lives in memory, so a restart clears it and
+  two replicas would each track their own view. Fine for a single Space; wrong the moment there
+  is more than one.
+- **Quota detection is a heuristic.** `_is_quota_error` matches an HTTP 429 or a handful of
+  phrases. A false positive costs one unnecessary cooldown; a false negative just means the
+  old behaviour of retrying against a provider that is refusing us.
+- **No `.dockerignore`.** A locally built image can bake a `.env` sitting in a service
+  directory. Not a deploy risk: the documented `.env` lives at the repository root, which is
+  outside both build contexts, and it is gitignored so it never reaches a Space.
 
 ## License
 

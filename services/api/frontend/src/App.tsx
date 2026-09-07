@@ -1,3 +1,6 @@
+// App shell: providers (query client, theme, tooltips, toasts) wrapped around
+// the router. Only two routes exist -- the chat screen and a catch-all -- because
+// conversation selection is state, not a URL.
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Route, Routes } from "react-router-dom";
 import { Toaster as Sonner } from "@/components/ui/sonner";
