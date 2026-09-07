@@ -13,6 +13,8 @@ What it writes is fixed by ``conf/collection.yaml`` and enforced on every upsert
 see :mod:`app.contract`.
 """
 
+import asyncio
+import html
 import os
 import threading
 import traceback
@@ -25,7 +27,7 @@ from app import contract as contract_mod
 from app.utils import build_thread_string, convert_to_uuid
 from dotenv import load_dotenv
 from fastapi import FastAPI
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_qdrant import FastEmbedSparse, QdrantVectorStore, RetrievalMode
 from praw.models import Comment
@@ -261,8 +263,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # One cheap read that forces the OAuth token exchange and proves the
     # credentials work against r/PESU. next() is enough: praw fetches lazily, so
     # this pulls a single listing page rather than the whole subreddit.
-    try:
+    #
+    # Run off the event loop. praw is synchronous, so calling it here directly
+    # would block the loop for a network round trip -- and praw checks for a
+    # running loop and warns that you should be using Async PRAW, which is noise
+    # in every startup log. A worker thread has no running loop, so it neither
+    # blocks nor warns. The listener itself already runs on its own thread for
+    # the same reason.
+    def probe_reddit() -> None:
         next(iter(subreddit.new(limit=1)))
+
+    try:
+        await asyncio.to_thread(probe_reddit)
     except Exception as error:
         raise RuntimeError(f"Reddit credentials rejected, or r/PESU unreachable: {error}") from error
 
@@ -281,6 +293,40 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+
+@app.get("/", response_class=HTMLResponse)
+async def index() -> HTMLResponse:
+    """Serve a small status page.
+
+    Hugging Face renders a Space at ``/``, so without this the Space page is a
+    404 for anyone who opens it. There is no UI to show -- the work happens on a
+    background thread -- so this reports what a reader of that page would want to
+    know: whether the listener is alive, and where the code lives.
+
+    It always returns 200, even with the listener stopped. ``/`` is what the
+    platform polls to decide the app is up, and a contract violation is
+    permanent -- serving 503 here could have the Space restarted on a loop it
+    cannot recover from, and every restart of this service loses the comments
+    posted while it is down. The failure is reported by ``/health``, which is
+    the endpoint that exists to be machine-read.
+    """
+    ok = listener_error is None
+    status = "listening" if ok else "stopped"
+    detail = "" if ok else f"<p><strong>Reason:</strong> {html.escape(listener_error)}</p>"
+    return HTMLResponse(
+        f"""<!doctype html><meta charset="utf-8"><title>askPESU DB updater</title>
+<style>body{{font:15px/1.6 system-ui,sans-serif;max-width:34rem;margin:3rem auto;padding:0 1rem}}
+code{{background:#0001;padding:.1em .3em;border-radius:3px}}</style>
+<h1>askPESU DB updater</h1>
+<p>Status: <strong>{status}</strong> &middot; collection <code>{html.escape(contract.name)}</code></p>
+{detail}
+<p>Streams new r/PESU comment threads into the shared Qdrant collection that
+<a href="https://huggingface.co/spaces/pesu-dev/askpesu">askPESU</a> answers from.
+There is no interface here; see <a href="/health">/health</a>.</p>
+<p>Source: <a href="https://github.com/pesu-dev/ask-pesu">pesu-dev/ask-pesu</a></p>""",
+        status_code=200,
+    )
 
 
 @app.get("/health")

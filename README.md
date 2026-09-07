@@ -181,10 +181,18 @@ A `/quota` response while the thinking model is in cooldown:
 
 | Route | Returns |
 |---|---|
+| `GET /` | A small status page: whether the listener is alive, which collection it writes, and why it stopped if it has. Always **200** |
 | `GET /health` | `{"status": "ok"}`, or **503** `{"status": "error", "detail": ...}` once the listener has stopped on a contract violation |
 
-The listener has no other surface. It is a Space, so it must serve HTTP, but all
-of its work happens on a background thread.
+The listener has no other surface; all of its work happens on a background thread. `/` exists
+because a Space is rendered at that path, so without it the Space page is a 404 for anyone who
+opens it.
+
+The split in status codes is deliberate. `/` is what the platform polls to decide the app is up,
+and a contract violation is permanent — answering 503 there could have the Space restarted on a
+loop it cannot recover from, and **every restart of this service loses the r/PESU comments posted
+while it was down**. So `/` stays 200 and reports the problem in its text; `/health` carries the
+503, because it is the endpoint meant to be machine-read.
 
 ### Where things live
 
