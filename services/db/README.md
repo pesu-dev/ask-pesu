@@ -59,6 +59,9 @@ is missed while it is down is not picked up when it returns.
 This Space only sees comments posted after it starts. History is loaded
 separately with `scripts/populate_db.py`.
 
+There is no interface to speak of: `/` is a status page and `/health` reports
+whether the listener is still running.
+
 **Configuration.** `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET`, `QDRANT_URL`,
 `QDRANT_API_KEY` and `QDRANT_COLLECTION` are set as Space secrets. Startup fails
 immediately if the Reddit credentials are missing or rejected.

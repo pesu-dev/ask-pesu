@@ -1,0 +1,34 @@
+# What must not enter this image's build context.
+#
+# The context is services/api, so this file has to live here -- Docker reads
+# .dockerignore from the context root and nowhere else, which is why it is one
+# of the few files not consolidated at the repository root.
+#
+# Two reasons for each entry: secrets that would be baked into a layer, and
+# weight. node_modules alone can be hundreds of megabytes, and the frontend
+# build stage installs its own from package-lock.json anyway -- copying the
+# host's would be slower and could carry platform-specific binaries.
+
+# Secrets. The documented .env lives at the repository root, outside this
+# context, but a stray one here would otherwise be COPYed into the image.
+.env
+.env.*
+!.env.example
+
+# Installed and built artefacts. `npm ci` and `npm run build` produce these
+# inside the image; the host's copies are dead weight at best.
+frontend/node_modules/
+frontend/dist/
+frontend/.next/
+frontend/out/
+
+# Python bytecode, caches, editor and VCS state.
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.git/
+.gitignore
+.vscode/
+.idea/

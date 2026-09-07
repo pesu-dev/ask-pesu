@@ -17,12 +17,12 @@ thumbnail: >-
   https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcT0VZcBflk0Q1auwPmjuXgoBj-VzFd9Iz_JfA&s
 models:
 - Alibaba-NLP/gte-modernbert-base
-- cross-encoder/ms-marco-MiniLM-L-6-v2
+- cross-encoder/ms-marco-MiniLM-L6-v2
 - Qwen/Qwen3-4B-Instruct-2507
 - Qwen/Qwen3-4B-Thinking-2507
 preload_from_hub:
 - Alibaba-NLP/gte-modernbert-base
-- cross-encoder/ms-marco-MiniLM-L-6-v2
+- cross-encoder/ms-marco-MiniLM-L6-v2
 tags:
 - rag
 - assistant
