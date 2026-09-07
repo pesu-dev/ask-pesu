@@ -15,5 +15,17 @@ dependencies = [
     "pyyaml>=6.0.2",
     "qdrant-client>=1.9.0",
     "sentence-transformers>=5.1.0",
+    "torch>=2.10.0",
     "uvicorn>=0.35.0",
 ]
+
+# torch resolves from PyTorch's CPU index. Both Spaces run on CPU, and the CUDA
+# wheels were ~4 GB of image for libraries that are never loaded. `explicit`
+# keeps this index used ONLY for torch, so nothing else is resolved against it.
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu" }]

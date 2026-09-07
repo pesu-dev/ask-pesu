@@ -45,7 +45,11 @@ ENV TORCHINDUCTOR_CACHE_DIR=/tmp/torchinductor_cache
 RUN echo "user:x:1000:1000:user:/home/user:/bin/bash" >> /etc/passwd && mkdir -p /home/user
 
 # Install dependencies
-RUN pip install -r requirements.txt
+# torch is pinned to the +cpu build, which is published only on PyTorch's own
+# index -- both Spaces run on CPU, and the CUDA wheels were ~4 GB of the image
+# for libraries that are never loaded. requirements.txt pins the exact +cpu
+# version, and PyPI has no such wheel, so this resolves deterministically.
+RUN pip install --extra-index-url https://download.pytorch.org/whl/cpu -r requirements.txt
 
 # Set Python path to include the app directory
 ENV PYTHONPATH=/app
