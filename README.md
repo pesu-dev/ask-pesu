@@ -95,6 +95,11 @@ The catch-up and the stream share one `index_comment()`, for the same reason the
 shared with the backfill: two code paths writing the same thread must not be able to produce
 different documents.
 
+It runs once, at startup, not on every reconnect. A reconnect follows a transient error and its
+gap is seconds where a restart's is minutes, so re-scanning the backlog on every network blip
+would cost far more than it recovered. That leaves a small blind spot by choice: comments posted
+during those few seconds are missed, and only a backfill would recover them.
+
 Anything older than that window comes from [the backfill scripts](#backfilling-history).
 
 ### The reader — `services/api`
@@ -637,6 +642,13 @@ each model carries its own cooldown:
   so there is no background task and no window where the state is stale while being read.
 - The two models are tracked separately — exhausting thinking mode leaves normal mode usable.
 
+Two properties of this are permanent rather than pending. The state lives in process memory, so a
+restart clears it and a second replica would keep its own view — correct for one Space, wrong the
+moment there are two. And `_is_quota_error` is a heuristic: an HTTP 429, or one of a handful of
+phrases in the message. A false positive costs one unnecessary cooldown; a false negative just
+means retrying against a provider that is already refusing us. Neither is worth a fix at this
+size, but both are worth knowing before trusting `/quota` as a source of truth.
+
 ## Failure behaviour
 
 The system is built to fail loudly at startup and quietly degrade at request time, because the
@@ -708,6 +720,9 @@ ruff through the same hooks rather than as a separate job.
 | `pre-commit.yaml` | Push, PR | Every pre-commit hook, on all files — ruff lint and format included |
 | `contract.yaml` | Push, PR | Asserts each shared file is tracked exactly once; recompiles `requirements.txt` and fails on drift; runs [`scripts/check_duplication.py`](scripts/check_duplication.py); rehearses the deploy vendoring and checks each split tree is a complete Space root |
 | `docker.yaml` | Push to `dev`, chained off Pre-Commit; or manual | Builds both images, boots each container, polls `/health` |
+
+`docker.yaml` costs roughly twenty minutes per merge, building two ~3 GB images. That is the
+price of the only check that exercises a Dockerfile at all — nothing else in CI builds one.
 | `deploy-dev-api.yaml` | Push to `dev` | Deploys the api to `askpesu-dev`. The db is not deployed from `dev` |
 | `deploy-prod.yaml` | Manual | Fast-forwards `dev` → `main`, then deploys **both** services to `askpesu` and `askpesu-db` |
 
@@ -848,30 +863,15 @@ Reviewers are assigned by [`.github/CODEOWNERS`](.github/CODEOWNERS). Changes to
 
 ## Known issues
 
+Only work that is actually pending lives here. Deliberate limits are documented where the
+subsystem is explained, rather than collected as though someone intends to fix them.
+
 - **Retrieval is dense-only while writes are hybrid.** Every point carries a BM25 sparse vector
   that nothing queries. Switching the reader to `RetrievalMode.HYBRID` is a change to one
   constructor rather than a re-index, but it is not free: Qdrant fuses the two rankings with
   Reciprocal Rank Fusion, whose output is a rank-derived score on a different scale from cosine
-  similarity, so `score_threshold` would stop meaning anything and the reranker cutoff would
-  need re-deriving against real queries.
-- **There is no staging writer.** The free tier allows three CPU Spaces, spent on two api
-  environments and one db, so a `services/db` change is tested locally or not at all and first
-  runs anywhere at promotion. The startup contract checks and per-payload validation catch the
-  structural failures; a semantically wrong but schema-valid write is caught by neither and is
-  undone by re-running the backfill. A fourth Space would restore a staging writer.
-- **A reconnect still has a small blind spot.** The startup catch-up covers a restart, but after
-  a transient error the stream re-enters with `skip_existing=True` and does not re-scan, so
-  comments posted during those seconds are missed. Re-scanning on every network blip would cost
-  far more than it recovers; a backfill closes the gap if it ever matters.
-- **Cooldown state is per process.** `QuotaState` lives in memory, so a restart clears it and two
-  replicas would each track their own view. Fine for a single Space; wrong the moment there is
-  more than one.
-- **Quota detection is a heuristic.** `_is_quota_error` matches an HTTP 429 or a handful of
-  phrases. A false positive costs one unnecessary cooldown; a false negative means retrying
-  against a provider that is already refusing us.
-- **The container smoke tests cost about twenty minutes per merge.** `docker.yaml` builds two
-  ~3 GB images on every push to `dev`. That is the price of the only check that exercises a
-  Dockerfile at all.
+  similarity, so `score_threshold` would stop meaning anything and the reranker cutoff would need
+  re-deriving against real queries. Planned as its own change.
 
 ## License
 

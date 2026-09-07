@@ -15,7 +15,6 @@ request. Run it directly to check a working tree:
 
 import ast
 import re
-import sys
 from pathlib import Path
 
 import yaml

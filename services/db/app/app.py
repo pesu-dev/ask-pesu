@@ -111,7 +111,7 @@ def get_root_comment(comment: Comment) -> Comment:
     return parent
 
 
-def index_comment(comment: Comment) -> bool:
+def index_comment(comment: Comment, root_comment: Comment | None = None) -> bool:
     """Index the thread one comment belongs to. False if the comment was skipped.
 
     Shared by the live stream and the startup catch-up so the two cannot produce
@@ -120,6 +120,9 @@ def index_comment(comment: Comment) -> bool:
 
     Args:
         comment: Any comment; the thread is found by walking up from it.
+        root_comment: The thread's root, when the caller has already resolved it.
+            Walking up costs a network request per level, so the catch-up passes
+            the root it needed for deduplication rather than paying for it twice.
 
     Returns:
         True if a point was written, False if the comment was skipped.
@@ -133,7 +136,8 @@ def index_comment(comment: Comment) -> bool:
         return False
 
     submission = comment.submission
-    root_comment = get_root_comment(comment)
+    if root_comment is None:
+        root_comment = get_root_comment(comment)
 
     # Title and body give the thread its topic; without them a reply like
     # "yes, around 8.5" embeds with no idea what it is about.
@@ -184,13 +188,20 @@ def catch_up(limit: int = CATCH_UP_COMMENTS) -> None:
     seen: set[str] = set()
     written = 0
     for comment in subreddit.comments(limit=limit):
-        root_id = get_root_comment(comment).id
-        if root_id in seen:
+        # Cheapest test first: skipping AutoModerator here avoids walking a
+        # thread only to discard it.
+        if str(comment.author).lower() == "automoderator":
             continue
-        seen.add(root_id)
-        if index_comment(comment):
+        # Resolved once and handed on. get_root_comment() costs a request per
+        # level of nesting, so letting index_comment() walk again would double
+        # the traffic of the whole catch-up.
+        root_comment = get_root_comment(comment)
+        if root_comment.id in seen:
+            continue
+        seen.add(root_comment.id)
+        if index_comment(comment, root_comment=root_comment):
             written += 1
-    print(f"Catch-up complete: {written} threads indexed from {len(seen)} seen.")
+    print(f"Catch-up complete: {written} threads indexed from {len(seen)} distinct threads seen.")
 
 
 def listen_comments() -> None:
