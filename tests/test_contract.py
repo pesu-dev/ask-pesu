@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 import yaml
 from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, VectorParams
+from qdrant_client.models import Distance, SparseVectorParams, VectorParams
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -94,6 +94,8 @@ class TestSingleSourceOfTruth:
             str(authored["dense"]["distance"]),
             authored["dense"].get("vector_name", ""),
             tuple(authored["metadata"]),
+            (authored.get("sparse") or {}).get("vector_name", ""),
+            str((authored.get("sparse") or {}).get("modifier", "")),
         )
         assert tuple(api.load()) == expected
         assert tuple(db.load()) == expected
@@ -254,6 +256,45 @@ class TestCollectionGeometry:
 
         client.create_collection = racing_create
         assert db.ensure_collection(db.load(), client) is False
+
+
+class TestSparseVector:
+    """The sparse vector exists for hybrid retrieval that is not built yet.
+
+    It is contracted now because the `idf` modifier is easy to omit and produces
+    no visible symptom -- writes succeed and only the ranking is wrong -- which
+    is exactly the class of failure this contract exists to make loud.
+    """
+
+    def test_writer_creates_the_sparse_vector_with_its_modifier(self, client):
+        contract = db.load()
+        assert db.ensure_collection(contract, client) is True
+        live = client.get_collection(contract.name).config.params.sparse_vectors or {}
+        assert contract.sparse_vector_name in live
+        assert str(getattr(live[contract.sparse_vector_name].modifier, "value", "")) == contract.sparse_modifier
+
+    def test_a_missing_sparse_vector_is_caught(self, mod, client):
+        contract = mod.load()
+        make_collection(client, contract)  # dense only
+        with pytest.raises(mod.ContractViolationError, match="no sparse vector"):
+            mod.validate_collection(contract, client)
+
+    def test_a_missing_idf_modifier_is_caught(self, mod, client):
+        """The bug that shipped: the vector was created, the modifier was not."""
+        contract = mod.load()
+        client.create_collection(
+            contract.name,
+            vectors_config={contract.vector_name: VectorParams(size=contract.size, distance=Distance.COSINE)},
+            sparse_vectors_config={contract.sparse_vector_name: SparseVectorParams()},
+        )
+        with pytest.raises(mod.ContractViolationError, match="sparse modifier"):
+            mod.validate_collection(contract, client)
+
+    def test_no_sparse_block_means_no_sparse_checks(self, mod, client):
+        """Opting out must not fail a dense-only collection."""
+        contract = mod.load()._replace(sparse_vector_name="", sparse_modifier="")
+        make_collection(client, contract)
+        mod.validate_collection(contract, client)
 
 
 class TestWriterPayload:

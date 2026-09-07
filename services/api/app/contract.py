@@ -28,6 +28,10 @@ class Contract(NamedTuple):
     distance: str
     vector_name: str
     metadata: tuple[str, ...]
+    # Empty when conf/collection.yaml declares no `sparse` block, which turns
+    # the sparse checks off rather than failing.
+    sparse_vector_name: str = ""
+    sparse_modifier: str = ""
 
 
 def contract_path() -> Path:
@@ -75,6 +79,7 @@ def load(collection: str | None = None) -> Contract:
         )
     collection_config = yaml.safe_load(contract_path().read_text())["collection"]
     dense = collection_config["dense"]
+    sparse = collection_config.get("sparse") or {}
     return Contract(
         name=name,
         model=dense["model"],
@@ -82,7 +87,31 @@ def load(collection: str | None = None) -> Contract:
         distance=str(dense["distance"]),
         vector_name=dense.get("vector_name", ""),
         metadata=tuple(collection_config["metadata"]),
+        sparse_vector_name=sparse.get("vector_name", ""),
+        sparse_modifier=str(sparse.get("modifier", "")),
     )
+
+
+def _sparse_mismatches(contract: Contract, client: QdrantClient) -> list[str]:
+    """Check the contracted sparse vector against the live collection.
+
+    Returns an empty list when no sparse vector is contracted, so a collection
+    that predates hybrid retrieval is not failed for lacking one.
+
+    The modifier is the part worth checking. Without ``idf`` the vector still
+    exists and writes still succeed -- only the ranking is silently wrong,
+    because Qdrant scores raw term frequency instead of weighting rare terms.
+    """
+    if not contract.sparse_vector_name:
+        return []
+    live = client.get_collection(contract.name).config.params.sparse_vectors or {}
+    if contract.sparse_vector_name not in live:
+        return [f"no sparse vector {contract.sparse_vector_name!r} (collection has {sorted(live)})"]
+    modifier = getattr(live[contract.sparse_vector_name], "modifier", None)
+    modifier = str(getattr(modifier, "value", modifier) or "")
+    if modifier != contract.sparse_modifier:
+        return [f"sparse modifier {modifier or 'unset'!r} != contracted {contract.sparse_modifier!r}"]
+    return []
 
 
 def validate_collection(contract: Contract, client: QdrantClient) -> None:
@@ -114,6 +143,7 @@ def validate_collection(contract: Contract, client: QdrantClient) -> None:
         mismatches.append(f"vector size {params.size} != contracted {contract.size}")
     if distance != contract.distance:
         mismatches.append(f"distance {distance!r} != contracted {contract.distance!r}")
+    mismatches += _sparse_mismatches(contract, client)
     if mismatches:
         raise ContractViolationError(
             f"Collection {contract.name!r} violates conf/collection.yaml: {'; '.join(mismatches)}. "

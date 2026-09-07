@@ -32,6 +32,19 @@ collection:
     # planned BM25 work lands. Naming it now costs nothing.
     vector_name: "dense"
 
+  # Sparse vector for BM25 hybrid retrieval. Nothing writes it yet -- the
+  # retrieval pipeline is still dense-only -- but it is contracted now because
+  # adding a vector to a populated collection may mean rebuilding it, and
+  # because `modifier: idf` is easy to omit and impossible to notice: without
+  # it Qdrant scores raw term frequency, so a thread repeating "PESU" outranks
+  # one that answers the question.
+  #
+  # Remove this block to opt out of sparse entirely; the checks are skipped when
+  # it is absent.
+  sparse:
+    vector_name: "sparse"
+    modifier: "idf"
+
   # Payload keys written by services/db on every point, enforced exactly: the
   # writer refuses to upsert a payload whose key set differs from this list, and
   # the reader refuses to start if a key it consumes is missing from it.

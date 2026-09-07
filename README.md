@@ -144,6 +144,7 @@ nothing meaningful:
 | Embedding model | `Alibaba-NLP/gte-modernbert-base` |
 | Vector size / distance | 768 / Cosine |
 | Vector name | `dense` (named, so hybrid retrieval can be added without re-indexing) |
+| Sparse vector | `sparse`, `modifier: idf` — contracted and verified, unused until hybrid lands |
 | Payload keys | `root_comment_id`, `post_id`, `author`, `url`, `permalink`, `score`, `upvote_ratio`, `created_utc`, `flair`, `nsfw` |
 | Citation target | `permalink` — for a link post `url` is the external article, not the discussion |
 
@@ -174,7 +175,7 @@ vector that hybrid retrieval will need. In Qdrant Cloud:
 | Dimension | `768` |
 | Metric | `Cosine` |
 | Sparse vector name | `sparse` |
-| IDF modifier | **enabled** |
+| IDF modifier | **enabled** — startup validation now rejects a collection without it |
 
 Create the sparse vector even though nothing uses it yet: BM25 needs the `idf` modifier to
 weight rare terms, and adding a vector to an existing collection may mean rebuilding it. The
