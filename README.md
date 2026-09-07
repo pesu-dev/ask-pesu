@@ -83,8 +83,19 @@ Every point is written with **two vectors**: the dense embedding, and a BM25 spa
 `fastembed`. The reader currently queries dense only. Writing sparse now is what makes turning
 on hybrid retrieval a configuration change later instead of re-embedding the whole collection.
 
-The listener only sees comments posted after the stream opens, on every reconnect as well as at
-startup. History comes from [the backfill scripts](#backfilling-history).
+A stream only yields comments posted after it opens, so a restart would otherwise leave a
+permanent hole — and this service restarts on every promotion. Before opening the stream it
+therefore **catches up**: it re-indexes the threads behind the last `CATCH_UP_COMMENTS` comments
+(100 by default), deduplicated, since a busy thread contributes many of them and they all resolve
+to one point. Writes are upserts keyed by the root comment, so overlapping with the stream costs
+an embedding and changes nothing — which is why the window is generous rather than exact. It does
+not need to know how long it was down.
+
+The catch-up and the stream share one `index_comment()`, for the same reason the tree renderer is
+shared with the backfill: two code paths writing the same thread must not be able to produce
+different documents.
+
+Anything older than that window comes from [the backfill scripts](#backfilling-history).
 
 ### The reader — `services/api`
 
@@ -329,6 +340,8 @@ If both copies exist and differ, the loader raises rather than silently preferri
 ├── LICENSE                   # the only copy; vendored into each Space at deploy time
 ├── .python-version           # 3.12
 ├── .pre-commit-config.yaml
+├── scripts/
+│   └── check_duplication.py  # asserts the four pairs that must agree, still agree
 ├── .github/
 │   ├── actions/deploy-space/ # the single deploy implementation, shared by both workflows
 │   └── workflows/            # CI and deploys
@@ -343,6 +356,7 @@ If both copies exist and differ, the loader raises rather than silently preferri
     │   │   └── docs/         # OpenAPI examples, one module per route
     │   ├── conf/config.yaml  # prompts, model ids, retrieval knobs
     │   ├── frontend/         # Vite + React 18 + TypeScript + shadcn/ui
+    │   ├── .dockerignore     # per-service: Docker reads it from the context root only
     │   ├── Dockerfile        # multi-stage: builds the frontend, then the API
     │   └── README.md         # Space page + frontmatter for askpesu / askpesu-dev
     └── db/
@@ -353,6 +367,7 @@ If both copies exist and differ, the loader raises rather than silently preferri
         ├── scripts/
         │   ├── generate_processed_data.py  # raw dumps -> per-post JSON
         │   └── populate_db.py              # per-post JSON -> Qdrant
+        ├── .dockerignore
         ├── Dockerfile
         └── README.md         # Space page + frontmatter for askpesu-db
 ```
@@ -649,9 +664,28 @@ npm test                               # vitest
 
 There is no Python test suite. The contract is enforced at runtime instead: both services
 validate the live collection, the embedding model and every payload before doing any work, and
-refuse to run against a mismatch. CI checks the structural invariants a running service cannot
-see — that shared files are single-sourced, that `requirements.txt` matches `pyproject.toml`,
-and that the tree each Space receives is complete.
+refuse to run against a mismatch.
+
+CI checks the structural invariants a running service cannot see — that shared files are
+single-sourced, that `requirements.txt` matches `pyproject.toml`, and that the tree each Space
+receives is complete. It also runs the one check that behaves like a test:
+
+```bash
+python3 scripts/check_duplication.py
+```
+
+Four pairs of files must agree and cannot share code, because each side ships somewhere the other
+never reaches — a `git subtree split` sends only `services/<name>/`, the frontend is TypeScript,
+and Space frontmatter is read before any code runs. The script asserts each pair:
+
+| Pair | How it is checked |
+|---|---|
+| the two `app/contract.py` loaders | shared definitions compared as ASTs with string literals blanked, so wording may differ but logic may not |
+| both writers' payload dicts | keys extracted statically, compared to `conf/collection.yaml` |
+| each Space README's `models:`/`preload_from_hub:` | must list the contracted embedding model |
+| the NDJSON event names | pydantic `Literal` compared to the frontend's `StreamEvent` union |
+
+The loaders have drifted once already, which is what the first of those exists to prevent.
 
 ## Linting and formatting
 
@@ -663,17 +697,17 @@ pre-commit install                     # run automatically on commit
 pre-commit run --all-files             # or on demand
 ```
 
-`ruff check .` and `ruff format .` from the repository root behave identically to CI.
+`ruff check .` and `ruff format .` from the repository root behave identically to CI, which runs
+ruff through the same hooks rather than as a separate job.
 
 ## Continuous integration
 
 | Workflow | Trigger | What it does |
 |---|---|---|
 | `source.yaml` | PR opened/updated | Rejects PRs that are not from a fork, come from a fork's `main`, or target anything other than `dev` |
-| `lint.yaml` | Push (not `main`/`dev`), PR | `ruff check` + `ruff format --check` |
-| `pre-commit.yaml` | Push, PR | Every pre-commit hook, on all files |
-| `contract.yaml` | Push, PR | Asserts each shared file is tracked exactly once; recompiles `requirements.txt` and fails on drift; rehearses the deploy vendoring and checks each split tree is a complete Space root |
-| `docker.yaml` | Manual, or after Pre-Commit on `dev` | Builds both images, boots each container, polls `/health` |
+| `pre-commit.yaml` | Push, PR | Every pre-commit hook, on all files — ruff lint and format included |
+| `contract.yaml` | Push, PR | Asserts each shared file is tracked exactly once; recompiles `requirements.txt` and fails on drift; runs [`scripts/check_duplication.py`](scripts/check_duplication.py); rehearses the deploy vendoring and checks each split tree is a complete Space root |
+| `docker.yaml` | Push to `dev`, chained off Pre-Commit; or manual | Builds both images, boots each container, polls `/health` |
 | `deploy-dev-api.yaml` | Push to `dev` | Deploys the api to `askpesu-dev`. The db is not deployed from `dev` |
 | `deploy-prod.yaml` | Manual | Fast-forwards `dev` → `main`, then deploys **both** services to `askpesu` and `askpesu-db` |
 
@@ -820,33 +854,24 @@ Reviewers are assigned by [`.github/CODEOWNERS`](.github/CODEOWNERS). Changes to
   Reciprocal Rank Fusion, whose output is a rank-derived score on a different scale from cosine
   similarity, so `score_threshold` would stop meaning anything and the reranker cutoff would
   need re-deriving against real queries.
-- **Three duplications are maintained by hand.** The two `app/contract.py` loaders must stay
-  behaviourally identical; `services/db`'s inline payload dict must match the contract's key
-  list; and each Space README's `models:`/`preload_from_hub:` frontmatter must match the
-  contracted embedding model. Check these by eye when touching the contract.
-- **The streaming event shape is duplicated** between `app/rag.py` and `frontend/src/lib/api.ts`,
-  with nothing enforcing agreement.
 - **There is no staging writer.** The free tier allows three CPU Spaces, spent on two api
   environments and one db, so a `services/db` change is tested locally or not at all and first
   runs anywhere at promotion. The startup contract checks and per-payload validation catch the
   structural failures; a semantically wrong but schema-valid write is caught by neither and is
   undone by re-running the backfill. A fourth Space would restore a staging writer.
-- **`Docker Container Build` effectively runs on dispatch only.** Its `workflow_run` trigger
-  requires `head_branch == 'dev'`, and pull request CI runs on the fork's branch. Switching it
-  to `push: branches: [dev]` would make the smoke tests routine, at roughly twenty minutes of CI
-  per merge for two ~3 GB images.
-- **`lint.yaml` overlaps `pre-commit.yaml`.** Both run ruff over the whole tree on every push.
+- **A reconnect still has a small blind spot.** The startup catch-up covers a restart, but after
+  a transient error the stream re-enters with `skip_existing=True` and does not re-scan, so
+  comments posted during those seconds are missed. Re-scanning on every network blip would cost
+  far more than it recovers; a backfill closes the gap if it ever matters.
 - **Cooldown state is per process.** `QuotaState` lives in memory, so a restart clears it and two
   replicas would each track their own view. Fine for a single Space; wrong the moment there is
   more than one.
 - **Quota detection is a heuristic.** `_is_quota_error` matches an HTTP 429 or a handful of
   phrases. A false positive costs one unnecessary cooldown; a false negative means retrying
   against a provider that is already refusing us.
-- **Comments posted while the listener is down are never picked up.** `skip_existing=True`
-  applies on every reconnect, so the gap is closed only by re-running the backfill.
-- **No `.dockerignore`.** A locally built image can bake a `.env` sitting in a service directory.
-  Not a deploy risk: the documented `.env` lives at the repository root, outside both build
-  contexts, and is gitignored so it never reaches a Space.
+- **The container smoke tests cost about twenty minutes per merge.** `docker.yaml` builds two
+  ~3 GB images on every push to `dev`. That is the price of the only check that exercises a
+  Dockerfile at all.
 
 ## License
 

@@ -1,0 +1,33 @@
+# What must not enter this image's build context.
+#
+# The context is services/db, so this file has to live here -- Docker reads
+# .dockerignore from the context root and nowhere else, which is why it is one
+# of the few files not consolidated at the repository root.
+#
+# This service's Dockerfile ends in `COPY . /app`, so anything left in the
+# directory ships. That makes the backfill's working directories the entry that
+# matters most: a full r/PESU dump is large, and it is r/PESU's content rather
+# than ours.
+
+# Secrets. The documented .env lives at the repository root, outside this
+# context, but a stray one here would otherwise be COPYed into the image.
+.env
+.env.*
+!.env.example
+
+# Backfill input and output. Created by scripts/, never part of the service.
+processed_data/
+completed/
+*.jsonl
+missing_points.json
+
+# Python bytecode, caches, editor and VCS state.
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.git/
+.gitignore
+.vscode/
+.idea/

@@ -8,10 +8,12 @@ name: Contract Checks
 # service deploys with `git subtree split --prefix=services/<name>`, which ships
 # only that directory. The deploy copies them in first.
 #
-# Two things can therefore go wrong silently, and this checks both: a second
-# committed copy of a shared file, which drifts from the authored one without
-# anything noticing; and a vendoring step that stops putting a file where the
-# Space will look for it.
+# Three things can therefore go wrong silently, and this checks all of them: a
+# second committed copy of a shared file, which drifts from the authored one
+# without anything noticing; a vendoring step that stops putting a file where the
+# Space will look for it; and the pairs of files that must agree but cannot share
+# code, because they live in different services, different languages, or in
+# frontmatter the platform reads before any code runs.
 on: [ push, pull_request ]
 
 jobs:
@@ -65,6 +67,14 @@ jobs:
           diff <(grep -v '^#' requirements.txt) <(grep -v '^#' /tmp/requirements.check) \
             || { echo "::error::requirements.txt does not match pyproject.toml; recompile it (see pyproject.toml)"; exit 1; }
           echo "✅ requirements.txt is in sync with pyproject.toml"
+
+      - name: Files that must agree, and cannot share code, still agree
+        # The two contract loaders, both writers' payload dicts, each Space's
+        # frontmatter, and the NDJSON event names. See the script's docstring for
+        # why none of these can be a shared import.
+        run: |
+          pip install pyyaml --quiet
+          python3 scripts/check_duplication.py
 
       - name: The deploy vendoring lands in each Space tree
         # Mirrors .github/actions/deploy-space exactly. If the two drift, this
