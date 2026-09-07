@@ -1,0 +1,75 @@
+# Shared Qdrant collection contract.
+#
+# services/db WRITES this collection; services/api READS it. Both must agree on
+# every value below -- a mismatch in the embedding model or vector dimensions
+# corrupts retrieval silently, and a mismatch in vector naming fails hard at API
+# startup. Change it here, once, rather than in either service alone.
+#
+# This is the only copy. Each service loads it through its own small
+# app/contract.py. Because a `git subtree split` ships only services/<name>/,
+# image builds and deploys copy this file into services/<name>/conf/ first;
+# that copy is gitignored and CI refuses to push a tree without it.
+
+collection:
+  # NOTE: the collection NAME is deliberately not here. One cluster holds one
+  # collection per environment (ask-pesu-prod, ask-pesu-dev), so the name is
+  # deployment configuration and comes from $QDRANT_COLLECTION -- exactly like
+  # $QDRANT_URL. What this file fixes is the SHAPE, which must be identical in
+  # every environment or dev tests nothing meaningful.
+  #
+  # Both services in one environment must be given the same name; each verifies
+  # the shape of whatever it is pointed at, but neither can tell that the other
+  # was pointed somewhere else.
+
+  dense:
+    model: "Alibaba-NLP/gte-modernbert-base"
+    size: 768
+    distance: "Cosine"
+    # A NAMED vector, not langchain_qdrant's unnamed default. langchain writes
+    # hybrid points as {vector_name: dense, sparse_vector_name: sparse} -- a
+    # named-vector dict -- so a collection built on the unnamed vector could not
+    # hold both vectors at all. Naming it is what lets one collection serve a
+    # dense reader and a hybrid writer at the same time.
+    vector_name: "dense"
+
+  # Sparse vector for BM25 retrieval. services/db writes one on every point;
+  # services/api reads dense only, so this is currently written and not yet
+  # queried. That asymmetry is the point: adding a vector to a populated
+  # collection means re-embedding every document, so the cost is paid once, up
+  # front, while the collection is being filled.
+  #
+  # `modifier: idf` is the part that is easy to omit and impossible to notice.
+  # Without it Qdrant scores raw term frequency, so a thread that repeats "PESU"
+  # outranks one that answers the question -- and nothing errors.
+  #
+  # Remove this block to opt out of sparse entirely; both services skip the
+  # sparse checks when it is absent, and the writer falls back to dense-only.
+  sparse:
+    vector_name: "sparse"
+    modifier: "idf"
+    # The model that turns text into sparse term vectors. Contracted because the
+    # writer and any future reader must tokenise identically -- Qdrant only
+    # applies the IDF weighting, it does not decide what a term is. Two sides
+    # using different tokenisers produce silently incomparable vectors.
+    model: "Qdrant/bm25"
+
+  # Payload keys written by services/db on every point, enforced exactly: the
+  # writer refuses to upsert a payload whose key set differs from this list, and
+  # the reader refuses to start if a key it consumes is missing from it.
+  #
+  # services/api cites `permalink`. Both are stored: for a self post they agree,
+  # but for a link post `url` is the external article, so only `permalink`
+  # reliably addresses the discussion an answer was drawn from. Both writers
+  # store it already prefixed with https://reddit.com, because Reddit's own API
+  # returns a bare path.
+  metadata:
+    - root_comment_id
+    - post_id
+    - author
+    - url
+    - permalink
+    - score
+    - upvote_ratio
+    - created_utc
+    - flair
+    - nsfw

@@ -1,33 +1,54 @@
+# Builds both service images and boots each one to check it serves /health.
+# This is the only check that exercises a Dockerfile; nothing else in CI builds
+# an image, and the deploy workflows push a tree to a Space without ever
+# building it themselves.
 name: Docker Container Build
 
 on:
+  # Chained off the Pre-Commit workflow rather than triggered directly. Note the
+  # guard below requires head_branch == 'dev', and a pull request's CI runs on
+  # the fork's branch, so in practice this path fires for pushes to dev only.
   workflow_run:
     workflows: [ "Pre-Commit Checks" ]
     types:
       - completed
+  # The usable trigger. Two ~3 GB images take roughly twenty minutes to build
+  # and boot, which is why this is on request rather than on every push.
+  workflow_dispatch:
 
 jobs:
-  build:
+  build-api:
     runs-on: ubuntu-latest
-    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'dev' }}
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'dev')
     steps:
       - uses: actions/checkout@v4
       - name: Get short commit hash
         id: vars
         run: echo "tag=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+      # The build context is services/api, which contains neither the shared
+      # contract nor the requirements -- both are authored once at the repo root.
+      - name: Vendor the root-level files into the build context
+        run: |
+          mkdir -p services/api/conf
+          cp conf/collection.yaml services/api/conf/collection.yaml
+          cp requirements.txt services/api/requirements.txt
       - name: Build the Docker image
-        run: docker build . --tag ask-pesu
+        run: docker build services/api --tag ask-pesu
       - name: Spawn a container
         run: |
           docker run --name ask-pesu -d -p 7860:7860 \
             -e QDRANT_API_KEY="${{ secrets.QDRANT_API_KEY }}" \
             -e QDRANT_URL="${{ secrets.QDRANT_URL }}" \
-            -e GEMINI_API_KEY="${{ secrets.GEMINI_API_KEY }}" \
+            -e QDRANT_COLLECTION="${{ vars.QDRANT_COLLECTION_DEV || 'ask-pesu-dev' }}" \
+            -e HF_TOKEN="${{ secrets.HF_TOKEN }}" \
             ask-pesu
       - name: Wait for the container to be ready
         run: |
           for i in {1..60}; do
-            if curl --silent http://localhost:7860/health > /dev/null; then
+            if curl --fail --silent http://localhost:7860/health > /dev/null; then
               echo "✅ Service is up!"
               exit 0
             fi
@@ -35,6 +56,57 @@ jobs:
             sleep 15
           done
           echo "❌ Service did not start in time."
+          docker logs ask-pesu
           exit 1
       - name: Stop the container
+        if: always()
         run: docker stop ask-pesu
+
+  build-db:
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'dev')
+    steps:
+      - uses: actions/checkout@v4
+      - name: Get short commit hash
+        id: vars
+        run: echo "tag=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+      # The build context is services/db, which contains neither the shared
+      # contract nor the requirements -- both are authored once at the repo root.
+      - name: Vendor the root-level files into the build context
+        run: |
+          mkdir -p services/db/conf
+          cp conf/collection.yaml services/db/conf/collection.yaml
+          cp requirements.txt services/db/requirements.txt
+      - name: Build the Docker image
+        run: docker build services/db --tag ask-pesu-db
+      - name: Run container
+        run: |
+          docker run --name ask-pesu-db -d -p 7860:7860 \
+            -e REDDIT_CLIENT_ID="${{ secrets.REDDIT_CLIENT_ID }}" \
+            -e REDDIT_CLIENT_SECRET="${{ secrets.REDDIT_CLIENT_SECRET }}" \
+            -e QDRANT_URL="${{ secrets.QDRANT_URL }}" \
+            -e QDRANT_API_KEY="${{ secrets.QDRANT_API_KEY }}" \
+            -e QDRANT_COLLECTION="${{ vars.QDRANT_COLLECTION_DEV || 'ask-pesu-dev' }}" \
+            ask-pesu-db
+      - name: Wait for the container to be ready
+        run: |
+          for i in {1..60}; do
+            if curl --fail --silent http://localhost:7860/health > /dev/null; then
+              echo "✅ Service is up!"
+              exit 0
+            fi
+            echo "⏳ Waiting for service..."
+            sleep 15
+          done
+          echo "❌ Service did not start in time."
+          docker logs ask-pesu-db
+          exit 1
+      - name: Stop container
+        if: always()
+        run: docker stop ask-pesu-db
+      - name: Remove container
+        if: always()
+        run: docker rm ask-pesu-db

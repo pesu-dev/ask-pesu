@@ -1,0 +1,101 @@
+# Runtime configuration for services/api. Everything here can be changed without
+# touching the collection, and takes effect on the next restart.
+#
+# NOTE: the embedding model and the Qdrant collection name are NOT configured
+# here. They are half of the writer/reader contract shared with services/db and
+# live in conf/collection.yaml, which is enforced at startup. Anything that
+# would make already-stored vectors unreadable belongs there, not here.
+
+rag:
+  llm:
+    # Two models, both reached through Hugging Face Inference. `provider` routes
+    # the call to a third-party host rather than HF's own hardware.
+    #
+    # `primary` answers in normal mode AND does every retrieval-side LLM call in
+    # both modes -- question rewriting and multi-query expansion -- so thinking
+    # tokens are never spent on reformulating a question.
+    #
+    # `thinking` only ever writes the final answer, and emits its reasoning
+    # inside <think>...</think>, which the backend splits out into `step` events.
+    #
+    # temperature: low, because answers must stay close to the retrieved threads.
+    # max_new_tokens: the answer budget; a thinking model spends part of it on
+    #   reasoning, so truncation shows up there first.
+    # timeout: seconds to wait on the provider before failing the stream.
+
+    primary:
+      repo_id: "Qwen/Qwen3-4B-Instruct-2507"
+      provider: "nscale"
+      temperature: 0.3
+      max_new_tokens: 2048
+      timeout: 120
+
+    thinking:
+      repo_id: "Qwen/Qwen3-4B-Thinking-2507"
+      provider: "nscale"
+      temperature: 0.3
+      max_new_tokens: 2048
+      timeout: 120
+  # Passed straight through to the Qdrant similarity search, once per phrasing
+  # the multi-query step generates -- so the documents reaching the reranker are
+  # the union across phrasings, and there are usually more than `k` of them.
+  search_kwargs:
+    # Documents per phrasing. Raising it widens recall and gives the cross-encoder
+    # more to work with, at the cost of more pairs to score.
+    k: 5
+    # Minimum relevance for a document to be considered at all. The reranker
+    # reuses this same number as its own cutoff, so it is one knob, not two:
+    # raise it for stricter answers and more "I don't have that information",
+    # lower it to answer more often from weaker context.
+    score_threshold: 0.3
+
+  reranker:
+    # A cross-encoder re-scores the shortlist by reading query and document
+    # together, which a vector search cannot do. Disabling it removes the
+    # sentence-transformers and torch load at startup and falls back to ranking
+    # by vector score alone -- faster to boot, noticeably worse ordering.
+    enabled: true
+    model: "cross-encoder/ms-marco-MiniLM-L-6-v2"
+
+  # The three prompts the pipeline uses. `{question}`, `{context}`, `{input}` and
+  # `{chat_history}` are filled in by app/rag.py; renaming one breaks the chain.
+  prompts:
+    system_prompt: |
+      You are askPESU, a helpful assistant developed by the PESU Dev team that helps users find information about PES University.
+      You must answer using knowledge only from the r/PESU subreddit, which will be provided to you as context.
+      Always answer accurately, comprehensively and in depth, based on the context, optionally formatted in markdown.
+
+      End your response with EXACTLY this format and nothing after:
+
+      **Sources:**
+      - [Brief description of source](URL)
+      - [Another description](URL)
+
+      If the context does not contain the answer, respond with "I'm sorry, I don't have that information."
+      If asked anything unrelated to PES University, politely decline.
+    answer_prompt: |
+      Question: {question}
+      Context: {context}
+      Answer:
+    rewrite_prompt: |
+      You are a question rewriting assistant for PES University (PESU). Your job is to rewrite the user's question into an independent, self-contained question that is optimised for document retrieval.
+
+      PESU domain knowledge to apply when rewriting:
+      - Campuses: RR = Ring Road campus (Banashankari), EC = Electronic City campus
+      - Branches: CSE = Computer Science Engineering, ECE = Electronics & Communication Engineering,
+        EEE = Electrical & Electronics Engineering, ME = Mechanical Engineering, CV = Civil Engineering,
+        AIML = Artificial Intelligence & Machine Learning, BT = Biotechnology
+      - Admission routes: KCET, JEE Mains, management quota
+      - Grading: SGPA (semester GPA), CGPA (cumulative GPA)
+      - Expand any other abbreviations including the above when they appear in the question.
+
+      Rewrite rules:
+      1. ONLY use the chat history if the user's question is ambiguous or refers to previous context (e.g., pronouns like 'he', 'she', 'it', 'they', 'that').
+      2. If the question is clear on its own, return it EXACTLY as it is (still expanding any PESU abbreviations).
+      3. When resolving a follow-up question, ALWAYS prioritize the most recent topic in the chat history. Do NOT pull context from older, unrelated parts of the conversation.
+      4. If the question could refer to multiple topics, choose the MOST RECENT plausible topic.
+      5. Do NOT invent or assume connections between unrelated topics.
+      6. Do NOT answer the question - only rewrite it.
+
+      Chat History:
+      {chat_history}

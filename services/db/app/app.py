@@ -1,0 +1,295 @@
+"""Reddit listener that keeps askPESU's shared Qdrant collection up to date.
+
+Runs as a Hugging Face Space, which expects a web server, so this is a FastAPI
+app whose only real job happens on a background thread: consume new r/PESU
+comments forever and upsert the thread each one belongs to.
+
+The unit of indexing is a **thread**, not a comment. When any comment arrives the
+whole thread is re-rendered and written under a point id derived from the root
+comment, so a busy thread is repeatedly overwritten rather than duplicated, and
+retrieval returns a conversation with its context instead of an orphan reply.
+
+What it writes is fixed by ``conf/collection.yaml`` and enforced on every upsert;
+see :mod:`app.contract`.
+"""
+
+import os
+import threading
+import traceback
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
+import praw
+import uvicorn
+from app import contract as contract_mod
+from app.utils import build_thread_string, convert_to_uuid
+from dotenv import load_dotenv
+from fastapi import FastAPI
+from fastapi.responses import JSONResponse
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_qdrant import FastEmbedSparse, QdrantVectorStore, RetrievalMode
+from praw.models import Comment
+from qdrant_client import QdrantClient
+
+# Before anything below reads the environment. One .env at the repository root
+# serves both services: load_dotenv() searches upwards from this module, so it
+# is found whether the service runs from a monorepo checkout or from its own
+# Space root. In a Space there is no .env and this is a no-op -- the values
+# arrive as real environment variables from the Space's secrets.
+load_dotenv()
+
+vector_store = None
+reddit = None
+subreddit = None
+
+# The collection this service writes is contracted with services/api rather than
+# configured here -- name, embedding model, vector geometry and payload schema
+# all come from conf/collection.yaml and are enforced at startup and on write.
+contract = contract_mod.load()
+
+# Set when the listener dies on a contract violation. Retrying would just write
+# more bad payloads, so the thread stops and /health starts failing instead of
+# leaving a live-looking Space with a dead writer.
+listener_error = None
+
+# Set on shutdown so the listener stops retrying. The inner praw stream call
+# blocks until the next comment arrives, so the thread does not necessarily
+# exit promptly -- it is a daemon, so it never holds up process exit.
+shutdown = threading.Event()
+
+client_id = os.getenv("REDDIT_CLIENT_ID")
+client_secret = os.getenv("REDDIT_CLIENT_SECRET")
+qdrant_url = os.getenv("QDRANT_URL")
+qdrant_api_key = os.getenv("QDRANT_API_KEY")
+
+
+def update_chunk(chunk_id: str, text: str, metadata: dict) -> None:
+    """Embed and upsert one thread, replacing any previous version of it.
+
+    Qdrant upserts by id, so passing a stable id makes re-processing idempotent.
+
+    Args:
+        chunk_id: Point id -- a UUID derived from the root comment id.
+        text: The rendered thread; this is what gets embedded and later retrieved.
+        metadata: Payload stored alongside the vector. Validated against the
+            contract first, so a drifting schema fails here rather than being
+            discovered later by a reader that cannot find a key it needs.
+
+    Raises:
+        ContractViolationError: If the payload's keys differ from the contract.
+    """
+    contract_mod.validate_payload(contract, metadata)
+    vector_store.add_texts(
+        texts=[text],
+        metadatas=[metadata],
+        ids=[chunk_id],
+    )
+
+
+def get_root_comment(comment: Comment) -> Comment:
+    """Walk up to the top-level comment that starts this thread.
+
+    Each ``parent()`` call may hit the network, so this is a few requests deep on
+    a nested reply -- acceptable because it runs once per new comment.
+
+    Args:
+        comment: Any comment in the thread.
+
+    Returns:
+        The top-level comment; the same object if it was already root.
+    """
+    parent = comment
+    while not parent.is_root:
+        parent = parent.parent()
+    return parent
+
+
+def listen_comments() -> None:
+    """Consume new r/PESU comments forever, indexing the thread each belongs to.
+
+    ``skip_existing=True`` means only comments posted *after* the stream opens
+    are seen, so this service never backfills; ``scripts/populate_db.py`` is how
+    a collection gets its history. The same flag applies on every reconnect, so
+    comments posted while the stream was down are not picked up when it returns
+    -- closing that gap is a job for the backfill, not for this loop.
+
+    Two failure modes, deliberately treated differently. Network and Reddit errors
+    are transient, so the stream is simply re-entered. A contract violation is a
+    bug that retrying cannot fix, so the loop stops and records the reason for
+    /health to report -- better a visibly dead writer than one silently writing
+    payloads the reader cannot use.
+    """
+    global listener_error
+    while not shutdown.is_set():
+        try:
+            for comment in subreddit.stream.comments(skip_existing=True):
+                # AutoModerator posts boilerplate on many threads; indexing it
+                # would put the same text in front of unrelated questions.
+                author = str(comment.author).lower()
+                if author == "automoderator":
+                    continue
+
+                submission = comment.submission
+                root_comment = get_root_comment(comment)
+
+                print("Root comment:", root_comment.body)
+                print("Root ID:", root_comment.id)
+
+                # Title and body give the thread its topic; without them a reply
+                # like "yes, around 8.5" embeds with no idea what it is about.
+                chunk = (
+                    f"TITLE: {submission.title}\n"
+                    f"CONTENT: {submission.selftext}\n"
+                    f"COMMENT TREE: {build_thread_string(root_comment)}"
+                )
+
+                metadata = {
+                    "root_comment_id": root_comment.id,
+                    "post_id": submission.id,
+                    "author": str(submission.author) if submission.author else None,
+                    "url": submission.url,
+                    "permalink": "https://reddit.com" + submission.permalink,
+                    "score": submission.score,
+                    "upvote_ratio": submission.upvote_ratio,
+                    "created_utc": submission.created_utc,
+                    "flair": submission.link_flair_text,
+                    "nsfw": submission.over_18,
+                }
+
+                # Qdrant point ids must be a UUID or an unsigned integer, and
+                # Reddit ids are neither -- hashing gives a stable UUID, so the
+                # same thread always lands on the same point and overwrites it.
+                update_chunk(convert_to_uuid(root_comment.id), chunk, metadata)
+                print("Updated chunk.")
+        except contract_mod.ContractViolationError as error:
+            # A payload schema mismatch is a code/contract bug, not a transient
+            # failure -- retrying cannot fix it, so stop and surface it.
+            listener_error = str(error)
+            print("FATAL: contract violation in listener, stopping:")
+            traceback.print_exc()
+            return
+        except Exception:
+            print("Unexpected error in listener:")
+            traceback.print_exc()
+
+
+def background_listener() -> None:
+    """Start the listener on a daemon thread.
+
+    The stream blocks, so it cannot share the event loop. Daemon means a stopping
+    process is never held up by a thread parked waiting for the next comment.
+    """
+    thread = threading.Thread(target=listen_comments, daemon=True)
+    thread.start()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """Start the Qdrant writer and the Reddit listener, and stop them on shutdown.
+
+    Anything raised here aborts startup, which is what should happen when the
+    collection or the embedding model disagrees with conf/collection.yaml --
+    writing into a collection services/api cannot read is worse than not
+    starting at all.
+    """
+    global vector_store, reddit, subreddit
+
+    # A previous lifespan in this process would otherwise leave this set, and
+    # the listener would start and exit immediately while /health still said ok.
+    shutdown.clear()
+
+    client = QdrantClient(
+        url=qdrant_url,
+        api_key=qdrant_api_key,
+        timeout=120.0,
+    )
+
+    embeddings = HuggingFaceEmbeddings(model_name=contract.model)
+    contract_mod.validate_embedding(contract, embeddings)
+
+    # Creates the collection from the contract when absent; when it already
+    # exists, checks its geometry and raises rather than writing into a
+    # collection services/api will not be able to read.
+    created = contract_mod.ensure_collection(contract, client)
+    print(f"Collection {contract.name!r} {'created' if created else 'already exists and matches the contract'}")
+
+    # Hybrid, so every point carries a sparse BM25 vector alongside the dense
+    # one. Writing dense-only would leave the collection's sparse vector empty
+    # and make enabling hybrid retrieval later a full re-index -- the cost the
+    # named dense vector was chosen to avoid. `sparse_vector_name` must be
+    # passed: langchain_qdrant defaults it to "langchain-sparse", not ours.
+    if contract.sparse_vector_name:
+        vector_store = QdrantVectorStore(
+            client=client,
+            collection_name=contract.name,
+            embedding=embeddings,
+            vector_name=contract.vector_name,
+            sparse_embedding=FastEmbedSparse(model_name=contract.sparse_model),
+            sparse_vector_name=contract.sparse_vector_name,
+            retrieval_mode=RetrievalMode.HYBRID,
+        )
+    else:
+        # conf/collection.yaml documents that removing the `sparse` block opts
+        # out. Without this branch that escape hatch crashes at startup, because
+        # HYBRID requires a sparse embedding and FastEmbedSparse("") is invalid.
+        vector_store = QdrantVectorStore(
+            client=client,
+            collection_name=contract.name,
+            embedding=embeddings,
+            vector_name=contract.vector_name,
+        )
+
+    # Fail here rather than in the listener. praw builds the client and resolves
+    # a subreddit lazily, so bad credentials do not surface until the stream
+    # makes its first request -- on the background thread, inside the catch-all
+    # that treats errors as transient. The listener would then retry a 401
+    # forever while /health reported ok, which is the silently-dead writer this
+    # service is built to avoid.
+    if not client_id or not client_secret:
+        raise RuntimeError(
+            "REDDIT_CLIENT_ID and REDDIT_CLIENT_SECRET must both be set. Create a 'script' app "
+            "at https://www.reddit.com/prefs/apps."
+        )
+
+    reddit = praw.Reddit(
+        client_id=client_id,
+        client_secret=client_secret,
+        user_agent="langchain-reddit-loader",
+    )
+    subreddit = reddit.subreddit("PESU")
+
+    # One cheap read that forces the OAuth token exchange and proves the
+    # credentials work against r/PESU. next() is enough: praw fetches lazily, so
+    # this pulls a single listing page rather than the whole subreddit.
+    try:
+        next(iter(subreddit.new(limit=1)))
+    except Exception as error:
+        raise RuntimeError(f"Reddit credentials rejected, or r/PESU unreachable: {error}") from error
+
+    background_listener()
+    print("Background listener started.")
+
+    yield
+
+    shutdown.set()
+    print("Shutdown requested; listener will stop after its current wait.")
+
+
+app = FastAPI(
+    title="askPESU DB updater",
+    description="Streams new r/PESU comment threads into the shared Qdrant collection.",
+    version="0.1.0",
+    lifespan=lifespan,
+)
+
+
+@app.get("/health")
+async def health() -> JSONResponse:
+    """Report writer health; 503 once the listener has stopped on a contract violation."""
+    if listener_error:
+        return JSONResponse({"status": "error", "detail": listener_error}, status_code=503)
+    return JSONResponse({"status": "ok"})
+
+
+if __name__ == "__main__":
+    uvicorn.run("app.app:app", host="0.0.0.0", port=7860)

@@ -1,0 +1,104 @@
+name: Contract Checks
+
+# Guards the invariants the deploy depends on but cannot check for itself.
+#
+# Every file both services share is authored once, at the repository root:
+# conf/collection.yaml (the writer/reader agreement), requirements.txt, LICENSE
+# and .env.example. None of them reaches a Space on its own, because each
+# service deploys with `git subtree split --prefix=services/<name>`, which ships
+# only that directory. The deploy copies them in first.
+#
+# Two things can therefore go wrong silently, and this checks both: a second
+# committed copy of a shared file, which drifts from the authored one without
+# anything noticing; and a vendoring step that stops putting a file where the
+# Space will look for it.
+on: [ push, pull_request ]
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # `git subtree split` walks the whole history.
+          fetch-depth: 0
+
+      - name: Each shared file is authored exactly once
+        run: |
+          status=0
+          # Every shared file, and the single path each is allowed to occupy.
+          check() {
+            found=$(git ls-files | grep -E "(^|/)$1$" | tr '\n' ' ' | sed 's/ $//')
+            if [ "$found" != "$2" ]; then
+              echo "::error::expected only $2 to be tracked, found: ${found:-<none>}"
+              status=1
+            else
+              echo "✅ $2"
+            fi
+          }
+          check 'collection\.yaml'  conf/collection.yaml
+          check 'requirements\.txt' requirements.txt
+          check 'pyproject\.toml'   pyproject.toml
+          check 'uv\.lock'          uv.lock
+          check 'LICENSE'           LICENSE
+          check '\.env\.example'    .env.example
+          exit $status
+
+      - name: requirements.txt still matches pyproject.toml
+        # The file the images install is generated, so a dependency edit that
+        # forgets to recompile would ship the old resolution to both Spaces.
+        #
+        # The recompile starts from a COPY of the committed file, not from
+        # nothing. uv preserves the pins already in its output file unless asked
+        # to upgrade, and pyproject.toml constrains with `>=` -- so compiling
+        # from scratch would resolve every one of ~96 packages to whatever is
+        # newest on PyPI that day and fail this check the moment any of them
+        # publishes a release, blaming a contributor whose change was fine.
+        # Starting from the committed pins detects the thing actually worth
+        # detecting: a dependency added to or removed from pyproject.toml
+        # without recompiling.
+        run: |
+          pipx install uv || pip install uv
+          cp requirements.txt /tmp/requirements.check
+          uv pip compile pyproject.toml --extra api --extra db \
+            --python-platform linux --python-version 3.12 -o /tmp/requirements.check --quiet
+          diff <(grep -v '^#' requirements.txt) <(grep -v '^#' /tmp/requirements.check) \
+            || { echo "::error::requirements.txt does not match pyproject.toml; recompile it (see pyproject.toml)"; exit 1; }
+          echo "✅ requirements.txt is in sync with pyproject.toml"
+
+      - name: The deploy vendoring lands in each Space tree
+        # Mirrors .github/actions/deploy-space exactly. If the two drift, this
+        # fails here rather than by publishing an incomplete Space.
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          for svc in api db; do
+            mkdir -p "services/$svc/conf"
+            cp conf/collection.yaml "services/$svc/conf/collection.yaml"
+            cp requirements.txt "services/$svc/requirements.txt"
+            cp LICENSE "services/$svc/LICENSE"
+            cp .env.example "services/$svc/.env.example"
+            git add -f \
+              "services/$svc/conf/collection.yaml" \
+              "services/$svc/requirements.txt" \
+              "services/$svc/LICENSE" \
+              "services/$svc/.env.example"
+          done
+          git commit -q -m "Vendor root-level files for deployment"
+
+          status=0
+          for svc in api db; do
+            git subtree split --prefix="services/$svc" HEAD -b "verify-$svc" >/dev/null
+            # Dockerfile and README.md are authored inside the service tree; the
+            # Space needs both -- the README's frontmatter is what selects the
+            # Docker SDK, so without it the Space will not build at all.
+            for required in conf/collection.yaml requirements.txt LICENSE .env.example Dockerfile README.md; do
+              if git cat-file -e "verify-$svc:$required" 2>/dev/null; then
+                echo "✅ services/$svc Space tree ships $required"
+              else
+                echo "::error::services/$svc would deploy without $required"
+                status=1
+              fi
+            done
+          done
+          exit $status

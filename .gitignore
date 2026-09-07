@@ -39,17 +39,23 @@ pyrightconfig.json
 # Node / Frontend
 # =========================
 node_modules/
-frontend/node_modules/
+# Repo-root build output. The migration re-anchored the frontend rules below to
+# services/api/frontend/, which left a root-level frontend/ uncovered -- 3 MB of
+# Next.js output was committed there before this was noticed.
+/frontend/
+out/
+
+services/api/frontend/node_modules/
 *.lockb
 
 dist/
-frontend/dist/
+services/api/frontend/dist/
 
 dist-ssr/
-frontend/dist-ssr/
+services/api/frontend/dist-ssr/
 
 .next/
-frontend/.next/
+services/api/frontend/.next/
 
 # Package manager logs
 npm-debug.log*
@@ -65,3 +71,13 @@ lerna-debug.log*
 bruno.json
 *.csv
 *.png
+
+# These four are authored once at the repo root and vendored into the service
+# tree by image builds and deploys, because a subtree split ships only
+# services/<name>/ and the repo root never reaches a Space. Those copies are
+# generated and must never be committed -- a committed copy would be a second
+# source that silently goes stale.
+services/*/conf/collection.yaml
+services/*/requirements.txt
+services/*/LICENSE
+services/*/.env.example

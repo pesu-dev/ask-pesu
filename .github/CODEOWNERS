@@ -1,24 +1,43 @@
 # Maintainers for all files in the repository
 * @pesu-dev/ask-pesu-maintainers
 
-# Repository owner review for critical files
+# Repository owner review for critical files.
+#
+# NOTE: CODEOWNERS uses gitignore-style matching and the LAST matching rule
+# wins. A bare name like `README.md` matches every README.md at any depth, so
+# repository-root entries are anchored with a leading `/` to keep them from
+# silently overriding the per-service rules below.
 
 ## GitHub Configuration and Templates
-.github/ @aditeyabaral
+/.github/ @aditeyabaral
 
-## Project Configuration
-pyproject.toml @aditeyabaral @joshua-rajj
-requirements.txt @aditeyabaral @joshua-rajj
-.pre-commit-config.yaml @aditeyabaral
-.env.example @aditeyabaral @joshua-rajj
-conf/  @aditeyabaral @joshua-rajj
+## Shared Project Configuration
+# One pyproject and one requirements.txt cover both services, so a change to
+# either is a change to both.
+/pyproject.toml @aditeyabaral @joshua-rajj
+/requirements.txt @aditeyabaral @joshua-rajj
+/uv.lock @aditeyabaral @joshua-rajj
+/.pre-commit-config.yaml @aditeyabaral
+# The Qdrant collection contract -- the single writer/reader agreement, loaded
+# by both services. This is the only place it should ever be edited.
+/conf/ @aditeyabaral @joshua-rajj
+
+## API service
+services/api/.env.example @aditeyabaral @joshua-rajj
+services/api/conf/ @aditeyabaral @joshua-rajj
+services/api/app/contract.py @aditeyabaral @joshua-rajj
+services/api/Dockerfile @aditeyabaral @joshua-rajj
+services/api/README.md @aditeyabaral
+
+## DB service
+services/db/.env.example @aditeyabaral @joshua-rajj
+services/db/app/contract.py @aditeyabaral @joshua-rajj
+services/db/Dockerfile @aditeyabaral @joshua-rajj
+services/db/README.md @aditeyabaral
 
 ## Documentation and Legal
-README.md @aditeyabaral
-LICENSE @aditeyabaral
-
-## Infrastructure and Deployment
-Dockerfile @aditeyabaral @joshua-rajj
-
-## Testing
-tests/ @aditeyabaral
+/README.md @aditeyabaral
+/LICENSE @aditeyabaral
+# Each service ships its own copy in the tree pushed to its Space.
+services/api/LICENSE @aditeyabaral
+services/db/LICENSE @aditeyabaral

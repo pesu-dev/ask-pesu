@@ -1,8 +1,8 @@
-exclude: ^node_modules/
+exclude: node_modules/
 
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.12.7
+    rev: v0.12.12
     hooks:
       - id: ruff
         args: [ --fix, --exit-non-zero-on-fix ]
@@ -19,5 +19,3 @@ repos:
       - id: check-yaml
       - id: check-toml
       - id: debug-statements
-      - id: name-tests-test
-        args: [ '--pytest-test-first' ]

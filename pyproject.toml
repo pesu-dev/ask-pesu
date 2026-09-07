@@ -1,47 +1,88 @@
+# Shared configuration for the ask-pesu monorepo.
+#
+# One [project] table covers both services: what they share is the base
+# `dependencies`, and what only one needs is an extra. Neither Dockerfile
+# installs from this file -- both `pip install -r requirements.txt` -- so it
+# never has to reach a Space. It is the *source* that one root requirements.txt
+# is compiled from:
+#
+#     uv pip compile pyproject.toml --extra api --extra db \
+#         --python-platform linux --python-version 3.12 -o requirements.txt
+#
+# Both extras go into that single file, so each image installs the union and
+# carries a little it does not import. That is deliberate: it resolves the
+# embedding stack exactly once, which makes it impossible for the writer and the
+# reader to end up on different versions of the library that produces the
+# vectors. The platform and version are pinned so the file a laptop generates is
+# the file the linux/amd64 Space installs.
+#
+# It also gives ruff one configuration for every service: ruff walks up from
+# each file to the nearest pyproject.toml containing [tool.ruff], and this is
+# the only pyproject.toml in the repo.
+
 [project]
 name = "ask-pesu"
 version = "0.1.0"
-description = "A FastAPI application for question answering about PES University using LangChain and Google Gemini."
+description = "Retrieval-augmented question answering for PES University, from r/PESU discussions."
 readme = "README.md"
 requires-python = ">=3.12"
+
+# Needed by BOTH services. The embedding stack especially must stay identical:
+# services/db writes the vectors services/api reads, so a version split here is
+# the same class of silent mismatch that conf/collection.yaml exists to prevent.
 dependencies = [
     "fastapi>=0.116.1",
     "uvicorn>=0.35.0",
-    "pydantic>=2.11.7",
-    "pytz>=2025.2",
     "python-dotenv>=1.1.1",
     "pyyaml>=6.0.2",
-    "torch>=2.3.0",
-    "sentence-transformers>=5.1.0",
-    "langchain>=0.3.27",
-    "langchain-core>=0.3.0",
-    "langchain-classic>=1.0.0",
-    "langchain-huggingface>=0.3.1",
-    "langchain-qdrant>=0.2.0",
+    "langchain-core>=1.2.19",
+    "langchain-huggingface>=1.2.1",
+    "langchain-qdrant>=1.1.0",
     "qdrant-client>=1.9.0",
-    "huggingface-hub>=0.24.0",
-    "aiohttp>=3.9",
-    "google-api-core>=2.0",
+    "sentence-transformers>=5.1.0",
+    # Not imported directly by services/db -- it arrives via
+    # sentence-transformers -- but declared because [tool.uv.sources] below only
+    # redirects DIRECT dependencies, and without it torch resolves to the 4 GB
+    # CUDA build instead of +cpu.
+    "torch>=2.10.0",
 ]
 
 [project.optional-dependencies]
+# The reader: HTTP surface, multi-query retrieval, HF Inference.
+api = [
+    "pydantic>=2.11.7",
+    "pytz>=2025.2",
+    "langchain-classic>=1.0.3",
+    "huggingface-hub>=1.30.0",
+]
+# The writer: Reddit ingestion, and the BM25 sparse embeddings the collection's
+# `sparse` vector needs. fastembed pulls onnxruntime, which is why the db image
+# is the larger of the two.
+db = [
+    "anytree>=2.13.0",
+    "fastembed>=0.8.0",
+    "praw>=7.8.1",
+]
 dev = [
     "pre-commit>=4.3.0",
     "ruff>=0.12.12",
 ]
 
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+[tool.uv]
+# There is no importable `ask_pesu` package at the root. This table describes
+# dependencies; it is not something to build or install.
+package = false
 
-[tool.hatch.build.targets.wheel]
-packages = ["."]
+# torch resolves from PyTorch's CPU index. Both Spaces run on CPU, and the CUDA
+# wheels were ~4 GB of image for libraries that are never loaded. `explicit`
+# keeps this index used ONLY for torch, so nothing else resolves against it.
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
 
-[tool.pytest.ini_options]
-pythonpath = ["."]
-markers = [
-    "secret_required: marks tests that require secrets or environment variables (e.g. GEMINI_API_KEY)."
-]
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu" }]
 
 [tool.ruff.lint]
 select = [
@@ -64,9 +105,8 @@ convention = "google"
 
 [tool.ruff]
 line-length = 120
-target-version = "py311"
+target-version = "py312"
 exclude = [
-    "tests/",
     "node_modules/"
 ]
 
