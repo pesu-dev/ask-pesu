@@ -15,6 +15,9 @@ dependencies = [
     "pyyaml>=6.0.2",
     "qdrant-client>=1.9.0",
     "sentence-transformers>=5.1.0",
+    # Not imported directly -- it arrives via sentence-transformers. Declared
+    # anyway because [tool.uv.sources] below only redirects DIRECT dependencies,
+    # and without it torch resolves to the 4 GB CUDA build instead of +cpu.
     "torch>=2.10.0",
     "uvicorn>=0.35.0",
 ]

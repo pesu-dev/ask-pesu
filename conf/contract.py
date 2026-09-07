@@ -5,9 +5,10 @@
 the same file at startup, so a writer/reader mismatch surfaces as a loud failure
 instead of silently degraded retrieval.
 
-This file is the authored source. It is copied into each service subtree by
-``scripts/sync_contract.py`` because a ``git subtree split`` ships only
-``services/<name>/`` -- the repo root never reaches the deployed Space.
+Authored at ``conf/contract.py`` and copied into each service subtree by
+``scripts/sync_contract.py``, because a ``git subtree split`` ships only
+``services/<name>/`` -- the repo root never reaches the deployed Space. Edit the
+copy under ``conf/``; the per-service copies are generated.
 """
 
 from dataclasses import dataclass
@@ -103,8 +104,18 @@ class CollectionContract:
     def ensure_collection(self, client: QdrantClient) -> bool:
         """Create the collection from the contract if absent, else validate it. True if created."""
         if not client.collection_exists(self.name):
-            client.create_collection(collection_name=self.name, vectors_config=self.vectors_config)
-            return True
+            try:
+                client.create_collection(collection_name=self.name, vectors_config=self.vectors_config)
+            except Exception:
+                # Lost a race with another starting writer. Only tolerate that
+                # specific outcome: if the collection still is not there, the
+                # create failed for a real reason and must not be swallowed --
+                # which is what the previous bare try/except did, reporting any
+                # failure as "collection already exists".
+                if not client.collection_exists(self.name):
+                    raise
+            else:
+                return True
         self.validate_collection(client)
         return False
 

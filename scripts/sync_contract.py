@@ -6,8 +6,10 @@ which ships only that directory -- the repo-root ``conf/`` never reaches the
 Space. So the contract has to exist inside each service, and the only way to
 keep three copies honest is to generate them.
 
-Run with no arguments to regenerate; ``--check`` reports drift without writing
-and exits non-zero, which is what CI and the pre-commit hook use.
+Run with no arguments to regenerate. ``--check`` reports drift without writing.
+Both exit non-zero when the copies were stale -- the ruff --fix convention, so a
+pre-commit run that had to rewrite something fails the commit rather than
+quietly fixing it.
 """
 
 import argparse

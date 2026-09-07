@@ -71,6 +71,32 @@ class TestCollectionGeometry:
         with pytest.raises(ContractViolationError, match="has no named vector 'dense'"):
             named.validate_collection(empty_client)
 
+    def test_ensure_collection_reraises_a_real_create_failure(self, contract, empty_client):
+        """The tolerance for a lost create race must not become a bare swallow.
+
+        The code this replaced reported every create failure as "collection
+        already exists" and then failed later, somewhere less obvious.
+        """
+
+        def boom(*_args, **_kwargs):
+            raise RuntimeError("qdrant unreachable")
+
+        empty_client.create_collection = boom
+        with pytest.raises(RuntimeError, match="qdrant unreachable"):
+            contract.ensure_collection(empty_client)
+
+    def test_ensure_collection_tolerates_a_lost_create_race(self, contract, empty_client):
+        """Another writer won the race: the collection exists, so carry on and validate."""
+        real_create = empty_client.create_collection
+
+        def racing_create(*args, **kwargs):
+            real_create(*args, **kwargs)  # the "other" writer's create
+            raise RuntimeError("409 conflict: collection already exists")
+
+        empty_client.create_collection = racing_create
+        assert contract.ensure_collection(empty_client) is False
+        contract.validate_collection(empty_client)
+
     def test_named_contract_round_trips(self, contract, empty_client):
         """A named-vector contract creates and then validates its own collection."""
         named = dataclasses.replace(contract, vector_name="dense")
@@ -91,6 +117,28 @@ class TestPayloadSchema:
         payload = dict.fromkeys(contract.metadata) | {"surprise": 1}
         with pytest.raises(ContractViolationError, match="unexpected \\['surprise'\\]"):
             contract.validate_payload(payload)
+
+
+class TestWriterPayload:
+    """The db builds its payload as a dict literal inside listen_comments.
+
+    validate_payload catches a mismatch, but only at runtime -- and the failure
+    mode there is the listener thread dying in production. Parse the literal out
+    of the source so a drifting key fails in CI instead.
+    """
+
+    def test_db_payload_keys_match_the_contract(self, contract):
+        source = (REPO_ROOT / "services/db/app/app.py").read_text()
+        literals = [
+            {k.value for k in node.keys}
+            for node in ast.walk(ast.parse(source))
+            if isinstance(node, ast.Dict) and node.keys and all(isinstance(k, ast.Constant) for k in node.keys)
+        ]
+        payloads = [keys for keys in literals if "root_comment_id" in keys]
+        assert len(payloads) == 1, f"expected exactly one payload literal, found {len(payloads)}"
+        assert payloads[0] == set(contract.metadata), (
+            f"services/db writes {sorted(payloads[0])}, contract lists {sorted(contract.metadata)}"
+        )
 
 
 class TestReaderDependencies:

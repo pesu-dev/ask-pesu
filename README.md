@@ -55,7 +55,7 @@ so a repo-root file would simply not exist at runtime. `services/*/conf/collecti
 `services/*/app/contract.py` are generated copies — edit the originals under `conf/` and run:
 
 ```bash
-python scripts/sync_contract.py
+python3 scripts/sync_contract.py
 ```
 
 The pre-commit hook does this automatically, and CI fails on drift or on a subtree that would
