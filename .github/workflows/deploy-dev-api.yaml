@@ -1,30 +1,26 @@
 name: Deploy API to Dev
 
-# Deploys services/api to its dev Space on merges that could change it.
+# Deploys services/api to its dev Space on every merge into `dev`.
 #
 # The api is the ONLY service deployed from `dev`. The db is not here: there is
 # one db Space and it writes the collection production serves from, so it moves
 # only on a production promotion. See deploy-prod.yaml.
 #
-# Path-filtered so a merge that cannot change this Space does not rebuild a ~3 GB
-# image for nothing. The list is deliberately generous -- an unnecessary deploy
-# costs a rebuild, a missing one means someone merges and nothing happens, with
-# nothing to say why. Everything the Space actually receives is covered: this
-# service's own directory, plus the four root files vendored into the tree and
-# the composite action that vendors them. Files that never reach the Space --
-# the root README, pyproject.toml, uv.lock -- are deliberately absent.
+# No path filter, deliberately. One would occasionally skip a rebuild that could
+# not have changed anything -- but the deploy job itself is nearly free (it
+# splits a subtree and pushes; Hugging Face does the building), the dev api holds
+# no state, so a redundant restart loses nothing, and a filter that is ever too
+# narrow means someone merges and nothing happens with nothing to say why. A
+# silent skip is a worse failure here than a wasted build, and this repository
+# has already lost months to a trigger condition that quietly never matched.
+#
+# The trigger is `on: push` rather than a `workflow_run` chain off the CI
+# workflows, because a chained trigger only fires for runs whose head branch is
+# `dev`, and pull request CI runs on the fork's branch instead.
 on:
   push:
     branches: [ dev ]
-    paths:
-      - 'services/api/**'
-      - 'conf/**'                             # the contract, vendored into the tree
-      - 'requirements.txt'                    # what the image installs
-      - 'LICENSE'                             # vendored
-      - '.env.example'                        # vendored
-      - '.github/actions/deploy-space/**'     # the deploy mechanism itself
-      - '.github/workflows/deploy-dev-api.yaml'
-  workflow_dispatch:                          # ignores paths; use it to force a deploy
+  workflow_dispatch:
 
 jobs:
   deploy:

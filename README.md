@@ -666,7 +666,7 @@ pre-commit run --all-files             # or on demand
 | `pre-commit.yaml` | Push, PR | Every pre-commit hook, on all files |
 | `contract.yaml` | Push, PR | Asserts each shared file is tracked exactly once; recompiles `requirements.txt` and fails on drift; rehearses the deploy vendoring and checks each split tree is a complete Space root |
 | `docker.yaml` | Manual, or after Pre-Commit on `dev` | Builds both images, boots each container, polls `/health` |
-| `deploy-dev-api.yaml` | Push to `dev` touching the api | Deploys the api to `askpesu-dev`. The db is not deployed from `dev` |
+| `deploy-dev-api.yaml` | Push to `dev` | Deploys the api to `askpesu-dev`. The db is not deployed from `dev` |
 | `deploy-prod.yaml` | Manual | Fast-forwards `dev` → `main`, then deploys **both** services to `askpesu` and `askpesu-db` |
 
 `deploy-prod.yaml` refuses to run unless `github.actor` is listed in
@@ -691,17 +691,17 @@ and refuses to push a tree missing any of them.
 
 | Branch | What deploys | To | Collection |
 |---|---|---|---|
-| `dev` | api only, if the merge touched it | `askpesu-dev` | `ask-pesu-prod` |
+| `dev` | api only | `askpesu-dev` | `ask-pesu-prod` |
 | `main` | api **and** db, unconditionally | `askpesu`, `askpesu-db` | `ask-pesu-prod` |
 
-The dev deploy is **path-filtered**: a merge that cannot change the api Space does not rebuild a
-~3 GB image for nothing. `workflow_dispatch` ignores the filter, so it can be forced. The
-production deploy is deliberately **not** filtered — a promotion should put `main` on every
-production Space regardless of what changed, which is what makes "the production Spaces run
-`main`" true unconditionally rather than most of the time.
+Neither deploy is path-filtered. Skipping a rebuild that could not have changed anything sounds
+like a saving, but the deploy job only splits a subtree and pushes — Hugging Face does the
+building — and a filter that is ever too narrow means someone merges and nothing happens, with
+nothing to say why. A silent skip is the worse failure. For the production deploy there is a
+second reason: putting `main` on every production Space unconditionally is what makes "the
+production Spaces run `main`" true all the time rather than most of the time.
 
-1. **Merge a PR into `dev`.** `Deploy API to Dev` fires on the push, if the merge touched the
-   api. Confirm `askpesu-dev` serves `/health`, `/docs`, the frontend and `/assets`, and streams
+1. **Merge a PR into `dev`.** `Deploy API to Dev` fires on the push. Confirm `askpesu-dev` serves `/health`, `/docs`, the frontend and `/assets`, and streams
    one real answer. The db is not deployed here, so nothing about a writer change is observable
    at this step.
 2. **Dispatch `Deploy to Production`** when dev looks right. It fast-forwards `dev` → `main` —
