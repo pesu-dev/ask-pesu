@@ -25,6 +25,12 @@ jobs:
       - name: Get short commit hash
         id: vars
         run: echo "tag=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+      # The build context is services/api, which does not contain the shared
+      # contract -- it is authored once at conf/collection.yaml.
+      - name: Vendor the shared contract into the build context
+        run: |
+          mkdir -p services/api/conf
+          cp conf/collection.yaml services/api/conf/collection.yaml
       - name: Build the Docker image
         run: docker build services/api --tag ask-pesu
       - name: Spawn a container
@@ -62,6 +68,12 @@ jobs:
       - name: Get short commit hash
         id: vars
         run: echo "tag=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+      # The build context is services/db, which does not contain the shared
+      # contract -- it is authored once at conf/collection.yaml.
+      - name: Vendor the shared contract into the build context
+        run: |
+          mkdir -p services/db/conf
+          cp conf/collection.yaml services/db/conf/collection.yaml
       - name: Build the Docker image
         run: docker build services/db --tag ask-pesu-db
       - name: Run container

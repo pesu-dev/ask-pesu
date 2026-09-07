@@ -1,10 +1,13 @@
 name: Contract Checks
 
-# The Qdrant collection contract is authored once at conf/ and vendored into
-# each service, because `git subtree split` ships only services/<name>/ and the
-# repo root never reaches the deployed Space. These checks are what make the
-# vendoring trustworthy: the copies cannot drift, and they cannot go missing
-# from the tree that actually gets deployed.
+# services/db writes the Qdrant collection and services/api reads it. The
+# agreement between them is authored once, at conf/collection.yaml.
+#
+# That file lives at the repo root, but each service is deployed with
+# `git subtree split --prefix=services/<name>`, which ships only that
+# directory. Deploys and image builds therefore vendor the file into the
+# service tree. These checks make sure the contract holds and that the
+# vendoring actually lands.
 on: [ push, pull_request ]
 
 jobs:
@@ -19,10 +22,14 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Check vendored contract copies are in sync
-        run: python3 scripts/sync_contract.py --check
+      - name: There is exactly one authored contract
+        run: |
+          found=$(git ls-files '*collection.yaml')
+          echo "tracked: $found"
+          [ "$found" = "conf/collection.yaml" ] \
+            || { echo "::error::expected only conf/collection.yaml to be tracked"; exit 1; }
 
-      # Deliberately a thin dependency set: the contract module must not need
+      # Deliberately a thin dependency set: the contract modules must not need
       # the api's full LangChain/torch stack to be testable.
       - name: Install test dependencies
         run: pip install pytest pyyaml qdrant-client langchain-core
@@ -30,20 +37,19 @@ jobs:
       - name: Run contract tests
         run: pytest tests/ -q
 
-      - name: Check each deployable subtree ships the contract
+      - name: Deploy vendoring puts the contract in each Space tree
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          status=0
+          for svc in api db; do
+            mkdir -p "services/$svc/conf"
+            cp conf/collection.yaml "services/$svc/conf/collection.yaml"
+            git add -f "services/$svc/conf/collection.yaml"
+          done
+          git commit -q -m "Vendor conf/collection.yaml for deployment"
           for svc in api db; do
             git subtree split --prefix="services/$svc" HEAD -b "verify-$svc" >/dev/null
-            for path in conf/collection.yaml app/contract.py; do
-              if git cat-file -e "verify-$svc:$path" 2>/dev/null; then
-                echo "✅ services/$svc subtree ships $path"
-              else
-                echo "❌ services/$svc subtree is missing $path — it would deploy without the contract"
-                status=1
-              fi
-            done
+            git cat-file -e "verify-$svc:conf/collection.yaml" \
+              && echo "✅ services/$svc Space tree ships conf/collection.yaml" \
+              || { echo "::error::services/$svc would deploy without the contract"; exit 1; }
           done
-          exit $status

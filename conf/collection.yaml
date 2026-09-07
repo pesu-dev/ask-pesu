@@ -5,13 +5,10 @@
 # corrupts retrieval silently, and a mismatch in vector naming fails hard at API
 # startup. Change it here, once, rather than in either service alone.
 #
-# This file is the authored source. Each service is deployed as a
-# `git subtree split`, which ships only services/<name>/, so the copies under
-# services/*/conf/ are what actually run. They are generated -- edit this file
-# and run `python scripts/sync_contract.py`.
-#
-# The loader and the startup checks live in conf/contract.py, and are propagated
-# the same way.
+# This is the only copy. Each service loads it through its own small
+# app/contract.py. Because a `git subtree split` ships only services/<name>/,
+# image builds and deploys copy this file into services/<name>/conf/ first;
+# that copy is gitignored and CI refuses to push a tree without it.
 
 collection:
   name: "ask-pesu"

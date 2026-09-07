@@ -1,160 +1,192 @@
 """Tests for the shared Qdrant collection contract.
 
-These exercise the vendored copy under services/api (pytest's `pythonpath`), but
-the copies are byte-identical by construction -- `scripts/sync_contract.py`
-generates them and CI fails on drift -- so covering one covers both services.
+conf/collection.yaml is the single authored contract; services/db writes the
+collection it describes and services/api reads it. Each service has its own
+small loader, so both are loaded here by path -- they share the module name
+`app.contract` and would otherwise collide on sys.path.
 """
 
 import ast
-import dataclasses
+import importlib.util
+import subprocess
 from pathlib import Path
 
 import pytest
+import yaml
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams
-
-from app.contract import CollectionContract, ContractViolationError
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
-@pytest.fixture
-def contract():
-    """The real contract as shipped, not a fixture-invented one."""
-    return CollectionContract.load()
+def load_module(service):
+    spec = importlib.util.spec_from_file_location(
+        f"{service}_contract", REPO_ROOT / "services" / service / "app" / "contract.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+api = load_module("api")
+db = load_module("db")
+
+
+@pytest.fixture(params=[api, db], ids=["api", "db"])
+def mod(request):
+    """Each service's loader; the checks they share must agree."""
+    return request.param
 
 
 @pytest.fixture
-def empty_client():
+def client():
     return QdrantClient(":memory:")
 
 
-def collection_with(client, name, vectors_config):
-    client.create_collection(name, vectors_config=vectors_config)
-    return client
+class TestSingleSourceOfTruth:
+    def test_only_one_contract_file_is_tracked(self):
+        """The whole point: one authored file, not a vendored copy per service.
+
+        Asks git, not the filesystem -- a local build or deploy rehearsal leaves
+        an untracked copy under services/*/conf/, and that is expected.
+        """
+        tracked = subprocess.run(
+            ["git", "ls-files", "*collection.yaml"],
+            cwd=REPO_ROOT, capture_output=True, text=True, check=True,
+        ).stdout.split()
+        assert tracked == ["conf/collection.yaml"], tracked
+
+    def test_both_services_resolve_the_same_contract(self):
+        """Compares content, not paths.
+
+        After a local image build or deploy rehearsal each service has its own
+        vendored copy and legitimately resolves to that one instead of the root.
+        What must hold either way is that they agree, and agree with the
+        authored file.
+        """
+        authored = yaml.safe_load((REPO_ROOT / "conf" / "collection.yaml").read_text())["collection"]
+        assert api.load() == db.load()
+        assert api.load().name == authored["name"]
+        assert api.load().model == authored["dense"]["model"]
+
+    def test_loader_walks_up_from_the_service(self, mod):
+        """Deployed, the file sits at /app/conf/; in the monorepo, at the repo root."""
+        path = mod.contract_path()
+        assert path.is_file()
+        assert path.name == "collection.yaml" and path.parent.name == "conf"
 
 
 class TestCollectionGeometry:
-    def test_reader_refuses_missing_collection(self, contract, empty_client):
-        with pytest.raises(ContractViolationError, match="does not exist"):
-            contract.validate_collection(empty_client)
+    def test_reader_refuses_missing_collection(self, client):
+        with pytest.raises(api.ContractViolationError, match="does not exist"):
+            api.validate_collection(api.load(), client)
 
-    def test_writer_creates_collection_then_reader_accepts_it(self, contract, empty_client):
-        assert contract.ensure_collection(empty_client) is True
-        contract.validate_collection(empty_client)
-        # A second call validates rather than recreating.
-        assert contract.ensure_collection(empty_client) is False
+    def test_writer_creates_then_reader_accepts(self, client):
+        contract = db.load()
+        assert db.ensure_collection(contract, client) is True
+        assert db.ensure_collection(contract, client) is False
+        api.validate_collection(api.load(), client)
 
-    def test_rejects_wrong_vector_size(self, contract, empty_client):
-        collection_with(empty_client, contract.name, VectorParams(size=384, distance=Distance.COSINE))
-        with pytest.raises(ContractViolationError, match="vector size 384"):
-            contract.validate_collection(empty_client)
+    def test_rejects_wrong_vector_size(self, mod, client):
+        contract = mod.load()
+        client.create_collection(contract.name, vectors_config=VectorParams(size=384, distance=Distance.COSINE))
+        with pytest.raises(mod.ContractViolationError, match="vector size 384"):
+            mod.validate_collection(contract, client)
 
-    def test_rejects_wrong_distance(self, contract, empty_client):
-        collection_with(empty_client, contract.name, VectorParams(size=contract.size, distance=Distance.DOT))
-        with pytest.raises(ContractViolationError, match="distance"):
-            contract.validate_collection(empty_client)
-
-    def test_rejects_named_vector_when_contract_expects_unnamed(self, contract, empty_client):
-        """The exact shape a hybrid re-index would leave behind if the contract were not updated."""
-        collection_with(
-            empty_client,
-            contract.name,
-            {"dense": VectorParams(size=contract.size, distance=Distance.COSINE)},
+    def test_rejects_wrong_distance(self, mod, client):
+        contract = mod.load()
+        client.create_collection(
+            contract.name, vectors_config=VectorParams(size=contract.size, distance=Distance.DOT)
         )
-        with pytest.raises(ContractViolationError, match="named vectors"):
-            contract.validate_collection(empty_client)
+        with pytest.raises(mod.ContractViolationError, match="distance"):
+            mod.validate_collection(contract, client)
 
-    def test_rejects_unnamed_vector_when_contract_expects_named(self, contract, empty_client):
-        contract.ensure_collection(empty_client)
-        named = dataclasses.replace(contract, vector_name="dense")
-        with pytest.raises(ContractViolationError, match="has no named vector 'dense'"):
-            named.validate_collection(empty_client)
+    def test_rejects_named_vector_when_contract_expects_unnamed(self, mod, client):
+        """The shape a hybrid re-index would leave behind if the contract were not updated."""
+        contract = mod.load()
+        client.create_collection(
+            contract.name, vectors_config={"dense": VectorParams(size=contract.size, distance=Distance.COSINE)}
+        )
+        with pytest.raises(mod.ContractViolationError, match="named vectors"):
+            mod.validate_collection(contract, client)
 
-    def test_ensure_collection_reraises_a_real_create_failure(self, contract, empty_client):
-        """The tolerance for a lost create race must not become a bare swallow.
+    def test_rejects_unnamed_vector_when_contract_expects_named(self, mod, client):
+        contract = mod.load()
+        db.ensure_collection(contract, client)
+        named = contract._replace(vector_name="dense")
+        with pytest.raises(mod.ContractViolationError, match="has no named vector 'dense'"):
+            mod.validate_collection(named, client)
 
-        The code this replaced reported every create failure as "collection
-        already exists" and then failed later, somewhere less obvious.
-        """
+    def test_named_contract_round_trips(self, client):
+        named = db.load()._replace(vector_name="dense")
+        assert db.ensure_collection(named, client) is True
+        db.validate_collection(named, client)
+
+    def test_ensure_collection_reraises_a_real_create_failure(self, client):
+        """The tolerance for a lost create race must not become a bare swallow."""
 
         def boom(*_args, **_kwargs):
             raise RuntimeError("qdrant unreachable")
 
-        empty_client.create_collection = boom
+        client.create_collection = boom
         with pytest.raises(RuntimeError, match="qdrant unreachable"):
-            contract.ensure_collection(empty_client)
+            db.ensure_collection(db.load(), client)
 
-    def test_ensure_collection_tolerates_a_lost_create_race(self, contract, empty_client):
-        """Another writer won the race: the collection exists, so carry on and validate."""
-        real_create = empty_client.create_collection
+    def test_ensure_collection_tolerates_a_lost_create_race(self, client):
+        real_create = client.create_collection
 
         def racing_create(*args, **kwargs):
-            real_create(*args, **kwargs)  # the "other" writer's create
-            raise RuntimeError("409 conflict: collection already exists")
+            real_create(*args, **kwargs)
+            raise RuntimeError("409 conflict")
 
-        empty_client.create_collection = racing_create
-        assert contract.ensure_collection(empty_client) is False
-        contract.validate_collection(empty_client)
-
-    def test_named_contract_round_trips(self, contract, empty_client):
-        """A named-vector contract creates and then validates its own collection."""
-        named = dataclasses.replace(contract, vector_name="dense")
-        assert named.ensure_collection(empty_client) is True
-        named.validate_collection(empty_client)
-
-
-class TestPayloadSchema:
-    def test_accepts_exact_key_set(self, contract):
-        contract.validate_payload(dict.fromkeys(contract.metadata))
-
-    def test_rejects_missing_key(self, contract):
-        payload = dict.fromkeys(contract.metadata[:-1])
-        with pytest.raises(ContractViolationError, match=f"missing \\['{contract.metadata[-1]}'\\]"):
-            contract.validate_payload(payload)
-
-    def test_rejects_unexpected_key(self, contract):
-        payload = dict.fromkeys(contract.metadata) | {"surprise": 1}
-        with pytest.raises(ContractViolationError, match="unexpected \\['surprise'\\]"):
-            contract.validate_payload(payload)
+        client.create_collection = racing_create
+        assert db.ensure_collection(db.load(), client) is False
 
 
 class TestWriterPayload:
-    """The db builds its payload as a dict literal inside listen_comments.
+    def test_accepts_exact_key_set(self):
+        contract = db.load()
+        db.validate_payload(contract, dict.fromkeys(contract.metadata))
 
-    validate_payload catches a mismatch, but only at runtime -- and the failure
-    mode there is the listener thread dying in production. Parse the literal out
-    of the source so a drifting key fails in CI instead.
-    """
+    def test_rejects_missing_key(self):
+        contract = db.load()
+        with pytest.raises(db.ContractViolationError, match=f"missing \\['{contract.metadata[-1]}'\\]"):
+            db.validate_payload(contract, dict.fromkeys(contract.metadata[:-1]))
 
-    def test_db_payload_keys_match_the_contract(self, contract):
+    def test_rejects_unexpected_key(self):
+        contract = db.load()
+        with pytest.raises(db.ContractViolationError, match="unexpected \\['surprise'\\]"):
+            db.validate_payload(contract, dict.fromkeys(contract.metadata) | {"surprise": 1})
+
+    def test_db_payload_literal_matches_the_contract(self):
+        """services/db builds its payload as a dict literal inside listen_comments.
+
+        validate_payload catches drift, but only at runtime -- and the failure
+        mode there is the listener thread dying in production. Parse the literal
+        out of the source so a drifting key fails in CI instead.
+        """
         source = (REPO_ROOT / "services/db/app/app.py").read_text()
-        literals = [
+        payloads = [
             {k.value for k in node.keys}
             for node in ast.walk(ast.parse(source))
             if isinstance(node, ast.Dict) and node.keys and all(isinstance(k, ast.Constant) for k in node.keys)
+            and "root_comment_id" in {k.value for k in node.keys}
         ]
-        payloads = [keys for keys in literals if "root_comment_id" in keys]
-        assert len(payloads) == 1, f"expected exactly one payload literal, found {len(payloads)}"
-        assert payloads[0] == set(contract.metadata), (
-            f"services/db writes {sorted(payloads[0])}, contract lists {sorted(contract.metadata)}"
-        )
+        assert len(payloads) == 1, f"expected one payload literal, found {len(payloads)}"
+        assert payloads[0] == set(db.load().metadata)
 
 
 class TestReaderDependencies:
-    def test_accepts_contracted_key(self, contract):
-        contract.require_metadata("url")
+    def test_accepts_contracted_key(self):
+        api.require_metadata(api.load(), "url")
 
-    def test_rejects_uncontracted_key(self, contract):
-        with pytest.raises(ContractViolationError, match="title"):
-            contract.require_metadata("title")
+    def test_rejects_uncontracted_key(self):
+        with pytest.raises(api.ContractViolationError, match="title"):
+            api.require_metadata(api.load(), "title")
 
-    def test_api_declared_keys_are_all_contracted(self, contract):
-        """Guards the api's real REQUIRED_METADATA.
-
-        Read out of the source with `ast` rather than imported, because importing
-        app.rag pulls in torch and the whole LangChain stack.
-        """
+    def test_api_declared_keys_are_all_contracted(self):
+        """Guards the api's real REQUIRED_METADATA, read with ast so importing
+        app.rag (and therefore torch) is not required."""
         source = (REPO_ROOT / "services/api/app/rag.py").read_text()
         declared = next(
             ast.literal_eval(node.value)
@@ -162,42 +194,33 @@ class TestReaderDependencies:
             if isinstance(node, ast.Assign)
             and any(getattr(t, "id", None) == "REQUIRED_METADATA" for t in node.targets)
         )
-        assert declared, "app.rag.REQUIRED_METADATA not found"
-        contract.require_metadata(*declared)
+        assert declared
+        api.require_metadata(api.load(), *declared)
 
 
 class FakeEmbeddings:
-    """Stands in for HuggingFaceEmbeddings so the tests never download a model.
+    """Only the public Embeddings surface: the width check must not depend on the
+    wrapped SentenceTransformer, which the two libraries name differently."""
 
-    Deliberately exposes only the public `Embeddings` surface. The dimension check
-    must not depend on the wrapped SentenceTransformer, which langchain_community
-    exposes as `.client` and langchain_huggingface as `._client`.
-    """
-
-    def __init__(self, model_name, dimension):
+    def __init__(self, model_name, width):
         self.model_name = model_name
-        self.dimension = dimension
+        self.width = width
 
     def embed_query(self, text):
-        return [0.0] * self.dimension
+        return [0.0] * self.width
 
 
 class TestEmbeddingModel:
-    def test_accepts_matching_model(self, contract):
-        contract.validate_embedding(FakeEmbeddings(contract.model, contract.size))
+    def test_accepts_matching_model(self, mod):
+        contract = mod.load()
+        mod.validate_embedding(contract, FakeEmbeddings(contract.model, contract.size))
 
-    def test_rejects_wrong_model_name(self, contract):
-        with pytest.raises(ContractViolationError, match="other/model"):
-            contract.validate_embedding(FakeEmbeddings("other/model", contract.size))
+    def test_rejects_wrong_model_name(self, mod):
+        contract = mod.load()
+        with pytest.raises(mod.ContractViolationError, match="other/model"):
+            mod.validate_embedding(contract, FakeEmbeddings("other/model", contract.size))
 
-    def test_rejects_wrong_dimension(self, contract):
-        with pytest.raises(ContractViolationError, match="1024-dim"):
-            contract.validate_embedding(FakeEmbeddings(contract.model, 1024))
-
-    def test_dimension_check_uses_only_the_public_interface(self, contract):
-        """Regression guard: reading the wrapped encoder off an attribute made this
-        check silently pass for langchain_huggingface, which names it `_client`."""
-        embedding = FakeEmbeddings(contract.model, 1024)
-        assert not hasattr(embedding, "client") and not hasattr(embedding, "_client")
-        with pytest.raises(ContractViolationError):
-            contract.validate_embedding(embedding)
+    def test_rejects_wrong_width(self, mod):
+        contract = mod.load()
+        with pytest.raises(mod.ContractViolationError, match="1024-dim"):
+            mod.validate_embedding(contract, FakeEmbeddings(contract.model, 1024))

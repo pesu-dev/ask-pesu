@@ -4,7 +4,7 @@ import traceback
 
 import praw
 import uvicorn
-from app.contract import CollectionContract, ContractViolationError
+from app import contract as contract_mod
 from app.utils import build_thread_string, convert_to_uuid
 from dotenv import load_dotenv
 from fastapi import FastAPI
@@ -22,7 +22,7 @@ subreddit = None
 # The collection this service writes is contracted with services/api rather than
 # configured here -- name, embedding model, vector geometry and payload schema
 # all come from conf/collection.yaml and are enforced at startup and on write.
-contract = CollectionContract.load()
+contract = contract_mod.load()
 
 # Set when the listener dies on a contract violation. Retrying would just write
 # more bad payloads, so the thread stops and /health starts failing instead of
@@ -37,7 +37,7 @@ qdrant_api_key = os.getenv("qdrant_api_key")
 
 def update_chunk(chunk_id: str, text: str, metadata: dict):
     """Overwrite if chunk exists, else add to Qdrant."""
-    contract.validate_payload(metadata)
+    contract_mod.validate_payload(contract, metadata)
     vector_store.add_texts(
         texts=[text],
         metadatas=[metadata],
@@ -92,7 +92,7 @@ def listen_comments():
                     convert_to_uuid(root_comment.id), chunk, metadata
                 )  # using UUID as Qdrant expects UUID as the point/vector id in the DB
                 print("Updated chunk.")
-        except ContractViolationError as error:
+        except contract_mod.ContractViolationError as error:
             # A payload schema mismatch is a code/contract bug, not a transient
             # failure -- retrying cannot fix it, so stop and surface it.
             listener_error = str(error)
@@ -124,12 +124,12 @@ async def startup_event():
         model_name=contract.model,
         # model_kwargs={"device": "cpu"}
     )
-    contract.validate_embedding(embeddings)
+    contract_mod.validate_embedding(contract, embeddings)
 
     # Creates the collection from the contract when absent; when it already
     # exists, checks its geometry and raises rather than writing into a
     # collection services/api will not be able to read.
-    created = contract.ensure_collection(client)
+    created = contract_mod.ensure_collection(contract, client)
     print(f"Collection {contract.name!r} {'created' if created else 'already exists and matches the contract'}")
 
     vector_store = QdrantVectorStore(

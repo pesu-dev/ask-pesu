@@ -24,6 +24,17 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
+      # services/db/ becomes the Space's repository root, so the shared contract
+      # -- authored once at conf/collection.yaml -- has to be inside the service
+      # tree before the split. This commit is local to the runner and is never
+      # pushed to GitHub.
+      - name: Vendor the shared contract into the service tree
+        run: |
+          mkdir -p services/db/conf
+          cp conf/collection.yaml services/db/conf/collection.yaml
+          git add -f services/db/conf/collection.yaml
+          git commit -q -m "Vendor conf/collection.yaml for deployment"
+
       # The Space expects the db service at its root, so push only that
       # subtree. `git subtree split` needs full history, hence fetch-depth: 0.
       - name: Push DB subtree to hub
@@ -31,4 +42,6 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           git subtree split --prefix=services/db HEAD -b deploy-db
+          git cat-file -e deploy-db:conf/collection.yaml \
+            || { echo "::error::deploy tree is missing conf/collection.yaml"; exit 1; }
           git push https://pesu-dev:$HF_TOKEN@huggingface.co/spaces/pesu-dev/askpesu-db deploy-db:main --force

@@ -1,47 +1,26 @@
-# ---------------------------------------------------------------------------
-# GENERATED FILE -- DO NOT EDIT.
-#
-# Source of truth: conf/contract.py
-# Regenerate with: python scripts/sync_contract.py
-#
-# This copy exists because the service is deployed as a `git subtree split`,
-# which ships only services/<name>/. The repo-root contract never reaches the
-# running Space, so it is vendored here instead.
-# ---------------------------------------------------------------------------
-"""Loader and enforcement for the shared Qdrant collection contract.
+"""Writer side of the shared Qdrant collection contract.
 
-``services/db`` writes the collection described by ``conf/collection.yaml``;
-``services/api`` reads it. Both load this module and check themselves against
-the same file at startup, so a writer/reader mismatch surfaces as a loud failure
-instead of silently degraded retrieval.
-
-Authored at ``conf/contract.py`` and copied into each service subtree by
-``scripts/sync_contract.py``, because a ``git subtree split`` ships only
-``services/<name>/`` -- the repo root never reaches the deployed Space. Edit the
-copy under ``conf/``; the per-service copies are generated.
+``conf/collection.yaml`` is the one place the collection name, embedding model,
+vector geometry and payload schema are written down. This service creates the
+collection from it and refuses to write into one that disagrees, so that
+``services/api`` can rely on what it reads.
 """
 
-from dataclasses import dataclass
 from pathlib import Path
+from typing import NamedTuple
 
 import yaml
 from langchain_core.embeddings import Embeddings
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams
 
-# Resolved relative to this module, not the working directory: both containers
-# lay the service out as /app/app/contract.py + /app/conf/collection.yaml, and
-# the authored copy at conf/contract.py resolves to its sibling the same way.
-CONTRACT_PATH = Path(__file__).resolve().parent.parent / "conf" / "collection.yaml"
-
 
 class ContractViolationError(RuntimeError):
-    """Raised when a live collection, payload, or model disagrees with the contract."""
+    """Raised when the live collection, a payload, or the model disagrees with the contract."""
 
 
-@dataclass(frozen=True)
-class CollectionContract:
-    """The writer/reader agreement recorded in ``conf/collection.yaml``."""
+class Contract(NamedTuple):
+    """Values read from conf/collection.yaml."""
 
     name: str
     model: str
@@ -50,119 +29,110 @@ class CollectionContract:
     vector_name: str
     metadata: tuple[str, ...]
 
-    @classmethod
-    def load(cls, path: Path | str | None = None) -> "CollectionContract":
-        """Read the contract from YAML, defaulting to the copy shipped with this service."""
-        contract_path = Path(path) if path is not None else CONTRACT_PATH
-        with open(contract_path) as file:
-            collection = yaml.safe_load(file)["collection"]
-        dense = collection["dense"]
-        return cls(
-            name=collection["name"],
-            model=dense["model"],
-            size=int(dense["size"]),
-            distance=str(dense["distance"]),
-            vector_name=dense.get("vector_name", ""),
-            metadata=tuple(collection["metadata"]),
-        )
 
-    @property
-    def vectors_config(self) -> VectorParams | dict[str, VectorParams]:
-        """Qdrant ``vectors_config`` for creating the collection from this contract."""
-        params = VectorParams(size=self.size, distance=Distance(self.distance))
-        return {self.vector_name: params} if self.vector_name else params
+def contract_path() -> Path:
+    """Locate conf/collection.yaml by walking up from this module.
 
-    def _live_vector_params(self, client: QdrantClient) -> VectorParams:
-        """Return the live collection's params for the contracted vector, or raise."""
-        vectors = client.get_collection(self.name).config.params.vectors
-        described = f"named vector {self.vector_name!r}" if self.vector_name else "the unnamed vector"
-        if self.vector_name:
-            if not isinstance(vectors, dict) or self.vector_name not in vectors:
-                available = sorted(vectors) if isinstance(vectors, dict) else ["<unnamed>"]
-                raise ContractViolationError(
-                    f"Collection {self.name!r} has no {described}; it exposes {available}. "
-                    f"Fix conf/collection.yaml or re-index the collection."
-                )
-            return vectors[self.vector_name]
+    Deployed, the service is its own repository root and the file sits beside it
+    at /app/conf/; in the monorepo the same walk reaches the repo root, where the
+    single authored copy lives. Deploy and image builds vendor it into the
+    service tree, because a `git subtree split` ships only services/<name>/.
+    """
+    for base in Path(__file__).resolve().parents:
+        candidate = base / "conf" / "collection.yaml"
+        if candidate.is_file():
+            return candidate
+    raise ContractViolationError("conf/collection.yaml not found above app/contract.py.")
+
+
+def load() -> Contract:
+    """Read the contract."""
+    collection = yaml.safe_load(contract_path().read_text())["collection"]
+    dense = collection["dense"]
+    return Contract(
+        name=collection["name"],
+        model=dense["model"],
+        size=int(dense["size"]),
+        distance=str(dense["distance"]),
+        vector_name=dense.get("vector_name", ""),
+        metadata=tuple(collection["metadata"]),
+    )
+
+
+def vectors_config(contract: Contract) -> VectorParams | dict[str, VectorParams]:
+    """Qdrant vectors_config for creating the collection from the contract."""
+    params = VectorParams(size=contract.size, distance=Distance(contract.distance))
+    return {contract.vector_name: params} if contract.vector_name else params
+
+
+def ensure_collection(contract: Contract, client: QdrantClient) -> bool:
+    """Create the collection from the contract if absent, else validate it. True if created."""
+    if not client.collection_exists(contract.name):
+        try:
+            client.create_collection(collection_name=contract.name, vectors_config=vectors_config(contract))
+        except Exception:
+            # Lost a race with another starting writer. Tolerate only that: if
+            # the collection still is not there, the create failed for a real
+            # reason and must not be swallowed -- which is what the previous
+            # bare try/except did, reporting everything as "already exists".
+            if not client.collection_exists(contract.name):
+                raise
+        else:
+            return True
+    validate_collection(contract, client)
+    return False
+
+
+def validate_collection(contract: Contract, client: QdrantClient) -> None:
+    """Check the live collection's geometry against the contract, or raise."""
+    vectors = client.get_collection(contract.name).config.params.vectors
+    if contract.vector_name:
+        if not isinstance(vectors, dict) or contract.vector_name not in vectors:
+            found = sorted(vectors) if isinstance(vectors, dict) else ["<unnamed>"]
+            raise ContractViolationError(
+                f"Collection {contract.name!r} has no named vector {contract.vector_name!r}; it exposes {found}."
+            )
+        params = vectors[contract.vector_name]
+    else:
         if isinstance(vectors, dict):
             raise ContractViolationError(
-                f"Collection {self.name!r} uses named vectors {sorted(vectors)}, but the contract "
-                f"expects {described}. Fix conf/collection.yaml or re-index the collection."
+                f"Collection {contract.name!r} uses named vectors {sorted(vectors)}, "
+                f"but the contract expects the unnamed vector."
             )
-        return vectors
+        params = vectors
 
-    def validate_collection(self, client: QdrantClient) -> None:
-        """Check that the live Qdrant collection matches the contract, or raise."""
-        if not client.collection_exists(self.name):
-            raise ContractViolationError(
-                f"Qdrant collection {self.name!r} does not exist. services/db creates it on startup; "
-                f"run that service first, or correct the name in conf/collection.yaml."
-            )
-        params = self._live_vector_params(client)
-        live_distance = str(getattr(params.distance, "value", params.distance))
-        mismatches = []
-        if params.size != self.size:
-            mismatches.append(f"vector size {params.size} != contracted {self.size}")
-        if live_distance != self.distance:
-            mismatches.append(f"distance {live_distance!r} != contracted {self.distance!r}")
-        if mismatches:
-            raise ContractViolationError(
-                f"Collection {self.name!r} violates conf/collection.yaml: {'; '.join(mismatches)}. "
-                f"The collection must be re-indexed, or the contract corrected."
-            )
-
-    def ensure_collection(self, client: QdrantClient) -> bool:
-        """Create the collection from the contract if absent, else validate it. True if created."""
-        if not client.collection_exists(self.name):
-            try:
-                client.create_collection(collection_name=self.name, vectors_config=self.vectors_config)
-            except Exception:
-                # Lost a race with another starting writer. Only tolerate that
-                # specific outcome: if the collection still is not there, the
-                # create failed for a real reason and must not be swallowed --
-                # which is what the previous bare try/except did, reporting any
-                # failure as "collection already exists".
-                if not client.collection_exists(self.name):
-                    raise
-            else:
-                return True
-        self.validate_collection(client)
-        return False
-
-    def validate_embedding(self, embedding: Embeddings) -> None:
-        """Check the loaded embedding model against the contracted name and dimension."""
-        model_name = getattr(embedding, "model_name", None)
-        if model_name is not None and model_name != self.model:
-            raise ContractViolationError(f"Embedding model {model_name!r} != contracted {self.model!r}.")
-        # Measured with a probe through the public Embeddings interface rather than
-        # read off the wrapped SentenceTransformer: the two services use different
-        # HuggingFaceEmbeddings classes, and they keep that object under different
-        # attribute names (`client` vs `_client`), so reaching for it makes the
-        # check silently no-op on whichever side does not match.
-        dimension = len(embedding.embed_query("contract dimension probe"))
-        if dimension != self.size:
-            raise ContractViolationError(
-                f"Embedding model {self.model!r} produces {dimension}-dim vectors, but "
-                f"conf/collection.yaml contracts size {self.size}."
-            )
-
-    def validate_payload(self, metadata: dict[str, object]) -> None:
-        """Check that a payload about to be written carries exactly the contracted keys."""
-        written, contracted = set(metadata), set(self.metadata)
-        if written == contracted:
-            return
-        missing = sorted(contracted - written)
-        unexpected = sorted(written - contracted)
+    distance = str(getattr(params.distance, "value", params.distance))
+    mismatches = []
+    if params.size != contract.size:
+        mismatches.append(f"vector size {params.size} != contracted {contract.size}")
+    if distance != contract.distance:
+        mismatches.append(f"distance {distance!r} != contracted {contract.distance!r}")
+    if mismatches:
         raise ContractViolationError(
-            f"Payload for collection {self.name!r} violates conf/collection.yaml: "
-            f"missing {missing}, unexpected {unexpected}."
+            f"Collection {contract.name!r} violates conf/collection.yaml: {'; '.join(mismatches)}. "
+            f"Re-index the collection, or correct the contract."
         )
 
-    def require_metadata(self, *keys: str) -> None:
-        """Check that keys this service reads are ones the contract guarantees are written."""
-        absent = sorted(set(keys) - set(self.metadata))
-        if absent:
-            raise ContractViolationError(
-                f"This service reads payload keys {absent}, which conf/collection.yaml does not "
-                f"list as written to collection {self.name!r}."
-            )
+
+def validate_embedding(contract: Contract, embedding: Embeddings) -> None:
+    """Check the loaded model is the contracted one, at the contracted width."""
+    model_name = getattr(embedding, "model_name", None)
+    if model_name is not None and model_name != contract.model:
+        raise ContractViolationError(f"Embedding model {model_name!r} != contracted {contract.model!r}.")
+    width = len(embedding.embed_query("contract dimension probe"))
+    if width != contract.size:
+        raise ContractViolationError(
+            f"Embedding model {contract.model!r} produces {width}-dim vectors, "
+            f"but conf/collection.yaml contracts size {contract.size}."
+        )
+
+
+def validate_payload(contract: Contract, metadata: dict[str, object]) -> None:
+    """Check a payload about to be written carries exactly the contracted keys."""
+    written, contracted = set(metadata), set(contract.metadata)
+    if written == contracted:
+        return
+    raise ContractViolationError(
+        f"Payload for collection {contract.name!r} violates conf/collection.yaml: "
+        f"missing {sorted(contracted - written)}, unexpected {sorted(written - contracted)}."
+    )

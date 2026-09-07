@@ -17,49 +17,55 @@ Hugging Face Spaces but share one Qdrant collection, and therefore one schema co
 
 `services/db` **writes** the Qdrant collection; `services/api` **reads** it. They must agree on
 the collection name, embedding model, vector dimensions, distance metric, vector naming, and
-payload schema. A mismatch corrupts retrieval quietly, so the agreement is written down once in
-[`conf/collection.yaml`](conf/collection.yaml) and enforced by [`conf/contract.py`](conf/contract.py):
+payload schema. A mismatch corrupts retrieval quietly, so all of it is written down **once**, in
+[`conf/collection.yaml`](conf/collection.yaml), and both services load that file:
 
 - **The writer** creates the collection from the contract, refuses to write into one whose
   geometry disagrees, and rejects any payload whose key set differs from the contracted list.
 - **The reader** refuses to start unless the live collection matches the contract, the loaded
-  embedding model is the contracted one at the contracted dimension, and every payload key it
+  embedding model is the contracted one at the contracted width, and every payload key it
   consumes is one the contract guarantees is written.
-- **CI** checks the contract in [`tests/`](tests/test_contract.py).
+- **CI** checks all of it in [`tests/`](tests/test_contract.py), and asserts that
+  `conf/collection.yaml` is the only contract file tracked in git.
 
-Change it in `conf/`, never in a service.
+Each service reads it through its own small `app/contract.py`. Change values in `conf/`, never
+in a service.
+
+### Why builds copy it
+
+`conf/collection.yaml` lives at the repo root, but each service is deployed with
+`git subtree split --prefix=services/<name>`, which ships **only that directory** — the repo root
+never reaches the running Space. So image builds and deploys copy the file into
+`services/<name>/conf/` first, and the deploy workflows refuse to push a tree that lacks it.
+
+That copy is generated, never committed (`.gitignore` covers it). To build or run a service
+locally, do the same thing first:
+
+```bash
+mkdir -p services/api/conf && cp conf/collection.yaml services/api/conf/
+docker build services/api --tag ask-pesu
+```
+
+Running a service directly from a monorepo checkout needs no copy: the loader walks up from
+`app/contract.py` and finds the root `conf/collection.yaml` on its own.
 
 ## Layout
 
 ```
 .
-├── conf/
-│   ├── collection.yaml      # the shared Qdrant contract (authored here)
-│   └── contract.py          # loader + startup enforcement (authored here)
-├── scripts/sync_contract.py # vendors both into each service; --check gates CI
+├── conf/collection.yaml     # the shared Qdrant contract -- the only copy
 ├── pyproject.toml           # shared ruff + pytest configuration (no runtime deps)
 ├── tests/                   # contract tests
 ├── .pre-commit-config.yaml
 └── services/
-    ├── api/                 # own README, Dockerfile, deps + vendored contract
-    └── db/                  # own README, Dockerfile, deps + vendored contract
+    ├── api/                 # own README, Dockerfile, deps, app/contract.py
+    └── db/                  # own README, Dockerfile, deps, app/contract.py
 ```
 
 Each service directory is self-contained and shaped like a repository root — its own
 `README.md` (carrying that Space's frontmatter), `Dockerfile`, and dependencies. Deploy
 workflows use `git subtree split` to push a single service directory to its Space, so the
 Space receives a tree identical to what that service would look like standing alone.
-
-That is also why the contract is **vendored**: a subtree split ships only `services/<name>/`,
-so a repo-root file would simply not exist at runtime. `services/*/conf/collection.yaml` and
-`services/*/app/contract.py` are generated copies — edit the originals under `conf/` and run:
-
-```bash
-python3 scripts/sync_contract.py
-```
-
-The pre-commit hook does this automatically, and CI fails on drift or on a subtree that would
-deploy without the contract.
 
 ## Development
 

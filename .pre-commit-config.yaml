@@ -21,15 +21,3 @@ repos:
       - id: debug-statements
       - id: name-tests-test
         args: [ '--pytest-test-first' ]
-
-  # Runs last, so it propagates whatever the formatting hooks above produced.
-  # The contract is vendored into each service because `git subtree split` ships
-  # only services/<name>/; this is what stops the copies from drifting.
-  - repo: local
-    hooks:
-      - id: sync-contract
-        name: sync collection contract into service subtrees
-        entry: python3 scripts/sync_contract.py
-        language: system
-        pass_filenames: false
-        files: ^(conf/(collection\.yaml|contract\.py)|services/(api|db)/(conf/collection\.yaml|app/contract\.py))$

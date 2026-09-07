@@ -23,7 +23,7 @@ from langchain_huggingface.embeddings import HuggingFaceEmbeddings
 from langchain_qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
 
-from app.contract import CollectionContract
+from app import contract as contract_mod
 
 load_dotenv()
 
@@ -71,14 +71,14 @@ class RetrievalAugmentedGenerator:
         # with services/db, not configured per service. Everything is checked
         # before the first query, so a writer/reader mismatch is a startup crash
         # naming the offending value rather than quietly wrong retrieval.
-        self.contract = CollectionContract.load()
-        self.contract.require_metadata(*REQUIRED_METADATA)
+        self.contract = contract_mod.load()
+        contract_mod.require_metadata(self.contract, *REQUIRED_METADATA)
 
         self.embedding = HuggingFaceEmbeddings(model_name=self.contract.model)
-        self.contract.validate_embedding(self.embedding)
+        contract_mod.validate_embedding(self.contract, self.embedding)
 
         self.qdrant_client = QdrantClient(url=os.getenv("QDRANT_URL"), api_key=os.getenv("QDRANT_API_KEY"))
-        self.contract.validate_collection(self.qdrant_client)
+        contract_mod.validate_collection(self.contract, self.qdrant_client)
         logging.info(f"Qdrant collection {self.contract.name!r} matches conf/collection.yaml.")
 
         self.vector_store = QdrantVectorStore(
