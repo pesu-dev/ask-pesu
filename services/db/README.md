@@ -52,7 +52,8 @@ This is the only writer there is. Both readers —
 [askpesu](https://huggingface.co/spaces/pesu-dev/askpesu) and
 [askpesu-dev](https://huggingface.co/spaces/pesu-dev/askpesu-dev) — answer from
 the collection it fills, so a fault here is visible in every environment at
-once. It is deployed only by a production promotion, never on a merge to `dev`.
+once. There being one writer, this Space is redeployed by merges to `dev` as
+well as by production promotions.
 
 This Space only sees comments posted after it starts. History is loaded
 separately with `scripts/populate_db.py`.

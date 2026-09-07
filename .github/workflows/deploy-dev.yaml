@@ -1,19 +1,27 @@
 name: Deploy to Dev
 
-# Every merge into `dev` deploys the api to its dev Space.
+# Every merge into `dev` deploys both services.
 #
-# The db is deliberately not here. There is one db Space, and it is the one that
-# writes the live index, so it must never run code that has not been through the
-# production gate -- it deploys from `main` only, in deploy-prod.yaml. The
-# practical consequence, worth knowing before you rely on it: a change to
-# services/db merged into `dev` is not running anywhere until someone dispatches
-# a production deploy. Test writer changes locally against the ask-pesu-dev
-# collection.
+# READ THIS BEFORE CHANGING THE MATRIX. The db target below is `askpesu-db`,
+# with no `-dev` suffix, and that is not a mistake: the free tier allows three
+# CPU Spaces, spent on two api environments and ONE writer. There is no dev db
+# Space to deploy to. Merging to `dev` therefore updates the writer that fills
+# the collection production reads.
+#
+# That is deliberate. The alternative -- deploying the db only from `main` --
+# looks safer and is not: with no dev writer, a db change merged to `dev` runs
+# nowhere, so the promotion gate is reached having observed nothing about it.
+# Deploying here means a writer change is live where it can be watched, and a
+# revert on `dev` takes effect the same way it arrived. What contains a bad
+# writer is not the delay, it is the contract: a payload whose keys drift stops
+# the listener and turns /health into a 503, and a wrong model, geometry or
+# credential aborts startup before anything is written.
+#
+# The api deploys to its own dev Space and is unaffected by any of this.
 #
 # The trigger is `on: push` rather than a `workflow_run` chain off the CI
 # workflows, because a chained trigger only fires for runs whose head branch is
-# `dev`, and pull request CI runs on the fork's branch instead. Nothing gates
-# this deploy: dev is disposable, and a failure there is the signal.
+# `dev`, and pull request CI runs on the fork's branch instead.
 on:
   push:
     branches: [ dev ]
@@ -22,6 +30,16 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    strategy:
+      # One service failing must not cancel the other's deploy -- they are
+      # independent Spaces.
+      fail-fast: false
+      matrix:
+        include:
+          - service: api
+            space: pesu-dev/askpesu-dev
+          - service: db
+            space: pesu-dev/askpesu-db     # the only db Space; see the note above
     steps:
       - uses: actions/checkout@v4
         with:
@@ -33,6 +51,6 @@ jobs:
 
       - uses: ./.github/actions/deploy-space
         with:
-          service: api
-          space: pesu-dev/askpesu-dev
+          service: ${{ matrix.service }}
+          space: ${{ matrix.space }}
           hf-token: ${{ secrets.HF_TOKEN }}

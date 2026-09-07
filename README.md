@@ -666,7 +666,7 @@ pre-commit run --all-files             # or on demand
 | `pre-commit.yaml` | Push, PR | Every pre-commit hook, on all files |
 | `contract.yaml` | Push, PR | Asserts each shared file is tracked exactly once; recompiles `requirements.txt` and fails on drift; rehearses the deploy vendoring and checks each split tree is a complete Space root |
 | `docker.yaml` | Manual, or after Pre-Commit on `dev` | Builds both images, boots each container, polls `/health` |
-| `deploy-dev.yaml` | Push to `dev` | Deploys the **api** to `askpesu-dev`. Not the db — see below |
+| `deploy-dev.yaml` | Push to `dev` | Deploys the api to `askpesu-dev` **and the db to `askpesu-db`** — the only db Space there is |
 | `deploy-prod.yaml` | Manual | Fast-forwards `dev` → `main`, then deploys **both** services to `askpesu` and `askpesu-db` |
 
 `deploy-prod.yaml` refuses to run unless `github.actor` is listed in
@@ -691,31 +691,44 @@ and refuses to push a tree missing any of them.
 
 | Branch | Deploys | To | Collection |
 |---|---|---|---|
-| `dev` | api | `askpesu-dev` | `ask-pesu-prod` |
+| `dev` | api **and** db | `askpesu-dev`, `askpesu-db` | `ask-pesu-prod` |
 | `main` | api **and** db | `askpesu`, `askpesu-db` | `ask-pesu-prod` |
 
-1. **Merge a PR into `dev`.** `Deploy to Dev` fires on the push and deploys the api. Confirm
-   `askpesu-dev` serves `/health`, `/docs`, the frontend and `/assets`, and streams one real
-   answer.
+1. **Merge a PR into `dev`.** `Deploy to Dev` fires on the push. Confirm `askpesu-dev` serves
+   `/health`, `/docs`, the frontend and `/assets`, and streams one real answer; confirm
+   `askpesu-db` serves `/health` and its logs show the listener started.
 2. **Dispatch `Deploy to Production`** when dev looks right. It fast-forwards `dev` → `main` —
    aborting if they have diverged rather than inventing a merge nobody reviewed — then deploys
-   **both** services.
+   both services.
 
-### The db has no staging
+### Why the db deploys on `dev` too
 
-There is one db Space, and it writes the collection every reader uses, so it deploys from `main`
-only. Two consequences worth internalising before relying on this:
+`askpesu-db` appears in **both** deploy workflows, and the target has no `-dev` suffix in either,
+because there is only one db Space. Merging to `dev` updates the writer that fills the collection
+production reads. That is deliberate, and the reasoning is worth keeping:
 
-- **A change to `services/db` merged into `dev` is not running anywhere.** It ships on the next
-  production dispatch, together with whatever api changes have accumulated. Test writer changes
-  locally, against `ask-pesu-dev`.
-- **A bad writer change reaches every reader at once.** Nothing stands between it and the live
-  index except review and the promotion gate — which is exactly why the db is not on the
-  ungated dev deploy.
+- **Deploying the db only from `main` would not be safer.** With no dev writer, a `services/db`
+  change merged to `dev` runs nowhere, so the promotion gate would be reached having observed
+  nothing about it — a delay, not a check. Worse, writer changes would accumulate and ship as one
+  untested batch.
+- **What contains a bad writer is the contract, not the delay.** A payload whose keys drift stops
+  the listener and turns `/health` into a 503 before anything is stored; a wrong embedding model,
+  vector geometry or credential aborts startup. Neither reaches the collection.
+- **Recovery is symmetric.** A revert on `dev` redeploys the writer the same way the change
+  arrived.
 
-**The dev api runs `dev`; the prod Spaces run `main`.** The production deploy does *not*
-redeploy the dev api: `dev` is normally ahead of `main`, so re-pushing `main` over it would
-silently roll it back — every deploy here is a force push, so nothing would object.
+The failure this does *not* catch is a write that is schema-valid but semantically wrong — a
+broken thread rendering, say — which lands silently and is only undone by re-running the
+backfill. That is why `services/db/app/` and `services/db/scripts/` require owner review in
+[`CODEOWNERS`](.github/CODEOWNERS): they are the shortest path in the repository to live data.
+
+In `deploy-prod.yaml` the db step is normally a no-op, since `main` and `dev` are the same commit
+after the fast-forward. It is kept so the invariant holds unconditionally: after a production
+deploy, every production Space is running `main`.
+
+**The dev api runs `dev`; the prod api runs `main`.** The production deploy does *not* redeploy
+the dev api: `dev` is normally ahead of `main`, so re-pushing `main` over it would silently roll
+it back — every deploy here is a force push, so nothing would object.
 
 ### Space configuration
 
@@ -782,11 +795,11 @@ Reviewers are assigned by [`.github/CODEOWNERS`](.github/CODEOWNERS). Changes to
   contracted embedding model. Check these by eye when touching the contract.
 - **The streaming event shape is duplicated** between `app/rag.py` and `frontend/src/lib/api.ts`,
   with nothing enforcing agreement.
-- **The db has no staging environment.** The free tier allows three CPU Spaces, which are spent
-  on two api environments and one writer. A `services/db` change is therefore tested locally or
-  not at all, and reaches every reader the moment production is promoted. A fourth Space would
-  restore a dev writer; short of that, the mitigations are the promotion gate, the startup
-  contract checks, and `populate_db.py --dry-run` against `ask-pesu-dev`.
+- **There is no staging writer.** The free tier allows three CPU Spaces, spent on two api
+  environments and one db, so a `services/db` change goes live on merge to `dev` — there is
+  nowhere else for it to go. The startup contract checks and the per-payload validation catch
+  the structural failures; a semantically wrong but schema-valid write is caught by neither, and
+  is undone by re-running the backfill. A fourth Space would restore a staging writer.
 - **`Docker Container Build` effectively runs on dispatch only.** Its `workflow_run` trigger
   requires `head_branch == 'dev'`, and pull request CI runs on the fork's branch. Switching it
   to `push: branches: [dev]` would make the smoke tests routine, at roughly twenty minutes of CI

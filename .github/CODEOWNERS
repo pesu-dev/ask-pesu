@@ -22,22 +22,28 @@
 # by both services. This is the only place it should ever be edited.
 /conf/ @aditeyabaral @joshua-rajj
 
+## Shared environment documentation -- one root copy serves both services.
+/.env.example @aditeyabaral @joshua-rajj
+
 ## API service
-services/api/.env.example @aditeyabaral @joshua-rajj
 services/api/conf/ @aditeyabaral @joshua-rajj
 services/api/app/contract.py @aditeyabaral @joshua-rajj
 services/api/Dockerfile @aditeyabaral @joshua-rajj
 services/api/README.md @aditeyabaral
 
 ## DB service
-services/db/.env.example @aditeyabaral @joshua-rajj
+# The write path. Merging to `dev` deploys the db to the only db Space there is,
+# so these files are the shortest route in the repository to the live index --
+# and the failure they can cause is the one the contract does NOT catch: writes
+# that are schema-valid but semantically wrong, such as a broken thread
+# rendering, which land silently and are only undone by a backfill.
+services/db/app/ @aditeyabaral @joshua-rajj
+services/db/scripts/ @aditeyabaral @joshua-rajj
 services/db/app/contract.py @aditeyabaral @joshua-rajj
 services/db/Dockerfile @aditeyabaral @joshua-rajj
 services/db/README.md @aditeyabaral
 
 ## Documentation and Legal
 /README.md @aditeyabaral
+# One copy, vendored into each service tree at deploy time.
 /LICENSE @aditeyabaral
-# Each service ships its own copy in the tree pushed to its Space.
-services/api/LICENSE @aditeyabaral
-services/db/LICENSE @aditeyabaral
