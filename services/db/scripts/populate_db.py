@@ -10,17 +10,16 @@ Everything about the target -- which collection, which embedding model, which
 vector names -- comes from the contract, so this cannot drift from the service
 it is backfilling. See ``conf/collection.yaml``.
 
-Safe to re-run: point ids are derived from the root comment id, so a repeat is
-an overwrite rather than a duplicate.
+**The dump always wins.** It is a fresh snapshot of r/PESU taken at backfill
+time, so for any thread it is at least as complete as what the listener has --
+the listener indexes a thread when a comment arrives and never revisits it
+afterwards, while the snapshot carries every reply up to the moment it was
+taken. Anything already stored is therefore re-embedded and replaced, with no
+opt-out: an option to keep the older copy would only ever preserve a staler one.
 
-**The dump wins by default.** A thread already in Qdrant -- indexed by the live
-listener, or by an earlier run -- is re-embedded and overwritten. That is what
-you want when the dump is the more complete record, which it is for a backfill.
-Pass ``--skip-existing`` for the opposite: leave anything already stored alone
-and only add what is missing, which is cheaper for a top-up run.
-
-Interrupted runs resume either way, because each file moves to ``completed/``
-only once every document in it is stored.
+Point ids come from the root comment id, so a repeat is an overwrite rather than
+a duplicate, and interrupted runs resume because each file moves to
+``completed/`` only once every document in it is stored.
 
     python scripts/populate_db.py --data-dir processed_data
 
@@ -47,28 +46,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app import contract as contract_mod  # noqa: E402
 from app.utils import convert_to_uuid  # noqa: E402
-
-
-def existing_point_ids(client: QdrantClient, collection: str) -> set[str]:
-    """Collect every point id already in the collection.
-
-    Only used by ``--skip-existing``. Scrolling the whole collection once is far
-    cheaper than embedding documents that would be discarded, but it is pure
-    waste when the run is going to overwrite them anyway.
-    """
-    found: set[str] = set()
-    offset = None
-    while True:
-        points, offset = client.scroll(
-            collection_name=collection,
-            with_payload=False,
-            with_vectors=False,
-            offset=offset,
-            limit=10_000,
-        )
-        found.update(str(p.id) for p in points)
-        if offset is None:
-            return found
 
 
 def flush_batch(vector_store: QdrantVectorStore, batch: list[tuple], written: list[str]) -> int:
@@ -154,11 +131,10 @@ def main() -> int:
     parser.add_argument("--data-dir", type=Path, default=Path("processed_data"), help="Processed post JSON files.")
     parser.add_argument("--completed-dir", type=Path, default=Path("completed"), help="Where finished files move to.")
     parser.add_argument("--batch-size", type=int, default=64, help="Documents embedded per upsert.")
-    parser.add_argument("--dry-run", action="store_true", help="Report what would be written, write nothing.")
     parser.add_argument(
-        "--skip-existing",
+        "--dry-run",
         action="store_true",
-        help="Leave points already in the collection alone. Default is to overwrite them from the dump.",
+        help="Check the collection and the input files, report the document count, and write nothing.",
     )
     args = parser.parse_args()
 
@@ -177,24 +153,26 @@ def main() -> int:
     print(f"Collection {contract.name!r} matches the contract.")
 
     if args.dry_run:
-        total = sum(len(documents_in(f)) for f in files)
+        # Everything that can go wrong cheaply, before the expensive part: the
+        # collection is already validated above, and this parses every input
+        # file and checks each payload against the contract. It deliberately
+        # does not build the vector store, so no model is downloaded and nothing
+        # is written.
+        total = 0
+        for path in files:
+            for _text, payload, _point_id in documents_in(path):
+                contract_mod.validate_payload(contract, payload)
+                total += 1
         print(f"Dry run: {len(files)} files, {total} documents would be written to {contract.name!r}.")
+        print("Every payload matches the contract. Nothing was written.")
         return 0
 
     vector_store = build_vector_store(contract, client)
     args.completed_dir.mkdir(parents=True, exist_ok=True)
 
-    if args.skip_existing:
-        print("Fetching existing point ids ...")
-        seen = existing_point_ids(client, contract.name)
-        print(f"Found {len(seen)} existing points; they will be left as they are")
-    else:
-        # The dump is the more complete record, so it replaces whatever is
-        # stored. Not scrolling the collection also saves a full pass over it.
-        seen = set()
-        print("Overwriting any existing points from the dump (--skip-existing to keep them)")
+    print(f"Writing {contract.name!r} from the dump; anything already stored is replaced.")
 
-    inserted = skipped = 0
+    inserted = 0
     written: list[str] = []
     batch: list[tuple] = []
     started = time.time()
@@ -202,9 +180,6 @@ def main() -> int:
 
     for index, path in enumerate(files, start=1):
         for text, payload, point_id in documents_in(path):
-            if point_id in seen:
-                skipped += 1
-                continue
             # Reject a drifting payload before it reaches Qdrant, the same way
             # the listener does on every write.
             contract_mod.validate_payload(contract, payload)
@@ -216,7 +191,7 @@ def main() -> int:
         shutil.move(str(path), args.completed_dir / path.name)
         print_progress(index, len(files), started)
 
-    print(f"\nFiles: {len(files)} | Written: {inserted} | Skipped (already present): {skipped}")
+    print(f"\nFiles: {len(files)} | Documents written: {inserted}")
 
     missing = []
     for start in range(0, len(written), 100):
