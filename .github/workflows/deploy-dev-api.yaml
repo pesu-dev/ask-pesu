@@ -1,0 +1,38 @@
+name: Deploy API to Dev
+
+# Deploys services/api to its dev Space on every merge into `dev`.
+#
+# The api is the ONLY service deployed from `dev`. The db is not here: there is
+# one db Space and it writes the collection production serves from, so it moves
+# only on a production promotion. See deploy-prod.yaml.
+#
+# No path filter, deliberately. One would occasionally skip a rebuild that could
+# not have changed anything -- but the deploy job itself is nearly free (it
+# splits a subtree and pushes; Hugging Face does the building), the dev api holds
+# no state, so a redundant restart loses nothing, and a filter that is ever too
+# narrow means someone merges and nothing happens with nothing to say why. A
+# silent skip is a worse failure here than a wasted build, and this repository
+# has already lost months to a trigger condition that quietly never matched.
+#
+# The trigger is `on: push` rather than a `workflow_run` chain off the CI
+# workflows, because a chained trigger only fires for runs whose head branch is
+# `dev`, and pull request CI runs on the fork's branch instead.
+on:
+  push:
+    branches: [ dev ]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0                      # `git subtree split` walks the whole history
+          ref: dev                            # so a dispatch from another branch still ships dev
+
+      - uses: ./.github/actions/deploy-space
+        with:
+          service: api
+          space: pesu-dev/askpesu-dev
+          hf-token: ${{ secrets.HF_TOKEN }}
