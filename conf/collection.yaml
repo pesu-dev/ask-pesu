@@ -27,20 +27,23 @@ collection:
     distance: "Cosine"
     # A NAMED vector, not langchain_qdrant's unnamed default. langchain writes
     # hybrid points as {vector_name: dense, sparse_vector_name: sparse} -- a
-    # named-vector dict -- so a collection built on the unnamed vector cannot
-    # serve hybrid retrieval and would need a second full re-index when the
-    # planned BM25 work lands. Naming it now costs nothing.
+    # named-vector dict -- so a collection built on the unnamed vector could not
+    # hold both vectors at all. Naming it is what lets one collection serve a
+    # dense reader and a hybrid writer at the same time.
     vector_name: "dense"
 
-  # Sparse vector for BM25 hybrid retrieval. Nothing writes it yet -- the
-  # retrieval pipeline is still dense-only -- but it is contracted now because
-  # adding a vector to a populated collection may mean rebuilding it, and
-  # because `modifier: idf` is easy to omit and impossible to notice: without
-  # it Qdrant scores raw term frequency, so a thread repeating "PESU" outranks
-  # one that answers the question.
+  # Sparse vector for BM25 retrieval. services/db writes one on every point;
+  # services/api reads dense only, so this is currently written and not yet
+  # queried. That asymmetry is the point: adding a vector to a populated
+  # collection means re-embedding every document, so the cost is paid once, up
+  # front, while the collection is being filled.
   #
-  # Remove this block to opt out of sparse entirely; the checks are skipped when
-  # it is absent.
+  # `modifier: idf` is the part that is easy to omit and impossible to notice.
+  # Without it Qdrant scores raw term frequency, so a thread that repeats "PESU"
+  # outranks one that answers the question -- and nothing errors.
+  #
+  # Remove this block to opt out of sparse entirely; both services skip the
+  # sparse checks when it is absent, and the writer falls back to dense-only.
   sparse:
     vector_name: "sparse"
     modifier: "idf"
@@ -56,7 +59,9 @@ collection:
   #
   # services/api cites `permalink`. Both are stored: for a self post they agree,
   # but for a link post `url` is the external article, so only `permalink`
-  # reliably addresses the discussion an answer was drawn from.
+  # reliably addresses the discussion an answer was drawn from. Both writers
+  # store it already prefixed with https://reddit.com, because Reddit's own API
+  # returns a bare path.
   metadata:
     - root_comment_id
     - post_id

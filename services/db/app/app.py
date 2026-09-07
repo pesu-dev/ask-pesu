@@ -31,6 +31,13 @@ from langchain_qdrant import FastEmbedSparse, QdrantVectorStore, RetrievalMode
 from praw.models import Comment
 from qdrant_client import QdrantClient
 
+# Before anything below reads the environment. One .env at the repository root
+# serves both services: load_dotenv() searches upwards from this module, so it
+# is found whether the service runs from a monorepo checkout or from its own
+# Space root. In a Space there is no .env and this is a no-op -- the values
+# arrive as real environment variables from the Space's secrets.
+load_dotenv()
+
 vector_store = None
 reddit = None
 subreddit = None
@@ -100,8 +107,11 @@ def get_root_comment(comment: Comment) -> Comment:
 def listen_comments() -> None:
     """Consume new r/PESU comments forever, indexing the thread each belongs to.
 
-    ``skip_existing=True`` means only comments posted *after* startup are seen;
-    this service never backfills.
+    ``skip_existing=True`` means only comments posted *after* the stream opens
+    are seen, so this service never backfills; ``scripts/populate_db.py`` is how
+    a collection gets its history. The same flag applies on every reconnect, so
+    comments posted while the stream was down are not picked up when it returns
+    -- closing that gap is a job for the backfill, not for this loop.
 
     Two failure modes, deliberately treated differently. Network and Reddit errors
     are transient, so the stream is simply re-entered. A contract violation is a
@@ -194,10 +204,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         timeout=120.0,
     )
 
-    embeddings = HuggingFaceEmbeddings(
-        model_name=contract.model,
-        # model_kwargs={"device": "cpu"}
-    )
+    embeddings = HuggingFaceEmbeddings(model_name=contract.model)
     contract_mod.validate_embedding(contract, embeddings)
 
     # Creates the collection from the contract when absent; when it already
@@ -232,12 +239,32 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             vector_name=contract.vector_name,
         )
 
+    # Fail here rather than in the listener. praw builds the client and resolves
+    # a subreddit lazily, so bad credentials do not surface until the stream
+    # makes its first request -- on the background thread, inside the catch-all
+    # that treats errors as transient. The listener would then retry a 401
+    # forever while /health reported ok, which is the silently-dead writer this
+    # service is built to avoid.
+    if not client_id or not client_secret:
+        raise RuntimeError(
+            "REDDIT_CLIENT_ID and REDDIT_CLIENT_SECRET must both be set. Create a 'script' app "
+            "at https://www.reddit.com/prefs/apps."
+        )
+
     reddit = praw.Reddit(
         client_id=client_id,
         client_secret=client_secret,
         user_agent="langchain-reddit-loader",
     )
     subreddit = reddit.subreddit("PESU")
+
+    # One cheap read that forces the OAuth token exchange and proves the
+    # credentials work against r/PESU. next() is enough: praw fetches lazily, so
+    # this pulls a single listing page rather than the whole subreddit.
+    try:
+        next(iter(subreddit.new(limit=1)))
+    except Exception as error:
+        raise RuntimeError(f"Reddit credentials rejected, or r/PESU unreachable: {error}") from error
 
     background_listener()
     print("Background listener started.")
@@ -265,8 +292,4 @@ async def health() -> JSONResponse:
 
 
 if __name__ == "__main__":
-    # load environment variables from .env file
-    load_dotenv()
-
-    # Run the app
     uvicorn.run("app.app:app", host="0.0.0.0", port=7860)

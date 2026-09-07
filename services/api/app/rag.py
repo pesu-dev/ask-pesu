@@ -171,6 +171,14 @@ class RetrievalAugmentedGenerator:
         contract_mod.validate_collection(self.contract, self.qdrant_client)
         logging.info(f"Qdrant collection {self.contract.name!r} matches conf/collection.yaml.")
 
+        # Dense retrieval only, even though every point also carries the BM25
+        # sparse vector services/db writes. Reading hybrid is a change to this
+        # constructor rather than a re-index -- which is the whole reason the
+        # sparse vector is written now -- but it is not a free switch: Qdrant
+        # fuses the two rankings with Reciprocal Rank Fusion, whose output is a
+        # rank-derived score on a different scale from cosine similarity, so
+        # `score_threshold` would silently stop meaning anything and the
+        # reranker cutoff would need re-deriving.
         self.vector_store = QdrantVectorStore(
             collection_name=self.contract.name,
             embedding=self.embedding,
@@ -247,7 +255,7 @@ class RetrievalAugmentedGenerator:
         # Two chains differing only in which model writes the final answer; both
         # retrieve with the primary model.
         self.rag_chain_primary = self._build_chain(self.llm_primary)
-        self.rag_chain_thinking = self._build_chain(self.llm_thinking) if self.llm_thinking else None
+        self.rag_chain_thinking = self._build_chain(self.llm_thinking)
 
     def _build_chain(self, llm: BaseChatModel) -> RunnableSerializable[str, str]:
         """Compose the LCEL chain that turns a question into a stream of answer text.
@@ -478,9 +486,7 @@ class RetrievalAugmentedGenerator:
                 chat_history.append(HumanMessage(convo.query))
                 chat_history.append(AIMessage(convo.answer))
 
-        rag_chain = (
-            self.rag_chain_thinking if thinking and self.rag_chain_thinking is not None else self.rag_chain_primary
-        )
+        rag_chain = self.rag_chain_thinking if thinking else self.rag_chain_primary
 
         logging.info(f"Using {'thinking' if thinking else 'primary'} LLM for query: {query}")
 

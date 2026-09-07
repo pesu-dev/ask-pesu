@@ -110,7 +110,30 @@ def sparse_vectors_config(contract: Contract) -> dict[str, SparseVectorParams] |
 
 
 def ensure_collection(contract: Contract, client: QdrantClient) -> bool:
-    """Create the collection from the contract if absent, else validate it. True if created."""
+    """Bring the live collection into agreement with the contract, or refuse to run.
+
+    This service owns the collection's existence: on a fresh environment nothing
+    else creates it, which is why ``services/api`` refuses to start until this
+    one has run at least once.
+
+    Two paths. If the collection is absent it is created with exactly the
+    contracted geometry. If it is already there its geometry is checked and any
+    disagreement raises -- adapting to what is already stored is the one thing
+    that must not happen, because the vectors already written were produced by
+    the contracted model and cannot be compared against anything else.
+
+    Args:
+        contract: The loaded contract.
+        client: Qdrant client, with manage rights if the collection may be absent.
+
+    Returns:
+        True if this call created the collection, False if it already existed
+        and matched.
+
+    Raises:
+        ContractViolationError: If an existing collection disagrees with the
+            contract.
+    """
     if not client.collection_exists(contract.name):
         try:
             client.create_collection(
@@ -119,10 +142,12 @@ def ensure_collection(contract: Contract, client: QdrantClient) -> bool:
                 sparse_vectors_config=sparse_vectors_config(contract),
             )
         except Exception:
-            # Lost a race with another starting writer. Tolerate only that: if
-            # the collection still is not there, the create failed for a real
-            # reason and must not be swallowed -- which is what the previous
-            # bare try/except did, reporting everything as "already exists".
+            # Two writers starting together can both see the collection absent,
+            # and the loser of that race gets an error for a collection that now
+            # exists. Tolerate exactly that case: if the collection still is not
+            # there, the create failed for a real reason -- a bad URL, a key
+            # without manage rights, a malformed vector config -- and swallowing
+            # it would leave both services running against nothing.
             if not client.collection_exists(contract.name):
                 raise
         else:

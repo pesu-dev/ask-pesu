@@ -14,6 +14,10 @@ Routes:
 
 The expensive machinery -- embedding model, reranker, Qdrant client -- is built
 once in :func:`lifespan` and shared by every request.
+
+Setting ``ENV=test`` swaps the whole pipeline for a canned NDJSON script, so the
+frontend can be developed with no Qdrant, no Hugging Face token and no inference
+spend. Every route still answers in its real shape.
 """
 
 import argparse
@@ -26,10 +30,9 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 import pytz
-import torch
 import uvicorn
 from dotenv import load_dotenv
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -41,6 +44,15 @@ from app.rag import RetrievalAugmentedGenerator
 
 load_dotenv()
 
+# Where `--config` is handed over. uvicorn is started with the import string
+# "app.app:app", so it imports this module afresh rather than reusing the one
+# `python -m app.app` is executing; anything main() attaches to that first
+# module -- app.state included -- is invisible to the app uvicorn actually
+# serves. The environment crosses both that boundary and the process boundary
+# `--debug` adds by reloading in a subprocess.
+CONFIG_PATH_VAR = "ASKPESU_CONFIG_PATH"
+DEFAULT_CONFIG_PATH = "conf/config.yaml"
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -51,15 +63,21 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     the collection contract. Anything raised aborts startup, so a deployment
     pointed at a missing or mismatched collection never binds a port -- which is
     what we want, because the alternative is answering from the wrong data.
+
+    ``ENV=test`` skips all of it. That mode answers from a canned script and
+    never reaches the pipeline, so building one would impose exactly the
+    requirements the mode exists to avoid: an HF token, a reachable Qdrant, and
+    a few hundred megabytes of model downloads to serve a fixed string.
     """
     # Startup
     logging.info("AskPESU API startup")
 
-    # Initialize the RAG engine
     global rag
-    config_path = getattr(app.state, "config_path", "conf/config.yaml")
-    rag = RetrievalAugmentedGenerator(config_path)
-    logging.info("RAG pipeline initialized...")
+    if os.getenv("ENV") == "test":
+        logging.warning("ENV=test: serving canned responses; the RAG pipeline is not built.")
+    else:
+        rag = RetrievalAugmentedGenerator(os.getenv(CONFIG_PATH_VAR, DEFAULT_CONFIG_PATH))
+        logging.info("RAG pipeline initialized...")
 
     yield
     # Shutdown
@@ -121,14 +139,26 @@ THINKING_STATE = QuotaState(name="thinking", cooldown_hours=24)
 PRIMARY_STATE = QuotaState(name="primary", cooldown_hours=24)
 
 # Hashed asset bundles are served directly. Everything else falls through to the
-# routes below, so client-side routing still works. This mount fails loudly at
-# import if the frontend was never built -- the clearest signal that a deploy
-# shipped without its dist/ directory.
-app.mount(
-    "/assets",
-    StaticFiles(directory=f"{DIST_DIR}/assets"),
-    name="assets",
-)
+# routes below, so client-side routing still works.
+#
+# Mounted only when the build output is actually there. In the image it always
+# is -- the Dockerfile's first stage builds the frontend and copies dist/ in --
+# but the documented local workflow runs this server on its own and lets Vite
+# serve and proxy to it, and StaticFiles raises at import for a missing
+# directory. Refusing to start in that case would break the supported way to
+# work on the frontend, so the absence is reported instead of being fatal.
+FRONTEND_BUILT = os.path.isdir(f"{DIST_DIR}/assets")
+if FRONTEND_BUILT:
+    app.mount(
+        "/assets",
+        StaticFiles(directory=f"{DIST_DIR}/assets"),
+        name="assets",
+    )
+else:
+    logging.warning(
+        f"No frontend build at {DIST_DIR}/. The API works; / will not serve the UI. "
+        f"Run `npm ci && npm run build` in frontend/, or use the Vite dev server."
+    )
 
 
 async def test_stream() -> AsyncIterator[str]:
@@ -228,15 +258,30 @@ async def unhandled_exception_handler(_request: Request, _exc: Exception) -> JSO
 @app.get(
     "/",
     response_class=FileResponse,
+    # Two response types -- the SPA, or a 503 when it was never built -- so
+    # FastAPI must not infer a schema from the annotation.
+    response_model=None,
     tags=["Generation"],
     responses=index_docs.response_examples,
 )
-async def index() -> FileResponse:
+async def index() -> Response:
     """Serve the compiled single-page app.
 
     Only the root path is served here; hashed bundles come from the /assets
     mount. The SPA handles its own routing once loaded.
+
+    With no build present this says so, rather than returning a bare 404 that
+    reads like a routing bug.
     """
+    if not FRONTEND_BUILT:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": False,
+                "message": f"No frontend build at {DIST_DIR}/. The API routes work; the UI was never built.",
+                "timestamp": datetime.datetime.now(IST).isoformat(),
+            },
+        )
     return FileResponse(f"{DIST_DIR}/index.html")
 
 
@@ -251,7 +296,12 @@ async def rewrite_query(payload: AskRequestModel) -> ShortenQueryModel:
     Only ``query`` is read; ``thinking`` and ``history`` are ignored. The request
     model is shared with /ask so the client can post the same object it already
     has, without a second schema.
+
+    Under ``ENV=test`` there is no pipeline to call, so the question is truncated
+    locally to the same eight-word shape the model is asked for.
     """
+    if rag is None:
+        return ShortenQueryModel(query=" ".join(payload.query.split()[:8]))
     return ShortenQueryModel(query=await rag.shorten_query(payload.query))
 
 
@@ -280,10 +330,13 @@ async def ask(payload: AskRequestModel) -> StreamingResponse:
         QuotaExceededError: If the requested model is in cooldown. The handler
             turns this into a 429 carrying the current quota snapshot.
     """
-    global THINKING_STATE, PRIMARY_STATE
     logging.debug(f"Received /ask question: {payload.query}")
     logging.debug(f"Thinking mode: {payload.thinking}")
-    # current_time = datetime.datetime.now(IST)
+
+    # Before the quota gate: the canned stream calls no provider, so there is no
+    # quota for it to exceed.
+    if os.getenv("ENV") == "test":
+        return StreamingResponse(test_stream(), media_type="text/plain")
 
     # Re-enable thinking mode and primary LLM if cooldown period has expired
     THINKING_STATE.refresh()
@@ -301,9 +354,6 @@ async def ask(payload: AskRequestModel) -> StreamingResponse:
     if not payload.thinking and not PRIMARY_STATE.enabled:
         logging.warning("Primary LLM is currently unavailable due to quota limits.")
         raise QuotaExceededError("Primary LLM is temporarily unavailable due to quota limits. Please try again later.")
-
-    if os.getenv("ENV") == "test":
-        return StreamingResponse(test_stream(), media_type="text/plain")
 
     # A quota failure surfaces mid-stream, so the pipeline calls back here to
     # start the cooldown; without this the state machine could never trip and
@@ -372,7 +422,13 @@ async def quota() -> JSONResponse:
 
 
 def main() -> None:
-    """Main function to run the FastAPI application with command line arguments."""
+    """Parse the command line and run the server.
+
+    The entrypoint for both ``python -m app.app`` and the container's CMD.
+    ``--debug`` turns on DEBUG logging and uvicorn's auto-reload, which serves
+    the app from a subprocess -- so anything that has to reach the running app
+    travels through the environment rather than through module state.
+    """
     # Set up argument parser for command line arguments
     parser = argparse.ArgumentParser(
         description="Run the FastAPI application for askPESU backend.",
@@ -402,8 +458,9 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    # Store config path in app state for lifespan handler
-    app.state.config_path = args.config
+    # Set before uvicorn imports "app.app", so the lifespan in that fresh import
+    # reads this value. See CONFIG_PATH_VAR.
+    os.environ[CONFIG_PATH_VAR] = args.config
 
     # Set up logging configuration
     logging_level = logging.DEBUG if args.debug else logging.INFO
@@ -418,17 +475,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    logging.info(f"Using device: {device}")
-    if device.type == "cuda":
-        logging.info(f"CUDA version: {torch.version.cuda}")
-        logging.info(f"Number of GPUs: {torch.cuda.device_count()}")
-        for i in range(torch.cuda.device_count()):
-            logging.info(f"GPU {i} name: {torch.cuda.get_device_name(i)}")
-            logging.info(f"\tGPU {i} memory: {torch.cuda.get_device_properties(i).total_memory / 1024**3:.2f} GB")
-            logging.info(f"\tGPU {i} memory allocated: {torch.cuda.memory_allocated(i) / 1024**3:.2f} GB")
-            logging.info(f"\tGPU {i} memory reserved: {torch.cuda.memory_reserved(i) / 1024**3:.2f} GB")
-        torch.set_float32_matmul_precision("high")
-    else:
-        logging.info("Running without GPU acceleration")
     main()

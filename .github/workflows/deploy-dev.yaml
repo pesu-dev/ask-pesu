@@ -6,10 +6,10 @@ name: Deploy to Dev
 # not a safe inference, and keeping both Spaces on the same commit makes
 # "what is on dev?" answerable without checking two histories.
 #
-# This replaces the Pre-Commit -> Docker Container Build -> Deploy to Staging
-# chain, which never fired once: its `head_branch == 'dev'` guard could not
-# match, because the Pre-Commit runs that succeed are on fork pull request
-# branches. A direct `on: push` has no such failure mode.
+# The trigger is `on: push` rather than a `workflow_run` chain off the CI
+# workflows, because a chained trigger only fires for runs whose head branch is
+# `dev`, and pull request CI runs on the fork's branch instead. Nothing gates
+# this deploy: dev is disposable, and a failure there is the signal.
 on:
   push:
     branches: [ dev ]

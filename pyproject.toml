@@ -3,16 +3,22 @@
 # One [project] table covers both services: what they share is the base
 # `dependencies`, and what only one needs is an extra. Neither Dockerfile
 # installs from this file -- both `pip install -r requirements.txt` -- so it
-# never has to reach a Space. It is the *source* those requirements come from:
+# never has to reach a Space. It is the *source* that one root requirements.txt
+# is compiled from:
 #
-#     uv pip compile pyproject.toml --extra api --python-platform linux \
-#         --python-version 3.12 -o services/api/requirements.txt
-#     uv pip compile pyproject.toml --extra db  --python-platform linux \
-#         --python-version 3.12 -o services/db/requirements.txt
+#     uv pip compile pyproject.toml --extra api --extra db \
+#         --python-platform linux --python-version 3.12 -o requirements.txt
+#
+# Both extras go into that single file, so each image installs the union and
+# carries a little it does not import. That is deliberate: it resolves the
+# embedding stack exactly once, which makes it impossible for the writer and the
+# reader to end up on different versions of the library that produces the
+# vectors. The platform and version are pinned so the file a laptop generates is
+# the file the linux/amd64 Space installs.
 #
 # It also gives ruff one configuration for every service: ruff walks up from
 # each file to the nearest pyproject.toml containing [tool.ruff], and this is
-# now the only pyproject.toml in the repo.
+# the only pyproject.toml in the repo.
 
 [project]
 name = "ask-pesu"
