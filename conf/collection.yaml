@@ -11,7 +11,15 @@
 # that copy is gitignored and CI refuses to push a tree without it.
 
 collection:
-  name: "ask-pesu"
+  # NOTE: the collection NAME is deliberately not here. One cluster holds one
+  # collection per environment (ask-pesu-prod, ask-pesu-dev), so the name is
+  # deployment configuration and comes from $QDRANT_COLLECTION -- exactly like
+  # $QDRANT_URL. What this file fixes is the SHAPE, which must be identical in
+  # every environment or dev tests nothing meaningful.
+  #
+  # Both services in one environment must be given the same name; each verifies
+  # the shape of whatever it is pointed at, but neither can tell that the other
+  # was pointed somewhere else.
 
   dense:
     model: "Alibaba-NLP/gte-modernbert-base"

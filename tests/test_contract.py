@@ -8,6 +8,7 @@ small loader, so both are loaded here by path -- they share the module name
 
 import ast
 import importlib.util
+import os
 import subprocess
 from pathlib import Path
 
@@ -17,6 +18,11 @@ from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+
+# The collection name is deployment configuration, not contract, so loading one
+# requires it. Set before the modules are imported so every load() below works.
+TEST_COLLECTION = "ask-pesu-test"
+os.environ.setdefault("QDRANT_COLLECTION", TEST_COLLECTION)
 
 
 def load_module(service):
@@ -80,8 +86,9 @@ class TestSingleSourceOfTruth:
         rather than quietly changing which collection a service talks to.
         """
         authored = yaml.safe_load((REPO_ROOT / "conf" / "collection.yaml").read_text())["collection"]
+        assert "name" not in authored, "the collection name is environment config, not contract"
         expected = (
-            authored["name"],
+            TEST_COLLECTION,
             authored["dense"]["model"],
             int(authored["dense"]["size"]),
             str(authored["dense"]["distance"]),
@@ -138,6 +145,19 @@ class TestSingleSourceOfTruth:
         assert shared >= {"contract_path", "load", "validate_collection", "validate_embedding"}
         for name in sorted(shared):
             assert api_fns[name] == db_fns[name], f"{name}() has drifted between the two services"
+
+    def test_the_collection_name_comes_from_the_environment(self, mod):
+        """One cluster, one collection per environment, so the name cannot live in
+        a file shared by every environment."""
+        assert mod.load("explicitly-passed").name == "explicitly-passed"
+        assert mod.load().name == TEST_COLLECTION
+
+    def test_a_missing_collection_name_is_fatal(self, mod, monkeypatch):
+        """Never default. A default would let a misconfigured deployment quietly
+        read or write another environment's data."""
+        monkeypatch.delenv("QDRANT_COLLECTION", raising=False)
+        with pytest.raises(mod.ContractViolationError, match="QDRANT_COLLECTION is not set"):
+            mod.load()
 
     def test_loader_walks_up_from_the_service(self, mod):
         """Deployed, the file sits at /app/conf/; in the monorepo, at the repo root."""

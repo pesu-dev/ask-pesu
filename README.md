@@ -134,9 +134,13 @@ the collection name, embedding model, vector dimensions, distance metric, vector
 payload schema. A mismatch corrupts retrieval quietly, so all of it is written down **once**, in
 [`conf/collection.yaml`](conf/collection.yaml), and both services load that file:
 
+One Qdrant cluster holds one collection per environment — `ask-pesu-prod` and `ask-pesu-dev` —
+so the collection *name* is deployment configuration (`QDRANT_COLLECTION`), like `QDRANT_URL`.
+What the contract fixes is the **shape**, which must be identical everywhere or dev tests
+nothing meaningful:
+
 | | Value |
 |---|---|
-| Collection | `ask-pesu` |
 | Embedding model | `Alibaba-NLP/gte-modernbert-base` |
 | Vector size / distance | 768 / Cosine |
 | Vector name | `dense` (named, so hybrid retrieval can be added without re-indexing) |
@@ -165,7 +169,7 @@ vector that hybrid retrieval will need. In Qdrant Cloud:
 
 | Field | Value |
 |---|---|
-| Collection name | `ask-pesu` |
+| Collection name | `ask-pesu-prod` and `ask-pesu-dev` — create both, identically |
 | Dense vector name | `dense` |
 | Dimension | `768` |
 | Metric | `Cosine` |
@@ -251,7 +255,8 @@ so running either service from anywhere in the repo picks it up. `.env` is gitig
 | Variable | Used by | How to get it |
 |---|---|---|
 | `QDRANT_URL` | api, db | Qdrant Cloud → your cluster → Overview → Endpoint |
-| `QDRANT_API_KEY` | api, db | Qdrant Cloud → your cluster → API keys |
+| `QDRANT_API_KEY` | api, db | Qdrant Cloud → your cluster → API keys. Must be **scoped to the collection below** — a JWT scoped elsewhere returns 403 |
+| `QDRANT_COLLECTION` | api, db | `ask-pesu-dev` locally and on staging, `ask-pesu-prod` in production. Required; there is deliberately no default |
 | `HF_TOKEN` | api | [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens) — a **Read** token suffices |
 | `REDDIT_CLIENT_ID` | db | [reddit.com/prefs/apps](https://www.reddit.com/prefs/apps) → create a **script** app; the id is the string under the app name |
 | `REDDIT_CLIENT_SECRET` | db | Same app, the field labelled **secret** |
@@ -402,10 +407,19 @@ service tree and refuses to push a tree without it.
 Each Space needs its own secrets set under **Settings → Variables and secrets**, using exactly
 the names in [Environment variables](#environment-variables):
 
-| Space | Secrets |
-|---|---|
-| `askpesu`, `askpesu-dev` | `HF_TOKEN`, `QDRANT_URL`, `QDRANT_API_KEY` |
-| `askpesu-db` | `QDRANT_URL`, `QDRANT_API_KEY`, `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET` |
+| Space | Secrets | `QDRANT_COLLECTION` |
+|---|---|---|
+| `askpesu` (prod) | `HF_TOKEN`, `QDRANT_URL`, `QDRANT_API_KEY` | `ask-pesu-prod` |
+| `askpesu-dev` (staging) | `HF_TOKEN`, `QDRANT_URL`, `QDRANT_API_KEY` | `ask-pesu-dev` |
+| `askpesu-db` | `QDRANT_URL`, `QDRANT_API_KEY`, `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET` | `ask-pesu-prod` |
+
+Both services in one environment must be given the **same** collection. Each verifies the shape
+of whatever it is pointed at, but neither can detect that the other was pointed somewhere else —
+so an api on `ask-pesu-prod` and a db on `ask-pesu-dev` would both start happily and never
+share a document. The API key must be scoped to the collection it is used with.
+
+Note the db has only one Space, so it writes the **production** collection. Nothing currently
+populates `ask-pesu-dev` — see the deployment-strategy TODO.
 
 Order matters on a fresh collection — **the writer creates it, the reader requires it**:
 

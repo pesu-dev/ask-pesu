@@ -6,6 +6,7 @@ from it; this service refuses to start unless the live collection matches, so a
 writer/reader mismatch is a loud failure rather than silently wrong retrieval.
 """
 
+import os
 from pathlib import Path
 from typing import NamedTuple
 
@@ -21,7 +22,7 @@ class ContractViolationError(RuntimeError):
 class Contract(NamedTuple):
     """Values read from conf/collection.yaml."""
 
-    name: str
+    name: str  # from $QDRANT_COLLECTION, not from the yaml
     model: str
     size: int
     distance: str
@@ -52,17 +53,35 @@ def contract_path() -> Path:
     return found[0]
 
 
-def load() -> Contract:
-    """Read the contract."""
-    collection = yaml.safe_load(contract_path().read_text())["collection"]
-    dense = collection["dense"]
+def load(collection: str | None = None) -> Contract:
+    """Read the contract: shape from conf/collection.yaml, name from the environment.
+
+    Args:
+        collection: Collection name. Defaults to ``$QDRANT_COLLECTION``.
+
+    Returns:
+        The contract for that collection.
+
+    Raises:
+        ContractViolationError: If no collection name is available. Deliberately
+            fatal rather than defaulting: a default would let a misconfigured
+            deployment quietly read or write the wrong environment's data.
+    """
+    name = collection or os.getenv("QDRANT_COLLECTION")
+    if not name:
+        raise ContractViolationError(
+            "QDRANT_COLLECTION is not set. One cluster holds one collection per environment "
+            "(e.g. ask-pesu-prod, ask-pesu-dev), so the name has to be supplied explicitly."
+        )
+    collection_config = yaml.safe_load(contract_path().read_text())["collection"]
+    dense = collection_config["dense"]
     return Contract(
-        name=collection["name"],
+        name=name,
         model=dense["model"],
         size=int(dense["size"]),
         distance=str(dense["distance"]),
         vector_name=dense.get("vector_name", ""),
-        metadata=tuple(collection["metadata"]),
+        metadata=tuple(collection_config["metadata"]),
     )
 
 
