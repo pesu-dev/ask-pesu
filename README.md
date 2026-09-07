@@ -187,12 +187,20 @@ collection at any time. Add one only when a filter actually exists to justify it
 
 ### Why builds copy it
 
-`conf/collection.yaml` and `requirements.txt` both live at the repo root, but each service is
+Every file shared by both services lives once at the repo root — `conf/collection.yaml`,
+`requirements.txt`, `pyproject.toml`, `uv.lock`, `LICENSE`, `.env.example`. But each service is
 deployed with `git subtree split --prefix=services/<name>`, which ships **only that directory** —
-the repo root never reaches the running Space. So image builds and deploys copy both files into
-the service tree first, and the deploy workflows refuse to push a tree missing either: without
-the contract both services abort at startup, and without the requirements the image will not
-build.
+the repo root never reaches the running Space.
+
+So the deploy copies four of them into the service tree first: `conf/collection.yaml`,
+`requirements.txt`, `LICENSE` and `.env.example`. The workflow refuses to push a tree missing any
+of them. The first two are load-bearing — without the contract both services abort at startup,
+and without the requirements the image will not build. The other two only need to be *present* in
+a published tree, but they are checked the same way, because a missing one means the copy step
+itself went wrong.
+
+`pyproject.toml` and `uv.lock` are not copied: neither Dockerfile reads them, so they have no
+reason to reach a Space.
 
 That copy is generated, never committed (`.gitignore` covers it). Running a service directly
 from a checkout needs no copy — the loader walks up from `app/contract.py` and finds the root
@@ -216,6 +224,8 @@ If both copies exist and differ, the loader raises rather than silently preferri
 ├── .env.example              # every environment variable, for both services
 ├── pyproject.toml            # the only pyproject: deps for both services + ruff config
 ├── requirements.txt          # compiled from it; the only requirements file
+├── uv.lock                   # the only lockfile
+├── LICENSE                   # the only copy; vendored into each Space at deploy time
 ├── .pre-commit-config.yaml
 ├── .github/workflows/        # CI and deploys
 └── services/
@@ -251,6 +261,11 @@ library that produces the vectors. Separate files made that possible; this makes
 Neither Dockerfile reads `pyproject.toml` — both `pip install -r requirements.txt` — so it never
 has to reach a Space. `requirements.txt` does, which is why builds and deploys vendor it into
 the service tree alongside `conf/collection.yaml` (see below).
+
+The same rule settles every other shared file: authored once at the root, copied in at deploy
+time if the Space needs it. A committed copy inside `services/<name>/` would be a second source
+that goes stale silently — which is exactly what happened to the per-service `.env.example`
+files, fixed at the root while the copies the Spaces actually received kept the old form.
 
 ## Getting started
 
@@ -417,9 +432,10 @@ so the vendoring and subtree split exist once rather than once per service per e
 
 ## Deployment
 
-All three Spaces are fed by force-pushing a `git subtree split` of one service directory, so a
-deploy replaces the Space's history. Each deploy job first copies `conf/collection.yaml` into the
-service tree and refuses to push a tree without it.
+All four Spaces are fed by force-pushing a `git subtree split` of one service directory, so a
+deploy replaces the Space's history. Each deploy job first copies the four shared root files
+(`conf/collection.yaml`, `requirements.txt`, `LICENSE`, `.env.example`) into the service tree,
+and refuses to push a tree missing any of them.
 
 Each Space needs its own secrets set under **Settings → Variables and secrets**, using exactly
 the names in [Environment variables](#environment-variables):

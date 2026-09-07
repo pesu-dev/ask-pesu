@@ -24,19 +24,31 @@ runs:
     # with fetch-depth: 0.
     #
     # The split ships only services/<name>/, so anything authored at the repo
-    # root would never reach the running Space. Two files have to travel with
-    # the service: the collection contract, and the compiled requirements the
-    # Dockerfile installs. Copy them in and commit locally on the runner; that
-    # commit is never pushed to GitHub.
+    # root would never reach the running Space. Four files have to travel with
+    # the service. Two are load-bearing: the collection contract, without which
+    # both services abort at startup, and the compiled requirements the
+    # Dockerfile installs. Two are not, but a published tree should carry them:
+    # the licence the Space's README frontmatter declares, and the environment
+    # documentation for anyone who clones the Space and runs it locally.
+    #
+    # Each of the four is authored once at the repo root; keeping a committed
+    # copy in the service tree instead would be a second source that goes stale
+    # without anything noticing. Copy them in and commit locally on the runner;
+    # that commit is never pushed to GitHub.
     - name: Vendor the root-level files into the service tree
       shell: bash
       run: |
-        mkdir -p "services/${{ inputs.service }}/conf"
-        cp conf/collection.yaml "services/${{ inputs.service }}/conf/collection.yaml"
-        cp requirements.txt "services/${{ inputs.service }}/requirements.txt"
+        svc="services/${{ inputs.service }}"
+        mkdir -p "$svc/conf"
+        cp conf/collection.yaml "$svc/conf/collection.yaml"
+        cp requirements.txt "$svc/requirements.txt"
+        cp LICENSE "$svc/LICENSE"
+        cp .env.example "$svc/.env.example"
         git add -f \
-          "services/${{ inputs.service }}/conf/collection.yaml" \
-          "services/${{ inputs.service }}/requirements.txt"
+          "$svc/conf/collection.yaml" \
+          "$svc/requirements.txt" \
+          "$svc/LICENSE" \
+          "$svc/.env.example"
         git -c user.name="github-actions[bot]" \
             -c user.email="github-actions[bot]@users.noreply.github.com" \
             commit -q -m "Vendor root-level files for deployment"
@@ -51,8 +63,11 @@ runs:
 
         # Refuse to publish an incomplete tree. Without the contract both
         # services abort at startup; without requirements.txt the image will not
-        # even build. Better a failed job than a broken Space.
-        for required in conf/collection.yaml requirements.txt; do
+        # even build. LICENSE and .env.example break nothing, but they are
+        # checked on the same footing: all four are copied by the step above, so
+        # a missing one means that step went wrong, and that is worth failing on
+        # while it is still cheap. Better a failed job than a broken Space.
+        for required in conf/collection.yaml requirements.txt LICENSE .env.example; do
           git cat-file -e "$branch:$required" \
             || { echo "::error::${{ inputs.service }} deploy tree is missing $required"; exit 1; }
         done

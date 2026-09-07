@@ -72,9 +72,12 @@ bruno.json
 *.csv
 *.png
 
-# Both of these are authored once at the repo root -- conf/collection.yaml and
-# requirements.txt -- and vendored into the service tree by image builds and
-# deploys, because a subtree split ships only services/<name>/. Those copies are
-# generated and must never be committed.
+# These four are authored once at the repo root and vendored into the service
+# tree by image builds and deploys, because a subtree split ships only
+# services/<name>/ and the repo root never reaches a Space. Those copies are
+# generated and must never be committed -- a committed copy would be a second
+# source that silently goes stale.
 services/*/conf/collection.yaml
 services/*/requirements.txt
+services/*/LICENSE
+services/*/.env.example
