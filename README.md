@@ -15,7 +15,7 @@ and therefore one schema contract.
 ## Contents
 
 - [Services](#services) · [How it works](#how-it-works) · [The streaming protocol](#the-streaming-protocol) · [Where things live](#where-things-live)
-- [The collection contract](#the-collection-contract) · [Creating a collection](#creating-a-collection) · [Why builds copy shared files](#why-builds-copy-shared-files)
+- [HTTP API](#http-api) · [The collection contract](#the-collection-contract) · [Creating a collection](#creating-a-collection) · [Why builds copy shared files](#why-builds-copy-shared-files)
 - [Repository layout](#repository-layout) · [Dependencies](#dependencies) · [Getting started](#getting-started) · [Environment variables](#environment-variables)
 - [Running the services](#running-the-services) · [Backfilling history](#backfilling-history) · [Configuration](#configuration)
 - [The frontend](#the-frontend) · [Quota and cooldowns](#quota-and-cooldowns) · [Failure behaviour](#failure-behaviour)
@@ -139,6 +139,52 @@ Two properties worth knowing:
 The event shape is duplicated between the backend that emits it and the client that parses it.
 Any change must be made in **both** `services/api/app/rag.py` and
 `services/api/frontend/src/lib/api.ts`; nothing enforces that they agree.
+
+## HTTP API
+
+### `services/api`
+
+| Route | Body | Returns |
+|---|---|---|
+| `GET /` | — | The compiled SPA. **503** with a JSON explanation if the frontend was never built |
+| `POST /ask` | `{query, thinking?, history?}` | An NDJSON stream — see [The streaming protocol](#the-streaming-protocol). **429** with a quota snapshot if that model is in cooldown |
+| `POST /rewriteQuery` | Same model as `/ask`; only `query` is read | `{query}` — the question condensed to at most eight words, for the conversation sidebar |
+| `GET /health` | — | `{status, message, timestamp}`. Liveness only: it does not probe Qdrant or the provider, because the startup contract check means a running process already passed those |
+| `GET /quota` | — | `{status, quota, timestamp}`, keyed by mode. `next_available` is present only while a model is blocked, so a client can treat its presence as "retry after this" |
+| `GET /docs` | — | Swagger UI, generated from the pydantic models in `app/models/` and the examples in `app/docs/` |
+
+`history` is a list of `{query, answer}` turns. Conversations are not stored
+server-side, so the client replays what it wants considered. Any turn whose
+`query` equals the current one is skipped — clients often include the in-flight
+question, and feeding it back as already-answered confuses the rewrite step.
+
+`thinking` selects the thinking model for the answer. Retrieval always uses the
+primary model regardless.
+
+Request bodies are validated in strict mode, so a string `"true"` is rejected
+rather than coerced to a boolean.
+
+A `/quota` response while the thinking model is in cooldown:
+
+```json
+{
+  "status": true,
+  "quota": {
+    "thinking": {"available": false, "next_available": "2026-09-08T12:00:00+05:30"},
+    "primary":  {"available": true}
+  },
+  "timestamp": "2026-09-07T12:00:00+05:30"
+}
+```
+
+### `services/db`
+
+| Route | Returns |
+|---|---|
+| `GET /health` | `{"status": "ok"}`, or **503** `{"status": "error", "detail": ...}` once the listener has stopped on a contract violation |
+
+The listener has no other surface. It is a Space, so it must serve HTTP, but all
+of its work happens on a background thread.
 
 ### Where things live
 
@@ -351,6 +397,7 @@ so running either service from anywhere in the repo picks it up. `.env` is gitig
 | `REDDIT_CLIENT_ID` | db | [reddit.com/prefs/apps](https://www.reddit.com/prefs/apps) → create a **script** app; the id is the string under the app name |
 | `REDDIT_CLIENT_SECRET` | db | Same app, the field labelled **secret** |
 | `ENV` | api | Optional. Set to `test` to serve canned responses; see [Running the services](#running-the-services) |
+| `ASKPESU_CONFIG_PATH` | api | Optional, and normally set for you: `--config` writes it. Overrides the path to `conf/config.yaml` |
 
 **Write values unquoted.** `python-dotenv` strips surrounding quotes but
 `docker run --env-file` does not — it passes the quote characters through as part of the value,
