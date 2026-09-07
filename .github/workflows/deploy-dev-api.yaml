@@ -2,15 +2,17 @@ name: Deploy API to Dev
 
 # Deploys services/api to its dev Space on merges that could change it.
 #
-# Split from the db deploy because the two have very different costs. This one
-# restarts a staging reader; the other restarts the single writer that fills the
-# collection production serves from. Redeploying both on every merge meant a
-# frontend change restarted the live writer for no reason -- and because the
-# listener opens its stream with skip_existing=True, every restart permanently
-# drops the r/PESU comments posted while it was down.
+# The api is the ONLY service deployed from `dev`. The db is not here: there is
+# one db Space and it writes the collection production serves from, so it moves
+# only on a production promotion. See deploy-prod.yaml.
 #
-# The paths are deliberately generous. An unnecessary deploy costs a rebuild; a
-# missing one means someone merges and nothing happens, with nothing to say why.
+# Path-filtered so a merge that cannot change this Space does not rebuild a ~3 GB
+# image for nothing. The list is deliberately generous -- an unnecessary deploy
+# costs a rebuild, a missing one means someone merges and nothing happens, with
+# nothing to say why. Everything the Space actually receives is covered: this
+# service's own directory, plus the four root files vendored into the tree and
+# the composite action that vendors them. Files that never reach the Space --
+# the root README, pyproject.toml, uv.lock -- are deliberately absent.
 on:
   push:
     branches: [ dev ]

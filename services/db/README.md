@@ -52,8 +52,9 @@ This is the only writer there is. Both readers —
 [askpesu](https://huggingface.co/spaces/pesu-dev/askpesu) and
 [askpesu-dev](https://huggingface.co/spaces/pesu-dev/askpesu-dev) — answer from
 the collection it fills, so a fault here is visible in every environment at
-once. There being one writer, this Space is redeployed by merges to `dev` as
-well as by production promotions.
+once. Being the only writer, it is redeployed only by a production promotion,
+never on a merge to `dev`: every restart interrupts the comment stream, and what
+is missed while it is down is not picked up when it returns.
 
 This Space only sees comments posted after it starts. History is loaded
 separately with `scripts/populate_db.py`.

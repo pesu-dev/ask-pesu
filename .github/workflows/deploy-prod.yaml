@@ -4,12 +4,22 @@ name: Deploy to Production
 # on dev is ready. The workflow fast-forwards `main` to `dev` and then deploys
 # BOTH services to their production Spaces.
 #
-# The db is deployed here too, to the same single Space that deploy-dev-db.yaml
-# targets. After the fast-forward `main` and `dev` are the same commit, so this
-# is normally a no-op redeploy -- kept because it makes the invariant true
-# unconditionally: after a production deploy, every production Space is running
-# `main`. If anything ever left the writer on a different tree, promoting
-# restores it without anyone having to notice.
+# This is the ONLY place the db is deployed. There is one db Space, and it writes
+# the collection every reader answers from, so it moves here and nowhere else.
+#
+# The alternative -- deploying it on merges to `dev` as well -- was rejected on
+# cadence. Merges to `dev` are frequent and touch shared files like conf/ and
+# requirements.txt that the db image consumes, so the writer would be restarted
+# often; and because its stream opens with skip_existing=True, every restart
+# permanently drops the r/PESU comments posted while it was down. Promotions are
+# infrequent and deliberate, which is the right rhythm for a component whose
+# restarts cost data. The cost accepted in exchange is real and documented in the
+# README: a services/db change merged to `dev` runs nowhere until someone
+# promotes, so writer changes reach production unobserved.
+#
+# Neither deploy job is path-filtered. A promotion should put `main` on every
+# production Space regardless of what changed -- that is what makes "the
+# production Spaces run main" true unconditionally rather than most of the time.
 #
 # It does NOT redeploy the dev api Space. That tracks `dev`, and re-pushing
 # `main` over it would silently roll dev back whenever dev is ahead of main --

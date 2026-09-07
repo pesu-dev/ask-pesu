@@ -32,11 +32,11 @@ services/api/Dockerfile @aditeyabaral @joshua-rajj
 services/api/README.md @aditeyabaral
 
 ## DB service
-# The write path. Merging to `dev` deploys the db to the only db Space there is,
-# so these files are the shortest route in the repository to the live index --
-# and the failure they can cause is the one the contract does NOT catch: writes
-# that are schema-valid but semantically wrong, such as a broken thread
-# rendering, which land silently and are only undone by a backfill.
+# The write path. There is one db Space and no staging writer, so a change here
+# first runs anywhere at production promotion -- review is the only check it
+# gets before that. The failure it can cause is the one the contract does NOT
+# catch: writes that are schema-valid but semantically wrong, such as a broken
+# thread rendering, which land silently and are only undone by a backfill.
 services/db/app/ @aditeyabaral @joshua-rajj
 services/db/scripts/ @aditeyabaral @joshua-rajj
 services/db/app/contract.py @aditeyabaral @joshua-rajj

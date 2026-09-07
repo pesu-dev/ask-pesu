@@ -666,8 +666,7 @@ pre-commit run --all-files             # or on demand
 | `pre-commit.yaml` | Push, PR | Every pre-commit hook, on all files |
 | `contract.yaml` | Push, PR | Asserts each shared file is tracked exactly once; recompiles `requirements.txt` and fails on drift; rehearses the deploy vendoring and checks each split tree is a complete Space root |
 | `docker.yaml` | Manual, or after Pre-Commit on `dev` | Builds both images, boots each container, polls `/health` |
-| `deploy-dev-api.yaml` | Push to `dev` touching the api | Deploys the api to `askpesu-dev` |
-| `deploy-dev-db.yaml` | Push to `dev` touching the db | Deploys the db to `askpesu-db` — the only db Space there is |
+| `deploy-dev-api.yaml` | Push to `dev` touching the api | Deploys the api to `askpesu-dev`. The db is not deployed from `dev` |
 | `deploy-prod.yaml` | Manual | Fast-forwards `dev` → `main`, then deploys **both** services to `askpesu` and `askpesu-db` |
 
 `deploy-prod.yaml` refuses to run unless `github.actor` is listed in
@@ -692,50 +691,53 @@ and refuses to push a tree missing any of them.
 
 | Branch | What deploys | To | Collection |
 |---|---|---|---|
-| `dev` | whichever services the merge touched | `askpesu-dev`, `askpesu-db` | `ask-pesu-prod` |
-| `main` | both, unconditionally | `askpesu`, `askpesu-db` | `ask-pesu-prod` |
+| `dev` | api only, if the merge touched it | `askpesu-dev` | `ask-pesu-prod` |
+| `main` | api **and** db, unconditionally | `askpesu`, `askpesu-db` | `ask-pesu-prod` |
 
-The dev deploys are **path-filtered**, one workflow per service. A merge that only touches the
-frontend leaves the writer alone; a merge that touches `conf/` or `requirements.txt` deploys
-both, because both consume them. `workflow_dispatch` ignores the filters, so either service can
-be redeployed on demand. The production deploy is not filtered — a promotion should put `main`
-on every production Space regardless of what changed.
+The dev deploy is **path-filtered**: a merge that cannot change the api Space does not rebuild a
+~3 GB image for nothing. `workflow_dispatch` ignores the filter, so it can be forced. The
+production deploy is deliberately **not** filtered — a promotion should put `main` on every
+production Space regardless of what changed, which is what makes "the production Spaces run
+`main`" true unconditionally rather than most of the time.
 
-1. **Merge a PR into `dev`.** `Deploy to Dev` fires on the push. Confirm `askpesu-dev` serves
-   `/health`, `/docs`, the frontend and `/assets`, and streams one real answer; confirm
-   `askpesu-db` serves `/health` and its logs show the listener started.
+1. **Merge a PR into `dev`.** `Deploy API to Dev` fires on the push, if the merge touched the
+   api. Confirm `askpesu-dev` serves `/health`, `/docs`, the frontend and `/assets`, and streams
+   one real answer. The db is not deployed here, so nothing about a writer change is observable
+   at this step.
 2. **Dispatch `Deploy to Production`** when dev looks right. It fast-forwards `dev` → `main` —
    aborting if they have diverged rather than inventing a merge nobody reviewed — then deploys
-   both services.
+   both services. Confirm `askpesu` as in step 1, and confirm `askpesu-db` serves `/health` with
+   its logs showing the listener started. **This is the first time a writer change runs
+   anywhere**, so watch it here rather than assuming.
 
-### Why the db deploys on `dev` too
+### The db moves only on promotion
 
-`askpesu-db` appears in **both** deploy workflows, and the target has no `-dev` suffix in either,
-because there is only one db Space. Merging to `dev` updates the writer that fills the collection
-production reads. That is deliberate, and the reasoning is worth keeping:
+There is one db Space, `askpesu-db`, and it writes the collection every reader answers from. It
+is deployed by `deploy-prod.yaml` and by nothing else.
 
-- **Deploying the db only from `main` would not be safer.** With no dev writer, a `services/db`
-  change merged to `dev` runs nowhere, so the promotion gate would be reached having observed
-  nothing about it — a delay, not a check. Worse, writer changes would accumulate and ship as one
-  untested batch.
-- **Unrelated merges must not touch it.** Each deploy restarts the listener, and because the
-  stream opens with `skip_existing=True`, every r/PESU comment posted during a restart is lost
-  for good — only a backfill recovers it. That is why the dev deploys are split per service and
-  path-filtered: a frontend change has no business restarting the writer.
-- **What contains a bad writer is the contract, not the delay.** A payload whose keys drift stops
-  the listener and turns `/health` into a 503 before anything is stored; a wrong embedding model,
-  vector geometry or credential aborts startup. Neither reaches the collection.
-- **Recovery is symmetric.** A revert on `dev` redeploys the writer the same way the change
-  arrived.
+The reason is cadence. Merges to `dev` are frequent, and they routinely touch files the db image
+consumes — `conf/collection.yaml`, `requirements.txt` — so deploying the writer from `dev` would
+restart it often. Each restart is not free: the listener opens its stream with
+`skip_existing=True`, so **every r/PESU comment posted while it is down is lost permanently**,
+recoverable only by re-running the backfill. Promotions are infrequent and deliberate, which is
+the right rhythm for a component whose restarts cost data.
 
-The failure this does *not* catch is a write that is schema-valid but semantically wrong — a
-broken thread rendering, say — which lands silently and is only undone by re-running the
-backfill. That is why `services/db/app/` and `services/db/scripts/` require owner review in
-[`CODEOWNERS`](.github/CODEOWNERS): they are the shortest path in the repository to live data.
+Two consequences, worth internalising rather than discovering:
 
-In `deploy-prod.yaml` the db step is normally a no-op, since `main` and `dev` are the same commit
-after the fast-forward. It is kept so the invariant holds unconditionally: after a production
-deploy, every production Space is running `main`.
+- **A `services/db` change merged into `dev` is running nowhere.** It ships on the next
+  production dispatch, together with whatever else has accumulated. Test writer changes locally
+  against `ask-pesu-dev`, and use `populate_db.py --dry-run` before a real backfill.
+- **Writer changes reach production unobserved**, because there is no staging writer for them to
+  be observed on. What stands in for that is review — `services/db/app/` and
+  `services/db/scripts/` require owner review in [`CODEOWNERS`](.github/CODEOWNERS) — and the
+  contract, which catches the structural failures at startup: a payload whose keys drift stops
+  the listener and turns `/health` into a 503 before anything is stored, and a wrong embedding
+  model, vector geometry or credential aborts startup outright.
+
+The failure neither catches is a write that is schema-valid but semantically wrong — a broken
+thread rendering, say — which lands silently and is undone only by re-running the backfill. Watch
+the db Space's logs and `/health` immediately after a promotion; that is the moment a writer
+change first runs anywhere.
 
 **The dev api runs `dev`; the prod api runs `main`.** The production deploy does *not* redeploy
 the dev api: `dev` is normally ahead of `main`, so re-pushing `main` over it would silently roll
@@ -807,10 +809,10 @@ Reviewers are assigned by [`.github/CODEOWNERS`](.github/CODEOWNERS). Changes to
 - **The streaming event shape is duplicated** between `app/rag.py` and `frontend/src/lib/api.ts`,
   with nothing enforcing agreement.
 - **There is no staging writer.** The free tier allows three CPU Spaces, spent on two api
-  environments and one db, so a `services/db` change goes live on merge to `dev` — there is
-  nowhere else for it to go. The startup contract checks and the per-payload validation catch
-  the structural failures; a semantically wrong but schema-valid write is caught by neither, and
-  is undone by re-running the backfill. A fourth Space would restore a staging writer.
+  environments and one db, so a `services/db` change is tested locally or not at all and first
+  runs anywhere at promotion. The startup contract checks and per-payload validation catch the
+  structural failures; a semantically wrong but schema-valid write is caught by neither and is
+  undone by re-running the backfill. A fourth Space would restore a staging writer.
 - **`Docker Container Build` effectively runs on dispatch only.** Its `workflow_run` trigger
   requires `head_branch == 'dev'`, and pull request CI runs on the fork's branch. Switching it
   to `push: branches: [dev]` would make the smoke tests routine, at roughly twenty minutes of CI
