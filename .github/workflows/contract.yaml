@@ -45,14 +45,25 @@ jobs:
           exit $status
 
       - name: requirements.txt still matches pyproject.toml
-        # The lockfile the images install is generated, so a dependency edit that
+        # The file the images install is generated, so a dependency edit that
         # forgets to recompile would ship the old resolution to both Spaces.
+        #
+        # The recompile starts from a COPY of the committed file, not from
+        # nothing. uv preserves the pins already in its output file unless asked
+        # to upgrade, and pyproject.toml constrains with `>=` -- so compiling
+        # from scratch would resolve every one of ~96 packages to whatever is
+        # newest on PyPI that day and fail this check the moment any of them
+        # publishes a release, blaming a contributor whose change was fine.
+        # Starting from the committed pins detects the thing actually worth
+        # detecting: a dependency added to or removed from pyproject.toml
+        # without recompiling.
         run: |
           pipx install uv || pip install uv
+          cp requirements.txt /tmp/requirements.check
           uv pip compile pyproject.toml --extra api --extra db \
-            --python-platform linux --python-version 3.12 -o /tmp/requirements.check
+            --python-platform linux --python-version 3.12 -o /tmp/requirements.check --quiet
           diff <(grep -v '^#' requirements.txt) <(grep -v '^#' /tmp/requirements.check) \
-            || { echo "::error::requirements.txt is stale; recompile it (see pyproject.toml)"; exit 1; }
+            || { echo "::error::requirements.txt does not match pyproject.toml; recompile it (see pyproject.toml)"; exit 1; }
           echo "✅ requirements.txt is in sync with pyproject.toml"
 
       - name: The deploy vendoring lands in each Space tree
