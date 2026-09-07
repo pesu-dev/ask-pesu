@@ -1,8 +1,8 @@
 name: Deploy a service to a Hugging Face Space
 description: >-
   Push one service directory to its Space as that Space's repository root. Both
-  the dev and prod workflows use this, so the vendoring and splitting exist once
-  rather than once per service per environment.
+  the dev and prod workflows use this, so the vendoring and splitting are written
+  once rather than once per deploy target.
 
 inputs:
   service:

@@ -75,8 +75,9 @@ def load(collection: str | None = None) -> Contract:
     name = collection or os.getenv("QDRANT_COLLECTION")
     if not name:
         raise ContractViolationError(
-            "QDRANT_COLLECTION is not set. One cluster holds one collection per environment "
-            "(e.g. ask-pesu-prod, ask-pesu-dev), so the name has to be supplied explicitly."
+            "QDRANT_COLLECTION is not set. The cluster holds more than one collection "
+            "(ask-pesu-prod is what the deployed services use; ask-pesu-dev is for local work), "
+            "so the name has to be supplied explicitly."
         )
     collection_config = yaml.safe_load(contract_path().read_text())["collection"]
     dense = collection_config["dense"]

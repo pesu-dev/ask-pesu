@@ -46,9 +46,13 @@ collection.
 The collection is created from `conf/collection.yaml` if it does not exist, and
 validated against it if it does. Every payload is checked before it is written.
 A payload that disagrees stops the listener and turns `/health` into a 503,
-because a writer that keeps going is worse than one that visibly stops: the
-reader, [askpesu](https://huggingface.co/spaces/pesu-dev/askpesu), depends on
-what lands here.
+because a writer that keeps going is worse than one that visibly stops.
+
+This is the only writer there is. Both readers —
+[askpesu](https://huggingface.co/spaces/pesu-dev/askpesu) and
+[askpesu-dev](https://huggingface.co/spaces/pesu-dev/askpesu-dev) — answer from
+the collection it fills, so a fault here is visible in every environment at
+once. It is deployed only by a production promotion, never on a merge to `dev`.
 
 This Space only sees comments posted after it starts. History is loaded
 separately with `scripts/populate_db.py`.

@@ -4,10 +4,15 @@ name: Deploy to Production
 # on dev is ready. The workflow fast-forwards `main` to `dev` and then deploys
 # BOTH services to their production Spaces.
 #
-# It does NOT redeploy the dev Spaces. Those track `dev`, and re-pushing `main`
-# over them would silently roll dev back whenever dev is ahead of main -- which
-# it is as soon as the next pull request merges. Every deploy here is a force
-# push, so nothing would object.
+# This is the ONLY workflow that deploys the db. There is one db Space, shared by
+# both api environments, so it writes the index everything reads -- putting it
+# behind the promotion gate is the only thing standing between an unreviewed
+# writer change and the live data.
+#
+# It does NOT redeploy the dev api Space. That tracks `dev`, and re-pushing
+# `main` over it would silently roll dev back whenever dev is ahead of main --
+# which it is as soon as the next pull request merges. Every deploy here is a
+# force push, so nothing would object.
 on:
   workflow_dispatch:
 

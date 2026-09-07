@@ -1,10 +1,14 @@
 name: Deploy to Dev
 
-# Every merge into `dev` deploys BOTH services to their dev Spaces, whichever
-# service the pull request touched. There are no path filters: the two services
-# share the collection contract in conf/, so "this PR only touched the api" is
-# not a safe inference, and keeping both Spaces on the same commit makes
-# "what is on dev?" answerable without checking two histories.
+# Every merge into `dev` deploys the api to its dev Space.
+#
+# The db is deliberately not here. There is one db Space, and it is the one that
+# writes the live index, so it must never run code that has not been through the
+# production gate -- it deploys from `main` only, in deploy-prod.yaml. The
+# practical consequence, worth knowing before you rely on it: a change to
+# services/db merged into `dev` is not running anywhere until someone dispatches
+# a production deploy. Test writer changes locally against the ask-pesu-dev
+# collection.
 #
 # The trigger is `on: push` rather than a `workflow_run` chain off the CI
 # workflows, because a chained trigger only fires for runs whose head branch is
@@ -18,16 +22,6 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    strategy:
-      # One service failing must not cancel the other's deploy -- they are
-      # independent Spaces, and a half-finished promote is worse than one.
-      fail-fast: false
-      matrix:
-        include:
-          - service: api
-            space: pesu-dev/askpesu-dev
-          - service: db
-            space: pesu-dev/askpesu-db-dev
     steps:
       - uses: actions/checkout@v4
         with:
@@ -39,6 +33,6 @@ jobs:
 
       - uses: ./.github/actions/deploy-space
         with:
-          service: ${{ matrix.service }}
-          space: ${{ matrix.space }}
+          service: api
+          space: pesu-dev/askpesu-dev
           hf-token: ${{ secrets.HF_TOKEN }}

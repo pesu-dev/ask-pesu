@@ -2,6 +2,10 @@
 # This is the only check that exercises a Dockerfile; nothing else in CI builds
 # an image, and the deploy workflows push a tree to a Space without ever
 # building it themselves.
+#
+# Both containers are pointed at ask-pesu-dev, never at the collection the
+# deployed services use. The db container starts a real listener, so running it
+# against ask-pesu-prod would have CI writing into the live index.
 name: Docker Container Build
 
 on:
@@ -42,7 +46,7 @@ jobs:
           docker run --name ask-pesu -d -p 7860:7860 \
             -e QDRANT_API_KEY="${{ secrets.QDRANT_API_KEY }}" \
             -e QDRANT_URL="${{ secrets.QDRANT_URL }}" \
-            -e QDRANT_COLLECTION="${{ vars.QDRANT_COLLECTION_DEV || 'ask-pesu-dev' }}" \
+            -e QDRANT_COLLECTION="${{ vars.QDRANT_COLLECTION_CI || 'ask-pesu-dev' }}" \
             -e HF_TOKEN="${{ secrets.HF_TOKEN }}" \
             ask-pesu
       - name: Wait for the container to be ready
@@ -89,7 +93,7 @@ jobs:
             -e REDDIT_CLIENT_SECRET="${{ secrets.REDDIT_CLIENT_SECRET }}" \
             -e QDRANT_URL="${{ secrets.QDRANT_URL }}" \
             -e QDRANT_API_KEY="${{ secrets.QDRANT_API_KEY }}" \
-            -e QDRANT_COLLECTION="${{ vars.QDRANT_COLLECTION_DEV || 'ask-pesu-dev' }}" \
+            -e QDRANT_COLLECTION="${{ vars.QDRANT_COLLECTION_CI || 'ask-pesu-dev' }}" \
             ask-pesu-db
       - name: Wait for the container to be ready
         run: |
