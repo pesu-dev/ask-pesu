@@ -1,6 +1,9 @@
+"""Helpers for rendering a Reddit comment thread into an indexable string."""
+
 import uuid
 
 from anytree import Node, RenderTree
+from praw.models import Comment
 
 
 def convert_to_uuid(string: str) -> str:
@@ -8,7 +11,8 @@ def convert_to_uuid(string: str) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_OID, string))
 
 
-def build_anytree(comment, parent_node=None):
+def build_anytree(comment: Comment, parent_node: Node | None = None) -> Node | None:
+    """Build an anytree node for a comment and, recursively, its replies."""
     try:
         node = Node(f"{comment.body}", parent=parent_node)
         for reply in comment.replies:
@@ -19,7 +23,8 @@ def build_anytree(comment, parent_node=None):
         return None
 
 
-def build_thread_string(root_comment):
+def build_thread_string(root_comment: Comment) -> str:
+    """Render a comment thread as indented text, or a placeholder if it cannot be read."""
     try:
         root_comment.refresh()
     except Exception as e:

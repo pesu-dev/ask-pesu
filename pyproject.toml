@@ -32,16 +32,15 @@ select = [
 convention = "google"
 
 [tool.ruff.lint.per-file-ignores]
-# The db service predates this lint configuration. Bringing it up to standard is
-# a follow-up; keeping the monorepo move itself free of source changes matters
-# more. Delete this entry once services/db is annotated and documented.
-"services/db/**" = ["D", "ANN"]
+# Tests are run by pytest, not consumed as an API: requiring a docstring and
+# annotations on every case and fixture adds noise without adding safety. They
+# are otherwise linted and formatted like the rest of the repo.
+"tests/**" = ["D", "ANN"]
 
 [tool.ruff]
 line-length = 120
-target-version = "py311"
+target-version = "py312"
 exclude = [
-    "tests/",
     "node_modules/"
 ]
 

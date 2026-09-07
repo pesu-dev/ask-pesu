@@ -1,3 +1,5 @@
+"""Reddit listener that keeps askPESU's shared Qdrant collection up to date."""
+
 import os
 import threading
 import traceback
@@ -13,6 +15,7 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_qdrant import QdrantVectorStore
+from praw.models import Comment
 from qdrant_client import QdrantClient
 
 vector_store = None
@@ -40,7 +43,7 @@ qdrant_url = os.getenv("qdrant_url")
 qdrant_api_key = os.getenv("qdrant_api_key")
 
 
-def update_chunk(chunk_id: str, text: str, metadata: dict):
+def update_chunk(chunk_id: str, text: str, metadata: dict) -> None:
     """Overwrite if chunk exists, else add to Qdrant."""
     contract_mod.validate_payload(contract, metadata)
     vector_store.add_texts(
@@ -50,7 +53,7 @@ def update_chunk(chunk_id: str, text: str, metadata: dict):
     )
 
 
-def get_root_comment(comment):
+def get_root_comment(comment: Comment) -> Comment:
     """Get root comment of the comment thread."""
     parent = comment
     while not parent.is_root:
@@ -58,7 +61,7 @@ def get_root_comment(comment):
     return parent
 
 
-def listen_comments():
+def listen_comments() -> None:
     """Main listener loop for new comments."""
     global listener_error
     while not shutdown.is_set():
@@ -109,7 +112,7 @@ def listen_comments():
             traceback.print_exc()
 
 
-def background_listener():
+def background_listener() -> None:
     """Run listener in a thread so FastAPI stays responsive."""
     thread = threading.Thread(target=listen_comments, daemon=True)
     thread.start()
@@ -180,7 +183,8 @@ app = FastAPI(
 
 
 @app.get("/health")
-async def health():
+async def health() -> JSONResponse:
+    """Report writer health; 503 once the listener has stopped on a contract violation."""
     if listener_error:
         return JSONResponse({"status": "error", "detail": listener_error}, status_code=503)
     return JSONResponse({"status": "ok"})

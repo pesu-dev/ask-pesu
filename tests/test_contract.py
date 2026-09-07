@@ -52,7 +52,10 @@ class TestSingleSourceOfTruth:
         """
         tracked = subprocess.run(
             ["git", "ls-files", "*collection.yaml"],
-            cwd=REPO_ROOT, capture_output=True, text=True, check=True,
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
         ).stdout.split()
         assert tracked == ["conf/collection.yaml"], tracked
 
@@ -115,9 +118,7 @@ class TestSingleSourceOfTruth:
             for node in ast.walk(tree):
                 if isinstance(node, ast.Constant) and isinstance(node.value, str):
                     node.value = ""
-            return {
-                fn.name: ast.dump(fn) for fn in tree.body if isinstance(fn, ast.FunctionDef)
-            }
+            return {fn.name: ast.dump(fn) for fn in tree.body if isinstance(fn, ast.FunctionDef)}
 
         api_fns, db_fns = normalised(sources["api"]), normalised(sources["db"])
         shared = set(api_fns) & set(db_fns)
@@ -130,6 +131,31 @@ class TestSingleSourceOfTruth:
         path = mod.contract_path()
         assert path.is_file()
         assert path.name == "collection.yaml" and path.parent.name == "conf"
+
+
+class TestSpaceFrontmatter:
+    """Hugging Face Space frontmatter is static YAML in each service README.
+
+    It cannot read conf/collection.yaml, so `models:` and `preload_from_hub:` --
+    which bake the embedding model into the Space image -- are an uncontracted
+    copy of a contracted value. Changing the model in the contract while leaving
+    these behind makes the Space preload the wrong weights.
+    """
+
+    @pytest.mark.parametrize("service", ["api", "db"])
+    def test_declared_models_match_the_contract(self, service):
+        text = (REPO_ROOT / "services" / service / "README.md").read_text()
+        assert text.startswith("---\n"), "Space README must open with YAML frontmatter"
+        front = yaml.safe_load(text.split("---\n", 2)[1])
+        contract = api.load()
+        for key in ("models", "preload_from_hub"):
+            declared = front.get(key)
+            if declared is None:
+                continue
+            assert contract.model in declared, (
+                f"services/{service}/README.md {key}: {declared} does not include the "
+                f"contracted model {contract.model!r}"
+            )
 
 
 class TestCollectionGeometry:
@@ -153,9 +179,7 @@ class TestCollectionGeometry:
 
     def test_rejects_wrong_distance(self, mod, client):
         contract = mod.load()
-        client.create_collection(
-            contract.name, vectors_config=VectorParams(size=contract.size, distance=Distance.DOT)
-        )
+        client.create_collection(contract.name, vectors_config=VectorParams(size=contract.size, distance=Distance.DOT))
         with pytest.raises(mod.ContractViolationError, match="distance"):
             mod.validate_collection(contract, client)
 
@@ -227,7 +251,9 @@ class TestWriterPayload:
         payloads = [
             {k.value for k in node.keys}
             for node in ast.walk(ast.parse(source))
-            if isinstance(node, ast.Dict) and node.keys and all(isinstance(k, ast.Constant) for k in node.keys)
+            if isinstance(node, ast.Dict)
+            and node.keys
+            and all(isinstance(k, ast.Constant) for k in node.keys)
             and "root_comment_id" in {k.value for k in node.keys}
         ]
         assert len(payloads) == 1, f"expected one payload literal, found {len(payloads)}"
@@ -249,8 +275,7 @@ class TestReaderDependencies:
         declared = next(
             ast.literal_eval(node.value)
             for node in ast.walk(ast.parse(source))
-            if isinstance(node, ast.Assign)
-            and any(getattr(t, "id", None) == "REQUIRED_METADATA" for t in node.targets)
+            if isinstance(node, ast.Assign) and any(getattr(t, "id", None) == "REQUIRED_METADATA" for t in node.targets)
         )
         assert declared
         api.require_metadata(api.load(), *declared)
