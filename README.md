@@ -141,6 +141,7 @@ payload schema. A mismatch corrupts retrieval quietly, so all of it is written d
 | Vector size / distance | 768 / Cosine |
 | Vector name | `dense` (named, so hybrid retrieval can be added without re-indexing) |
 | Payload keys | `root_comment_id`, `post_id`, `author`, `url`, `permalink`, `score`, `upvote_ratio`, `created_utc`, `flair`, `nsfw` |
+| Citation target | `permalink` — for a link post `url` is the external article, not the discussion |
 
 It is enforced, not just documented:
 
@@ -156,6 +157,29 @@ It is enforced, not just documented:
 
 Each service reads it through its own small `app/contract.py`. **Change values in `conf/`,
 never in a service.**
+
+### Creating the collection
+
+`services/db` creates it from the contract on first start, but doing it by hand adds the sparse
+vector that hybrid retrieval will need. In Qdrant Cloud:
+
+| Field | Value |
+|---|---|
+| Collection name | `ask-pesu` |
+| Dense vector name | `dense` |
+| Dimension | `768` |
+| Metric | `Cosine` |
+| Sparse vector name | `sparse` |
+| IDF modifier | **enabled** |
+
+Create the sparse vector even though nothing uses it yet: BM25 needs the `idf` modifier to
+weight rare terms, and adding a vector to an existing collection may mean rebuilding it. The
+writer validates the dense vector on startup and ignores the sparse one, so the extra vector is
+harmless until hybrid lands.
+
+**Payload indices are not needed.** Nothing filters on payload — retrieval passes only `k` and
+`score_threshold` — and unlike vector configuration, indices can be added to a populated
+collection at any time. Add one only when a filter actually exists to justify it.
 
 ### Why builds copy it
 

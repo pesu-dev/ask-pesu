@@ -28,8 +28,9 @@ collection:
   # writer refuses to upsert a payload whose key set differs from this list, and
   # the reader refuses to start if a key it consumes is missing from it.
   #
-  # `url` is what services/api cites today; `permalink` is the more reliable
-  # target, since `url` points outward for link posts.
+  # services/api cites `permalink`. Both are stored: for a self post they agree,
+  # but for a link post `url` is the external article, so only `permalink`
+  # reliably addresses the discussion an answer was drawn from.
   metadata:
     - root_comment_id
     - post_id

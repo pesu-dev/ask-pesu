@@ -66,7 +66,12 @@ THINK_END = "</think>"
 # Payload keys read out of retrieved documents. Checked against the contract at
 # startup so removing one from conf/collection.yaml fails here rather than as a
 # KeyError on the first query.
-REQUIRED_METADATA = ("url",)
+#
+# `permalink`, not `url`: for a self post the two agree, but for a link post
+# `url` is the external article being discussed rather than the discussion
+# itself. Answers are synthesised from the comment thread, so citing `url` there
+# would send the reader to a page that does not contain what was cited.
+REQUIRED_METADATA = ("permalink",)
 
 
 def _is_quota_error(error: BaseException) -> bool:
@@ -291,9 +296,11 @@ class RetrievalAugmentedGenerator:
     def format_docs(self, docs: list[Document]) -> str:
         """Flatten retrieved documents into the ``{context}`` block of the answer prompt.
 
-        Each document is prefixed with its source URL because the system prompt
-        instructs the model to end its answer with a Sources list; the URL has to
-        be visible in the context for the model to cite it.
+        Each document is prefixed with its Reddit permalink because the system
+        prompt instructs the model to end its answer with a Sources list, and the
+        link has to be visible in the context for the model to cite it. The
+        permalink always addresses the thread the answer came from, which `url`
+        does not for link posts.
 
         Order matters -- the model weights earlier context more heavily -- so the
         best document goes first.
@@ -309,7 +316,7 @@ class RetrievalAugmentedGenerator:
         # union is not globally sorted, so sort by the stashed vector score.
         if self.cross_encoder is None:
             docs = sorted(docs, key=lambda d: d.metadata.get("_score", 0.0), reverse=True)
-        return "\n\n".join(f"{doc.metadata['url']}\n{doc.page_content}" for doc in docs)
+        return "\n\n".join(f"{doc.metadata['permalink']}\n{doc.page_content}" for doc in docs)
 
     def _rerank(self, inputs: dict) -> dict:
         """Re-score documents against the query and drop the weak ones.
