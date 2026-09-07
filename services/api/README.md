@@ -43,10 +43,10 @@ and a Sources list linking back to them. If nothing clears the relevance
 threshold the model says so rather than inventing an answer.
 
 The collection it reads is written by the companion Space,
-[askpesu-db](https://huggingface.co/spaces/pesu-dev/askpesu-db). Both agree on
-the collection's shape through `conf/collection.yaml`, which each verifies at
-startup, so a mismatch stops the Space rather than producing quietly wrong
-retrieval.
+[askpesu-db](https://huggingface.co/spaces/pesu-dev/askpesu-db) — one writer,
+shared by this Space and its dev counterpart. Both agree on the collection's
+shape through `conf/collection.yaml`, which each verifies at startup, so a
+mismatch stops the Space rather than producing quietly wrong retrieval.
 
 | Route | Purpose |
 |---|---|

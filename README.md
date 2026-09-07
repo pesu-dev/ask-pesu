@@ -4,9 +4,9 @@ A retrieval-augmented question answering system for PES University, answering fr
 [r/PESU](https://www.reddit.com/r/PESU/) discussions.
 
 This is a monorepo holding both halves of the system: the service that fills the search index,
-and the service that answers questions from it. They are deployed as four Hugging Face Spaces —
-a production and a development Space each — and share one Qdrant collection per environment,
-and therefore one schema contract.
+and the service that answers questions from it. They are deployed as three Hugging Face Spaces —
+a production and a development api, and a single db writing the collection both read — which
+means one schema contract, shared by everything.
 
 - **Live:** [askpesu](https://pesu-dev-askpesu.hf.space) · **Dev:** [askpesu-dev](https://pesu-dev-askpesu-dev.hf.space)
 
@@ -29,7 +29,7 @@ and therefore one schema contract.
 | Path | What it does | Spaces |
 |---|---|---|
 | [`services/api`](services/api) | FastAPI + LangChain RAG backend, and the React frontend it serves | [`askpesu`](https://huggingface.co/spaces/pesu-dev/askpesu) (prod), [`askpesu-dev`](https://huggingface.co/spaces/pesu-dev/askpesu-dev) (dev) |
-| [`services/db`](services/db) | Reddit listener that streams new r/PESU comment threads into Qdrant, plus the offline backfill scripts | [`askpesu-db`](https://huggingface.co/spaces/pesu-dev/askpesu-db) (prod), [`askpesu-db-dev`](https://huggingface.co/spaces/pesu-dev/askpesu-db-dev) (dev) |
+| [`services/db`](services/db) | Reddit listener that streams new r/PESU comment threads into Qdrant, plus the offline backfill scripts | [`askpesu-db`](https://huggingface.co/spaces/pesu-dev/askpesu-db) — one instance, shared by both api environments |
 
 Each service directory is self-contained and shaped like a repository root — its own
 `README.md` carrying that Space's frontmatter, its own `Dockerfile`, its own `app/` package.
@@ -215,10 +215,17 @@ the collection name, embedding model, vector dimensions, distance metric, vector
 payload schema. A mismatch corrupts retrieval quietly, so all of it is written down **once**, in
 [`conf/collection.yaml`](conf/collection.yaml), and both services load that file.
 
-One Qdrant cluster holds one collection per environment — `ask-pesu-prod` and `ask-pesu-dev` —
-so the collection *name* is deployment configuration (`QDRANT_COLLECTION`), exactly like
-`QDRANT_URL`. What the contract fixes is the **shape**, which must be identical everywhere or
-testing on dev proves nothing about prod.
+The collection *name* is deployment configuration (`QDRANT_COLLECTION`), exactly like
+`QDRANT_URL`; what the contract fixes is the **shape**.
+
+There is **one db Space**, so there is one deployed collection: `ask-pesu-prod`. The db writes
+it and both api Spaces read it, which means the dev api answers from exactly the data
+production has — the only way a staging reader can tell you anything useful about a promotion.
+The api is a strict reader, so sharing carries no risk of one environment corrupting the other.
+
+`ask-pesu-dev` is the second collection, and it is **not** a deployed environment. It exists so
+that running the listener locally, or the CI container smoke tests, cannot write into the live
+index. Point local work at it; point deployed services at `ask-pesu-prod`.
 
 | | Value |
 |---|---|
@@ -260,7 +267,7 @@ path. To create one by hand in Qdrant Cloud instead:
 
 | Field | Value |
 |---|---|
-| Collection name | `ask-pesu-prod` or `ask-pesu-dev` |
+| Collection name | `ask-pesu-prod` for the deployed services, `ask-pesu-dev` for local work |
 | Dense vector name | `dense` |
 | Dimension | `768` |
 | Metric | `Cosine` |
@@ -347,7 +354,7 @@ If both copies exist and differ, the loader raises rather than silently preferri
         │   ├── generate_processed_data.py  # raw dumps -> per-post JSON
         │   └── populate_db.py              # per-post JSON -> Qdrant
         ├── Dockerfile
-        └── README.md         # Space page + frontmatter for askpesu-db / askpesu-db-dev
+        └── README.md         # Space page + frontmatter for askpesu-db
 ```
 
 ## Dependencies
@@ -400,7 +407,7 @@ so running either service from anywhere in the repo picks it up. `.env` is gitig
 |---|---|---|
 | `QDRANT_URL` | api, db | Qdrant Cloud → your cluster → Overview → Endpoint |
 | `QDRANT_API_KEY` | api, db | Qdrant Cloud → your cluster → API keys. Must cover the collection below — a JWT scoped elsewhere returns 403. The db needs write access, and manage access if the collection does not exist yet |
-| `QDRANT_COLLECTION` | api, db | `ask-pesu-dev` locally and on the dev Spaces, `ask-pesu-prod` in production. Required; there is deliberately no default |
+| `QDRANT_COLLECTION` | api, db | `ask-pesu-dev` locally; `ask-pesu-prod` on all three Spaces. Required; there is deliberately no default |
 | `HF_TOKEN` | api | [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens) — a **Read** token suffices |
 | `REDDIT_CLIENT_ID` | db | [reddit.com/prefs/apps](https://www.reddit.com/prefs/apps) → create a **script** app; the id is the string under the app name |
 | `REDDIT_CLIENT_SECRET` | db | Same app, the field labelled **secret** |
@@ -667,45 +674,86 @@ pre-commit run --all-files             # or on demand
 | `pre-commit.yaml` | Push, PR | Every pre-commit hook, on all files |
 | `contract.yaml` | Push, PR | Asserts each shared file is tracked exactly once; recompiles `requirements.txt` and fails on drift; rehearses the deploy vendoring and checks each split tree is a complete Space root |
 | `docker.yaml` | Manual, or after Pre-Commit on `dev` | Builds both images, boots each container, polls `/health` |
-| `deploy-dev.yaml` | Push to `dev` | Deploys **both** services to `askpesu-dev` and `askpesu-db-dev` |
+| `deploy-dev-api.yaml` | Push to `dev` | Deploys the api to `askpesu-dev`. The db is not deployed from `dev` |
 | `deploy-prod.yaml` | Manual | Fast-forwards `dev` → `main`, then deploys **both** services to `askpesu` and `askpesu-db` |
 
 `deploy-prod.yaml` refuses to run unless `github.actor` is listed in
-`vars.PROD_DEPLOYMENT_ALLOWED_USERS`. `deploy-dev.yaml` is not gated — merging to `dev` is the
+`vars.PROD_DEPLOYMENT_ALLOWED_USERS`. The dev deploy is not gated — merging to `dev` is the
 gate.
 
-Both deploys call one composite action,
+Both deploy workflows call one composite action,
 [`.github/actions/deploy-space`](.github/actions/deploy-space/action.yml), so the vendoring and
-subtree split exist once rather than once per service per environment.
+subtree split are written once rather than once per deploy target.
 
 **Required repository secrets:** `HF_TOKEN` (with write scope, to push to the Spaces). The
 container smoke tests in `docker.yaml` additionally use `QDRANT_URL`, `QDRANT_API_KEY`,
 `REDDIT_CLIENT_ID` and `REDDIT_CLIENT_SECRET`, and the optional variable
-`QDRANT_COLLECTION_DEV`.
+`QDRANT_COLLECTION_CI` (defaulting to `ask-pesu-dev`, so the smoke tests never write to the
+collection the deployed services use).
 
 ## Deployment
 
-All four Spaces are fed by force-pushing a `git subtree split` of one service directory, so a
+All three Spaces are fed by force-pushing a `git subtree split` of one service directory, so a
 deploy replaces the Space's history. Each deploy job first copies the four shared root files
 (`conf/collection.yaml`, `requirements.txt`, `LICENSE`, `.env.example`) into the service tree,
 and refuses to push a tree missing any of them.
 
-| Branch | Deploys to | Collection |
-|---|---|---|
-| `dev` | `askpesu-dev`, `askpesu-db-dev` | `ask-pesu-dev` |
-| `main` | `askpesu`, `askpesu-db` | `ask-pesu-prod` |
+| Branch | What deploys | To | Collection |
+|---|---|---|---|
+| `dev` | api only | `askpesu-dev` | `ask-pesu-prod` |
+| `main` | api **and** db, unconditionally | `askpesu`, `askpesu-db` | `ask-pesu-prod` |
 
-1. **Merge a PR into `dev`.** `Deploy to Dev` fires on the push and deploys both services.
-   Confirm `askpesu-dev` serves `/health`, `/docs`, the frontend and `/assets`, and streams one
-   real answer; confirm `askpesu-db-dev` serves `/health` and its logs show the listener started.
+The dev deploy is **not path-filtered**, deliberately. Skipping a rebuild that could not have
+changed anything sounds like a saving, but the deploy job only splits a subtree and pushes —
+Hugging Face does the building — and a filter that is ever too narrow means someone merges and
+nothing happens, with nothing to say why. A silent skip is the worse failure.
+
+The production deploy has no filter to speak of: GitHub applies `paths` only to `push` and
+`pull_request`, and that workflow is `workflow_dispatch` only. What it does choose is to deploy
+**both** services on every promotion regardless of what changed, which is what makes "the
+production Spaces run `main`" true all the time rather than most of the time.
+
+1. **Merge a PR into `dev`.** `Deploy API to Dev` fires on the push. Confirm `askpesu-dev`
+   serves `/health`, `/docs`, the frontend and `/assets`, and streams one real answer. The db is
+   not deployed here, so nothing about a writer change is observable at this step.
 2. **Dispatch `Deploy to Production`** when dev looks right. It fast-forwards `dev` → `main` —
    aborting if they have diverged rather than inventing a merge nobody reviewed — then deploys
-   both services to the production Spaces.
+   both services. Confirm `askpesu` as in step 1, and confirm `askpesu-db` serves `/health` with
+   its logs showing the listener started. **This is the first time a writer change runs
+   anywhere**, so watch it here rather than assuming.
 
-**The dev Spaces run `dev`; the prod Spaces run `main`.** Nothing else writes to them. In
-particular the production deploy does *not* redeploy dev: `dev` is normally ahead of `main`, so
-re-pushing `main` over the dev Spaces would silently roll them back — every deploy here is a
-force push, so nothing would object.
+### The db moves only on promotion
+
+There is one db Space, `askpesu-db`, and it writes the collection every reader answers from. It
+is deployed by `deploy-prod.yaml` and by nothing else.
+
+The reason is cadence. Merges to `dev` are frequent, and they routinely touch files the db image
+consumes — `conf/collection.yaml`, `requirements.txt` — so deploying the writer from `dev` would
+restart it often. Each restart is not free: the listener opens its stream with
+`skip_existing=True`, so **every r/PESU comment posted while it is down is lost permanently**,
+recoverable only by re-running the backfill. Promotions are infrequent and deliberate, which is
+the right rhythm for a component whose restarts cost data.
+
+Two consequences, worth internalising rather than discovering:
+
+- **A `services/db` change merged into `dev` is running nowhere.** It ships on the next
+  production dispatch, together with whatever else has accumulated. Test writer changes locally
+  against `ask-pesu-dev`, and use `populate_db.py --dry-run` before a real backfill.
+- **Writer changes reach production unobserved**, because there is no staging writer for them to
+  be observed on. What stands in for that is review — `services/db/app/` and
+  `services/db/scripts/` require owner review in [`CODEOWNERS`](.github/CODEOWNERS) — and the
+  contract, which catches the structural failures at startup: a payload whose keys drift stops
+  the listener and turns `/health` into a 503 before anything is stored, and a wrong embedding
+  model, vector geometry or credential aborts startup outright.
+
+The failure neither catches is a write that is schema-valid but semantically wrong — a broken
+thread rendering, say — which lands silently and is undone only by re-running the backfill. Watch
+the db Space's logs and `/health` immediately after a promotion; that is the moment a writer
+change first runs anywhere.
+
+**The dev api runs `dev`; the prod api runs `main`.** The production deploy does *not* redeploy
+the dev api: `dev` is normally ahead of `main`, so re-pushing `main` over it would silently roll
+it back — every deploy here is a force push, so nothing would object.
 
 ### Space configuration
 
@@ -715,22 +763,27 @@ names in [Environment variables](#environment-variables):
 | Space | Secrets | `QDRANT_COLLECTION` |
 |---|---|---|
 | `askpesu` | `HF_TOKEN`, `QDRANT_URL`, `QDRANT_API_KEY` | `ask-pesu-prod` |
-| `askpesu-dev` | `HF_TOKEN`, `QDRANT_URL`, `QDRANT_API_KEY` | `ask-pesu-dev` |
+| `askpesu-dev` | `HF_TOKEN`, `QDRANT_URL`, `QDRANT_API_KEY` | `ask-pesu-prod` |
 | `askpesu-db` | `QDRANT_URL`, `QDRANT_API_KEY`, `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET` | `ask-pesu-prod` |
-| `askpesu-db-dev` | `QDRANT_URL`, `QDRANT_API_KEY`, `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET` | `ask-pesu-dev` |
 
-All four must be **Docker** SDK Spaces with hardware allocated. The SDK comes from each service
+All three are **Docker** SDK Spaces with hardware allocated. The SDK comes from each service
 README's frontmatter, but hardware does not — a Space converted from another SDK needs it
 assigned in its settings.
 
-Both services in one environment must be given the **same** collection. Each verifies the shape
-of whatever it is pointed at, but neither can detect that the other was pointed somewhere else —
-so an api on `ask-pesu-prod` and a db on `ask-pesu-dev` would both start happily and never share
-a document.
+All three take the **same** collection. Each verifies the shape of whatever it is pointed at,
+but none can detect that another was pointed somewhere else — an api left on `ask-pesu-dev`
+would start happily and simply never see anything the writer stores. The db's key needs write
+access — and manage access if the collection does not exist yet, since it creates one — while
+the two api keys need only read.
 
-> Against a **brand-new** collection the writer has to start before the reader: `services/api`
-> refuses to start without a contract-conforming collection, and `services/db` is what creates
-> it. This matters when adding an environment, not on an ordinary deploy.
+> **Bootstrapping a new environment needs care, because the two deploys are on different
+> triggers.** `services/api` refuses to start without a contract-conforming collection, and
+> `services/db` is what creates one — but the api deploys on a merge to `dev` while the db only
+> deploys on a promotion. Point an api at a collection that does not exist yet and it will fail
+> to start, and merging again will not fix it. Create the collection first: either run
+> `services/db` locally against it once, make it by hand with the geometry in
+> [Creating a collection](#creating-a-collection), or promote to production before relying on
+> the dev api. This does not arise on an ordinary deploy, only when adding an environment.
 
 ### Rollback
 
@@ -773,6 +826,11 @@ Reviewers are assigned by [`.github/CODEOWNERS`](.github/CODEOWNERS). Changes to
   contracted embedding model. Check these by eye when touching the contract.
 - **The streaming event shape is duplicated** between `app/rag.py` and `frontend/src/lib/api.ts`,
   with nothing enforcing agreement.
+- **There is no staging writer.** The free tier allows three CPU Spaces, spent on two api
+  environments and one db, so a `services/db` change is tested locally or not at all and first
+  runs anywhere at promotion. The startup contract checks and per-payload validation catch the
+  structural failures; a semantically wrong but schema-valid write is caught by neither and is
+  undone by re-running the backfill. A fourth Space would restore a staging writer.
 - **`Docker Container Build` effectively runs on dispatch only.** Its `workflow_run` trigger
   requires `head_branch == 'dev'`, and pull request CI runs on the fork's branch. Switching it
   to `push: branches: [dev]` would make the smoke tests routine, at roughly twenty minutes of CI
