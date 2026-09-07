@@ -11,8 +11,16 @@ vector names -- comes from the contract, so this cannot drift from the service
 it is backfilling. See ``conf/collection.yaml``.
 
 Safe to re-run: point ids are derived from the root comment id, so a repeat is
-an overwrite rather than a duplicate, and already-present ids are skipped
-outright to avoid re-embedding them.
+an overwrite rather than a duplicate.
+
+**The dump wins by default.** A thread already in Qdrant -- indexed by the live
+listener, or by an earlier run -- is re-embedded and overwritten. That is what
+you want when the dump is the more complete record, which it is for a backfill.
+Pass ``--skip-existing`` for the opposite: leave anything already stored alone
+and only add what is missing, which is cheaper for a top-up run.
+
+Interrupted runs resume either way, because each file moves to ``completed/``
+only once every document in it is stored.
 
     python scripts/populate_db.py --data-dir processed_data
 
@@ -44,8 +52,9 @@ from app.utils import convert_to_uuid  # noqa: E402
 def existing_point_ids(client: QdrantClient, collection: str) -> set[str]:
     """Collect every point id already in the collection.
 
-    Scrolling the whole collection once is far cheaper than embedding documents
-    that are already stored, which is what makes an interrupted run resumable.
+    Only used by ``--skip-existing``. Scrolling the whole collection once is far
+    cheaper than embedding documents that would be discarded, but it is pure
+    waste when the run is going to overwrite them anyway.
     """
     found: set[str] = set()
     offset = None
@@ -62,15 +71,18 @@ def existing_point_ids(client: QdrantClient, collection: str) -> set[str]:
             return found
 
 
-def flush_batch(vector_store: QdrantVectorStore, batch: list[tuple], seen: set[str], written: list[str]) -> int:
-    """Embed and upsert one batch, then clear it. Returns how many were written."""
+def flush_batch(vector_store: QdrantVectorStore, batch: list[tuple], written: list[str]) -> int:
+    """Embed and upsert one batch, then clear it. Returns how many were written.
+
+    Qdrant upserts by id, so this overwrites any existing point with the same id
+    rather than adding a second copy.
+    """
     if not batch:
         return 0
     texts = [text for text, _, _ in batch]
     metadatas = [meta for _, meta, _ in batch]
     ids = [point_id for _, _, point_id in batch]
     vector_store.add_texts(texts=texts, metadatas=metadatas, ids=ids)
-    seen.update(ids)
     written.extend(ids)
     count = len(ids)
     batch.clear()
@@ -126,7 +138,13 @@ def documents_in(path: Path) -> list[tuple[str, dict, str]]:
     rows = []
     for comment in post["comments"]:
         text = f"TITLE: {post['title']}\nCONTENT: {post['content']}\nCOMMENT TREE: {comment['body']}"
-        rows.append((text, dict(post["metadata"]), convert_to_uuid(comment["id"])))
+        # The generator writes metadata once per post, so its root_comment_id is
+        # the post's FIRST root comment for every document. Each document is a
+        # different thread, and the listener stores the id of the comment it is
+        # actually indexing -- so set it per document or the two disagree.
+        payload = dict(post["metadata"])
+        payload["root_comment_id"] = comment["id"]
+        rows.append((text, payload, convert_to_uuid(comment["id"])))
     return rows
 
 
@@ -137,6 +155,11 @@ def main() -> int:
     parser.add_argument("--completed-dir", type=Path, default=Path("completed"), help="Where finished files move to.")
     parser.add_argument("--batch-size", type=int, default=64, help="Documents embedded per upsert.")
     parser.add_argument("--dry-run", action="store_true", help="Report what would be written, write nothing.")
+    parser.add_argument(
+        "--skip-existing",
+        action="store_true",
+        help="Leave points already in the collection alone. Default is to overwrite them from the dump.",
+    )
     args = parser.parse_args()
 
     load_dotenv()
@@ -161,9 +184,15 @@ def main() -> int:
     vector_store = build_vector_store(contract, client)
     args.completed_dir.mkdir(parents=True, exist_ok=True)
 
-    print("Fetching existing point ids ...")
-    seen = existing_point_ids(client, contract.name)
-    print(f"Found {len(seen)} existing points")
+    if args.skip_existing:
+        print("Fetching existing point ids ...")
+        seen = existing_point_ids(client, contract.name)
+        print(f"Found {len(seen)} existing points; they will be left as they are")
+    else:
+        # The dump is the more complete record, so it replaces whatever is
+        # stored. Not scrolling the collection also saves a full pass over it.
+        seen = set()
+        print("Overwriting any existing points from the dump (--skip-existing to keep them)")
 
     inserted = skipped = 0
     written: list[str] = []
@@ -181,13 +210,13 @@ def main() -> int:
             contract_mod.validate_payload(contract, payload)
             batch.append((text, payload, point_id))
             if len(batch) >= args.batch_size:
-                inserted += flush_batch(vector_store, batch, seen, written)
+                inserted += flush_batch(vector_store, batch, written)
         # Drain before moving the file, so a file in completed/ is fully stored.
-        inserted += flush_batch(vector_store, batch, seen, written)
+        inserted += flush_batch(vector_store, batch, written)
         shutil.move(str(path), args.completed_dir / path.name)
         print_progress(index, len(files), started)
 
-    print(f"\nFiles: {len(files)} | Inserted: {inserted} | Skipped (already present): {skipped}")
+    print(f"\nFiles: {len(files)} | Written: {inserted} | Skipped (already present): {skipped}")
 
     missing = []
     for start in range(0, len(written), 100):

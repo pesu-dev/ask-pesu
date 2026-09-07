@@ -1,0 +1,55 @@
+name: Deploy a service to a Hugging Face Space
+description: >-
+  Push one service directory to its Space as that Space's repository root. Both
+  the dev and prod workflows use this, so the vendoring and splitting exist once
+  rather than once per service per environment.
+
+inputs:
+  service:
+    description: Directory under services/ to deploy (api or db).
+    required: true
+  space:
+    description: Target Space as owner/name, e.g. pesu-dev/askpesu-dev.
+    required: true
+  hf-token:
+    description: Hugging Face write token.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    # A Space builds from its own repository root, so it has to receive the
+    # service directory AS the root -- hence a subtree split rather than a plain
+    # push. `git subtree split` needs full history, so callers must check out
+    # with fetch-depth: 0.
+    #
+    # The split ships only services/<name>/, which means the shared contract at
+    # conf/collection.yaml would never reach the running Space. Copy it in first
+    # and commit locally on the runner; that commit is never pushed to GitHub.
+    - name: Vendor the shared contract into the service tree
+      shell: bash
+      run: |
+        mkdir -p "services/${{ inputs.service }}/conf"
+        cp conf/collection.yaml "services/${{ inputs.service }}/conf/collection.yaml"
+        git add -f "services/${{ inputs.service }}/conf/collection.yaml"
+        git -c user.name="github-actions[bot]" \
+            -c user.email="github-actions[bot]@users.noreply.github.com" \
+            commit -q -m "Vendor conf/collection.yaml for deployment"
+
+    - name: Split the service subtree and push it to the Space
+      shell: bash
+      env:
+        HF_TOKEN: ${{ inputs.hf-token }}
+      run: |
+        branch="deploy-${{ inputs.service }}"
+        git subtree split --prefix="services/${{ inputs.service }}" HEAD -b "$branch"
+
+        # Refuse to publish a tree without the contract. Both services abort at
+        # startup without it, so this turns a silently broken Space into a
+        # failed job.
+        git cat-file -e "$branch:conf/collection.yaml" \
+          || { echo "::error::${{ inputs.service }} deploy tree is missing conf/collection.yaml"; exit 1; }
+
+        git push "https://pesu-dev:$HF_TOKEN@huggingface.co/spaces/${{ inputs.space }}" \
+          "$branch:main" --force
+        echo "Deployed services/${{ inputs.service }} -> ${{ inputs.space }}"

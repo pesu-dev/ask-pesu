@@ -211,15 +211,26 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # and make enabling hybrid retrieval later a full re-index -- the cost the
     # named dense vector was chosen to avoid. `sparse_vector_name` must be
     # passed: langchain_qdrant defaults it to "langchain-sparse", not ours.
-    vector_store = QdrantVectorStore(
-        client=client,
-        collection_name=contract.name,
-        embedding=embeddings,
-        vector_name=contract.vector_name,
-        sparse_embedding=FastEmbedSparse(model_name=contract.sparse_model),
-        sparse_vector_name=contract.sparse_vector_name,
-        retrieval_mode=RetrievalMode.HYBRID,
-    )
+    if contract.sparse_vector_name:
+        vector_store = QdrantVectorStore(
+            client=client,
+            collection_name=contract.name,
+            embedding=embeddings,
+            vector_name=contract.vector_name,
+            sparse_embedding=FastEmbedSparse(model_name=contract.sparse_model),
+            sparse_vector_name=contract.sparse_vector_name,
+            retrieval_mode=RetrievalMode.HYBRID,
+        )
+    else:
+        # conf/collection.yaml documents that removing the `sparse` block opts
+        # out. Without this branch that escape hatch crashes at startup, because
+        # HYBRID requires a sparse embedding and FastEmbedSparse("") is invalid.
+        vector_store = QdrantVectorStore(
+            client=client,
+            collection_name=contract.name,
+            embedding=embeddings,
+            vector_name=contract.vector_name,
+        )
 
     reddit = praw.Reddit(
         client_id=client_id,

@@ -389,12 +389,15 @@ pre-commit run --all-files             # or on demand
 | `pre-commit.yaml` | Push, PR | Every pre-commit hook, on all files |
 | `contract.yaml` | Push, PR | Contract tests; asserts one tracked `collection.yaml`; rehearses the deploy vendoring and checks each split tree ships the contract |
 | `docker.yaml` | Manual, or after Pre-Commit | Builds both images, boots each container, polls `/health` |
-| `deploy-staging.yaml` | Manual on `dev` | Pushes `services/api` to `askpesu-dev`. Also chained after Docker Container Build, but see Known issues |
-| `deploy-db.yaml` | Manual | Pushes `services/db` to `askpesu-db` |
-| `deploy-prod.yaml` | Manual | Fast-forwards `dev` → `main`, then pushes `services/api` to both Spaces |
+| `deploy-dev.yaml` | Push to `dev` | Deploys **both** services to `askpesu-dev` and `askpesu-db-dev` |
+| `deploy-prod.yaml` | Manual | Fast-forwards `dev` → `main`, then deploys **both** services to `askpesu` and `askpesu-db` |
 
-`deploy-db.yaml` and `deploy-prod.yaml` additionally refuse to run unless `github.actor` is listed in
-`vars.PROD_DEPLOYMENT_ALLOWED_USERS`. `deploy-staging.yaml` is gated only on the branch being `dev`.
+`deploy-prod.yaml` refuses to run unless `github.actor` is listed in
+`vars.PROD_DEPLOYMENT_ALLOWED_USERS`. `deploy-dev.yaml` is not gated — merging to `dev` is the
+gate.
+
+Both call one composite action, [`.github/actions/deploy-space`](.github/actions/deploy-space/action.yml),
+so the vendoring and subtree split exist once rather than once per service per environment.
 
 **Required repository secrets:** `HF_TOKEN`, `QDRANT_URL`, `QDRANT_API_KEY`, `REDDIT_CLIENT_ID`,
 `REDDIT_CLIENT_SECRET`.
@@ -422,15 +425,27 @@ share a document. The API key must be scoped to the collection it is used with.
 Note the db has only one Space, so it writes the **production** collection. Nothing currently
 populates `ask-pesu-dev` — see the deployment-strategy TODO.
 
-Order matters on a fresh collection — **the writer creates it, the reader requires it**:
+**The dev Spaces run `dev`; the prod Spaces run `main`.** Nothing else writes to them. In
+particular the production deploy does *not* redeploy dev: `dev` is normally ahead of `main`, so
+re-pushing `main` over the dev Spaces would silently roll them back — every deploy here is a
+force push, so nothing would object.
 
-1. **`Deploy DB`** → `askpesu-db`. Confirm `/health` is 200 and the logs show
-   `Collection 'ask-pesu' created`.
-2. **`Deploy to Staging`** (on `dev`) → `askpesu-dev`. Confirm `/health`, `/docs`, that the
-   frontend and `/assets` load, and that one real question streams end to end.
-3. **`Deploy to Production`** → fast-forwards `dev` into `main`, then pushes to `askpesu-dev`
-   and `askpesu`. If the fast-forward aborts, `dev` and `main` have diverged; resolve rather
-   than forcing.
+| Branch | Deploys to | Collection |
+|---|---|---|
+| `dev` | `askpesu-dev`, `askpesu-db-dev` | `ask-pesu-dev` |
+| `main` | `askpesu`, `askpesu-db` | `ask-pesu-prod` |
+
+1. **Merge a PR into `dev`.** `Deploy to Dev` fires on the push and deploys both services.
+   Confirm `askpesu-dev` serves `/health`, `/docs`, the frontend and `/assets`, and streams one
+   real answer; confirm `askpesu-db-dev` serves `/health` and its logs show the listener started.
+2. **Dispatch `Deploy to Production`** when dev looks right. It fast-forwards `dev` → `main` —
+   aborting if they have diverged, rather than inventing a merge — then deploys both services to
+   the production Spaces.
+
+> On a **brand-new** collection the writer has to start before the reader: `services/api`
+> refuses to start without a contract-conforming collection, and `services/db` is what creates
+> it. Both collections already exist and pass the contract, so this only matters if you add a
+> third environment.
 
 ### Rollback
 
@@ -458,12 +473,10 @@ Reviewers are assigned by [`.github/CODEOWNERS`](.github/CODEOWNERS). Changes to
 
 ## Known issues
 
-- **The `Pre-Commit → Docker → Deploy to Staging` chain has never fired.** Its `head_branch`
-  guard does not match, because the runs that succeed are on fork PR branches. Manual dispatch
-  is the only working deploy path today.
-- **`services/db` has no automatic container build.** Its pre-monorepo workflow built on every
-  push to `main`; that trigger was not carried over. Both of these are tracked together as
-  "CI-based deploys for both services".
+- **`Docker Container Build` effectively never runs.** Its `workflow_run` trigger has never
+  fired (the successful Pre-Commit runs are on fork PR branches), and nothing chains off it now
+  that `deploy-dev.yaml` triggers directly on pushes. So the container smoke tests only happen
+  on manual dispatch. Switching it to `push: branches: [dev]` would make them real again.
 - **Cooldown state is per process.** `QuotaState` lives in memory, so a restart clears it and
   two replicas would each track their own view. Fine for a single Space; wrong the moment there
   is more than one.

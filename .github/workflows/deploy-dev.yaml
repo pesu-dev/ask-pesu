@@ -1,0 +1,44 @@
+name: Deploy to Dev
+
+# Every merge into `dev` deploys BOTH services to their dev Spaces, whichever
+# service the pull request touched. There are no path filters: the two services
+# share the collection contract in conf/, so "this PR only touched the api" is
+# not a safe inference, and keeping both Spaces on the same commit makes
+# "what is on dev?" answerable without checking two histories.
+#
+# This replaces the Pre-Commit -> Docker Container Build -> Deploy to Staging
+# chain, which never fired once: its `head_branch == 'dev'` guard could not
+# match, because the Pre-Commit runs that succeed are on fork pull request
+# branches. A direct `on: push` has no such failure mode.
+on:
+  push:
+    branches: [ dev ]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    strategy:
+      # One service failing must not cancel the other's deploy -- they are
+      # independent Spaces, and a half-finished promote is worse than one.
+      fail-fast: false
+      matrix:
+        include:
+          - service: api
+            space: pesu-dev/askpesu-dev
+          - service: db
+            space: pesu-dev/askpesu-db-dev
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # `git subtree split` walks the whole history.
+          fetch-depth: 0
+          # Pinned rather than defaulted, so a workflow_dispatch from some other
+          # branch still deploys dev instead of shipping that branch.
+          ref: dev
+
+      - uses: ./.github/actions/deploy-space
+        with:
+          service: ${{ matrix.service }}
+          space: ${{ matrix.space }}
+          hf-token: ${{ secrets.HF_TOKEN }}

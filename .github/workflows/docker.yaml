@@ -1,5 +1,8 @@
-# NOTE: the workflow name is matched by deploy-staging.yaml's `workflow_run`
-# trigger. Do not rename it without updating that file.
+# Builds both service images and boots each one to check it serves /health.
+#
+# Nothing depends on this workflow's name any more: deploy-staging.yaml used to
+# chain off it via `workflow_run` and has been replaced by deploy-dev.yaml,
+# which triggers directly on pushes to `dev`. The name is free to change.
 name: Docker Container Build
 
 on:
@@ -7,10 +10,15 @@ on:
     workflows: [ "Pre-Commit Checks" ]
     types:
       - completed
-  # The workflow_run chain above has never actually fired: its head_branch
-  # guard does not match, because the Pre-Commit Checks runs that succeed are
-  # on fork PR branches. Manual dispatch is currently the only way to exercise
-  # these container builds at all.
+  # The workflow_run chain above has never actually fired: its head_branch guard
+  # does not match, because the Pre-Commit Checks runs that succeed are on fork
+  # PR branches. Manual dispatch is therefore the only way these container
+  # builds run at all -- and nothing downstream depends on them now that
+  # deploy-dev.yaml triggers directly on pushes to `dev`.
+  #
+  # If these smoke tests should run on every merge, replace the workflow_run
+  # trigger with `push: branches: [ dev ]`. That is a deliberate change to when
+  # CI spends time, so it is left as a decision rather than made here.
   workflow_dispatch:
 
 jobs:
