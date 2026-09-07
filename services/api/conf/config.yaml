@@ -55,7 +55,10 @@ rag:
     # sentence-transformers and torch load at startup and falls back to ranking
     # by vector score alone -- faster to boot, noticeably worse ordering.
     enabled: true
-    model: "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    # The canonical repo id. `ms-marco-MiniLM-L-6-v2`, with the hyphen before the
+    # 6, is a legacy alias that Hugging Face answers with a 307 to this one -- it
+    # works, but every file lookup at startup pays a redirect.
+    model: "cross-encoder/ms-marco-MiniLM-L6-v2"
 
   # The three prompts the pipeline uses. `{question}`, `{context}`, `{input}` and
   # `{chat_history}` are filled in by app/rag.py; renaming one breaks the chain.

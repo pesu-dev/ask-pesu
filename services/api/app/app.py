@@ -255,8 +255,11 @@ async def unhandled_exception_handler(_request: Request, _exc: Exception) -> JSO
     )
 
 
-@app.get(
+@app.api_route(
     "/",
+    # HEAD as well as GET: the platform health-probes this path with HEAD, and a
+    # GET-only route answers 405, which reads like a fault in the logs.
+    methods=["GET", "HEAD"],
     response_class=FileResponse,
     # Two response types -- the SPA, or a 503 when it was never built -- so
     # FastAPI must not infer a schema from the annotation.
@@ -270,6 +273,16 @@ async def index() -> Response:
     Only the root path is served here; hashed bundles come from the /assets
     mount. The SPA handles its own routing once loaded.
 
+    Sent with ``Cache-Control: no-cache``, which is what keeps a deploy from
+    breaking returning visitors. Vite fingerprints every bundle, so a new build
+    means new asset filenames -- and this document is the only thing that names
+    them. Without an explicit directive a browser is free to reuse a cached copy
+    on its own heuristics, and that stale copy asks for bundles the deploy has
+    already replaced: 404, blank page, fixed only by a hard refresh. `no-cache`
+    means revalidate rather than do not store, so the ETag still turns the usual
+    case into a 304. The fingerprinted assets need no such protection; their
+    names change whenever their contents do.
+
     With no build present this says so, rather than returning a bare 404 that
     reads like a routing bug.
     """
@@ -282,7 +295,7 @@ async def index() -> Response:
                 "timestamp": datetime.datetime.now(IST).isoformat(),
             },
         )
-    return FileResponse(f"{DIST_DIR}/index.html")
+    return FileResponse(f"{DIST_DIR}/index.html", headers={"Cache-Control": "no-cache"})
 
 
 @app.post(

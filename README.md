@@ -98,7 +98,7 @@ Language in `app/rag.py`:
    unions what each retrieves, recovering passages a single phrasing would miss.
 3. **Dense retrieval** — `k=5` per phrasing against the Qdrant collection, through
    `ScoredRetriever`, which keeps each document's similarity score rather than discarding it.
-4. **Rerank** — `cross-encoder/ms-marco-MiniLM-L-6-v2` scores every (query, document) pair
+4. **Rerank** — `cross-encoder/ms-marco-MiniLM-L6-v2` scores every (query, document) pair
    through a sigmoid and drops anything below `score_threshold`. A cross-encoder reads both
    texts together, which a vector search structurally cannot.
 5. **Generate** — `Qwen/Qwen3-4B-Instruct-2507` via Hugging Face Inference (`nscale` provider),
@@ -575,7 +575,7 @@ Runtime behaviour that is *not* part of the collection contract lives in
 | `search_kwargs.k` | `5` | Documents retrieved **per generated phrasing**, so the reranker usually sees more than this |
 | `search_kwargs.score_threshold` | `0.3` | Minimum relevance, reused as the reranker's cutoff — one knob, not two |
 | `reranker.enabled` | `true` | Turning it off skips the torch and sentence-transformers load at startup, and falls back to ranking by vector score |
-| `reranker.model` | `cross-encoder/ms-marco-MiniLM-L-6-v2` | The cross-encoder |
+| `reranker.model` | `cross-encoder/ms-marco-MiniLM-L6-v2` | The cross-encoder |
 | `prompts.*` | — | System, answer and query-rewrite prompts |
 
 Prompt and model changes go here first — they are configuration, not code. Anything that would
