@@ -670,17 +670,18 @@ pre-commit run --all-files             # or on demand
 | `deploy-prod.yaml` | Manual | Fast-forwards `dev` → `main`, then deploys **both** services to `askpesu` and `askpesu-db` |
 
 `deploy-prod.yaml` refuses to run unless `github.actor` is listed in
-`vars.PROD_DEPLOYMENT_ALLOWED_USERS`. The dev deploys are not gated — merging to `dev` is the
-gate, which is why the write path requires owner review in [`CODEOWNERS`](.github/CODEOWNERS).
+`vars.PROD_DEPLOYMENT_ALLOWED_USERS`. The dev deploy is not gated — merging to `dev` is the
+gate.
 
-Both deploys call one composite action,
+Both deploy workflows call one composite action,
 [`.github/actions/deploy-space`](.github/actions/deploy-space/action.yml), so the vendoring and
 subtree split are written once rather than once per deploy target.
 
 **Required repository secrets:** `HF_TOKEN` (with write scope, to push to the Spaces). The
 container smoke tests in `docker.yaml` additionally use `QDRANT_URL`, `QDRANT_API_KEY`,
 `REDDIT_CLIENT_ID` and `REDDIT_CLIENT_SECRET`, and the optional variable
-`QDRANT_COLLECTION_DEV`.
+`QDRANT_COLLECTION_CI` (defaulting to `ask-pesu-dev`, so the smoke tests never write to the
+collection the deployed services use).
 
 ## Deployment
 
@@ -694,16 +695,19 @@ and refuses to push a tree missing any of them.
 | `dev` | api only | `askpesu-dev` | `ask-pesu-prod` |
 | `main` | api **and** db, unconditionally | `askpesu`, `askpesu-db` | `ask-pesu-prod` |
 
-Neither deploy is path-filtered. Skipping a rebuild that could not have changed anything sounds
-like a saving, but the deploy job only splits a subtree and pushes — Hugging Face does the
-building — and a filter that is ever too narrow means someone merges and nothing happens, with
-nothing to say why. A silent skip is the worse failure. For the production deploy there is a
-second reason: putting `main` on every production Space unconditionally is what makes "the
+The dev deploy is **not path-filtered**, deliberately. Skipping a rebuild that could not have
+changed anything sounds like a saving, but the deploy job only splits a subtree and pushes —
+Hugging Face does the building — and a filter that is ever too narrow means someone merges and
+nothing happens, with nothing to say why. A silent skip is the worse failure.
+
+The production deploy has no filter to speak of: GitHub applies `paths` only to `push` and
+`pull_request`, and that workflow is `workflow_dispatch` only. What it does choose is to deploy
+**both** services on every promotion regardless of what changed, which is what makes "the
 production Spaces run `main`" true all the time rather than most of the time.
 
-1. **Merge a PR into `dev`.** `Deploy API to Dev` fires on the push. Confirm `askpesu-dev` serves `/health`, `/docs`, the frontend and `/assets`, and streams
-   one real answer. The db is not deployed here, so nothing about a writer change is observable
-   at this step.
+1. **Merge a PR into `dev`.** `Deploy API to Dev` fires on the push. Confirm `askpesu-dev`
+   serves `/health`, `/docs`, the frontend and `/assets`, and streams one real answer. The db is
+   not deployed here, so nothing about a writer change is observable at this step.
 2. **Dispatch `Deploy to Production`** when dev looks right. It fast-forwards `dev` → `main` —
    aborting if they have diverged rather than inventing a merge nobody reviewed — then deploys
    both services. Confirm `askpesu` as in step 1, and confirm `askpesu-db` serves `/health` with
@@ -761,11 +765,17 @@ assigned in its settings.
 All three take the **same** collection. Each verifies the shape of whatever it is pointed at,
 but none can detect that another was pointed somewhere else — an api left on `ask-pesu-dev`
 would start happily and simply never see anything the writer stores. The db's key needs write
-access; the two api keys need only read.
+access — and manage access if the collection does not exist yet, since it creates one — while
+the two api keys need only read.
 
-> Against a **brand-new** collection the writer has to start before the reader: `services/api`
-> refuses to start without a contract-conforming collection, and `services/db` is what creates
-> it. This matters when adding an environment, not on an ordinary deploy.
+> **Bootstrapping a new environment needs care, because the two deploys are on different
+> triggers.** `services/api` refuses to start without a contract-conforming collection, and
+> `services/db` is what creates one — but the api deploys on a merge to `dev` while the db only
+> deploys on a promotion. Point an api at a collection that does not exist yet and it will fail
+> to start, and merging again will not fix it. Create the collection first: either run
+> `services/db` locally against it once, make it by hand with the geometry in
+> [Creating a collection](#creating-a-collection), or promote to production before relying on
+> the dev api. This does not arise on an ordinary deploy, only when adding an environment.
 
 ### Rollback
 

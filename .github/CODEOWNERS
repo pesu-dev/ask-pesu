@@ -39,6 +39,9 @@ services/api/README.md @aditeyabaral
 # thread rendering, which land silently and are only undone by a backfill.
 services/db/app/ @aditeyabaral @joshua-rajj
 services/db/scripts/ @aditeyabaral @joshua-rajj
+# Looks redundant against the rule above and is not: last match wins, so this
+# keeps contract.py owner-reviewed even if services/db/app/ is ever narrowed.
+# It must stay BELOW that rule to have any effect.
 services/db/app/contract.py @aditeyabaral @joshua-rajj
 services/db/Dockerfile @aditeyabaral @joshua-rajj
 services/db/README.md @aditeyabaral

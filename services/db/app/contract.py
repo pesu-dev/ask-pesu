@@ -76,9 +76,9 @@ def load(collection: str | None = None) -> Contract:
     name = collection or os.getenv("QDRANT_COLLECTION")
     if not name:
         raise ContractViolationError(
-            "QDRANT_COLLECTION is not set. The cluster holds more than one collection "
-            "(ask-pesu-prod is what the deployed services use; ask-pesu-dev is for local work), "
-            "so the name has to be supplied explicitly."
+            "QDRANT_COLLECTION is not set. It has no default because the wrong collection is "
+            "read and written silently rather than failing; set it to the one this service "
+            "should use (ask-pesu-prod for the deployed services, ask-pesu-dev for local work)."
         )
     collection_config = yaml.safe_load(contract_path().read_text())["collection"]
     dense = collection_config["dense"]
@@ -183,8 +183,10 @@ def validate_collection(contract: Contract, client: QdrantClient) -> None:
     """Check the live Qdrant collection against the contract, or raise."""
     if not client.collection_exists(contract.name):
         raise ContractViolationError(
-            f"Qdrant collection {contract.name!r} does not exist. It is created on startup from "
-            f"conf/collection.yaml; check QDRANT_URL, or the name in the contract."
+            f"Qdrant collection {contract.name!r} does not exist. The name comes from "
+            f"$QDRANT_COLLECTION, not from conf/collection.yaml -- check it, and QDRANT_URL. The "
+            f"listener creates the collection at startup, so reaching this from a script means "
+            f"the service has not yet run against this cluster."
         )
     vectors = client.get_collection(contract.name).config.params.vectors
     if contract.vector_name:

@@ -17,9 +17,11 @@ name: Deploy to Production
 # README: a services/db change merged to `dev` runs nowhere until someone
 # promotes, so writer changes reach production unobserved.
 #
-# Neither deploy job is path-filtered. A promotion should put `main` on every
-# production Space regardless of what changed -- that is what makes "the
-# production Spaces run main" true unconditionally rather than most of the time.
+# Both services deploy on every promotion, regardless of what changed. (There is
+# no path filter to speak of here anyway: GitHub applies `paths` only to push
+# and pull_request, and this workflow is dispatch-only.) Deploying both
+# unconditionally is what makes "the production Spaces run main" true all the
+# time rather than most of the time.
 #
 # It does NOT redeploy the dev api Space. That tracks `dev`, and re-pushing
 # `main` over it would silently roll dev back whenever dev is ahead of main --
