@@ -1,6 +1,8 @@
 import os
 import threading
 import traceback
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 import praw
 import uvicorn
@@ -12,8 +14,6 @@ from fastapi.responses import JSONResponse
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
-
-app = FastAPI()
 
 vector_store = None
 reddit = None
@@ -28,6 +28,11 @@ contract = contract_mod.load()
 # more bad payloads, so the thread stops and /health starts failing instead of
 # leaving a live-looking Space with a dead writer.
 listener_error = None
+
+# Set on shutdown so the listener stops retrying. The inner praw stream call
+# blocks until the next comment arrives, so the thread does not necessarily
+# exit promptly -- it is a daemon, so it never holds up process exit.
+shutdown = threading.Event()
 
 client_id = os.getenv("reddit_client_id")
 client_secret = os.getenv("reddit_client_secret")
@@ -56,7 +61,7 @@ def get_root_comment(comment):
 def listen_comments():
     """Main listener loop for new comments."""
     global listener_error
-    while True:
+    while not shutdown.is_set():
         try:
             for comment in subreddit.stream.comments(skip_existing=True):
                 author = str(comment.author).lower()
@@ -110,8 +115,15 @@ def background_listener():
     thread.start()
 
 
-@app.on_event("startup")
-async def startup_event():
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """Start the Qdrant writer and the Reddit listener, and stop them on shutdown.
+
+    Anything raised here aborts startup, which is what should happen when the
+    collection or the embedding model disagrees with conf/collection.yaml --
+    writing into a collection services/api cannot read is worse than not
+    starting at all.
+    """
     global vector_store, reddit, subreddit
 
     client = QdrantClient(
@@ -148,6 +160,19 @@ async def startup_event():
 
     background_listener()
     print("Background listener started.")
+
+    yield
+
+    shutdown.set()
+    print("Shutdown requested; listener will stop after its current wait.")
+
+
+app = FastAPI(
+    title="askPESU DB updater",
+    description="Streams new r/PESU comment threads into the shared Qdrant collection.",
+    version="0.1.0",
+    lifespan=lifespan,
+)
 
 
 @app.get("/health")
