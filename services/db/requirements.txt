@@ -33,10 +33,14 @@ distro==1.9.0
     # via langsmith
 fastapi==0.141.1
     # via ask-pesu-db (pyproject.toml)
+fastembed==0.8.0
+    # via ask-pesu-db (pyproject.toml)
 filelock==3.32.5
     # via
     #   huggingface-hub
     #   torch
+flatbuffers==25.12.19
+    # via onnxruntime
 fsspec==2026.7.0
     # via
     #   huggingface-hub
@@ -67,6 +71,7 @@ httpx2==2.12.0
     # via langsmith
 huggingface-hub==1.30.0
     # via
+    #   fastembed
     #   langchain-huggingface
     #   sentence-transformers
     #   tokenizers
@@ -100,12 +105,16 @@ langchain-qdrant==1.1.0
     # via ask-pesu-db (pyproject.toml)
 langsmith==0.12.2
     # via langchain-core
+loguru==0.7.3
+    # via fastembed
 markdown-it-py==4.2.0
     # via rich
 markupsafe==3.0.3
     # via jinja2
 mdurl==0.1.2
     # via markdown-it-py
+mmh3==5.3.0
+    # via fastembed
 mpmath==1.3.0
     # via sympy
 narwhals==2.25.0
@@ -114,11 +123,15 @@ networkx==3.6.1
     # via torch
 numpy==2.5.3
     # via
+    #   fastembed
+    #   onnxruntime
     #   qdrant-client
     #   scikit-learn
     #   scipy
     #   sentence-transformers
     #   transformers
+onnxruntime==1.29.0
+    # via fastembed
 orjson==3.12.0
     # via langsmith
 packaging==26.3
@@ -126,7 +139,10 @@ packaging==26.3
     #   huggingface-hub
     #   langchain-core
     #   langsmith
+    #   onnxruntime
     #   transformers
+pillow==12.3.0
+    # via fastembed
 portalocker==3.2.0
     # via qdrant-client
 praw==8.0.3
@@ -134,7 +150,11 @@ praw==8.0.3
 prawcore==4.0.0
     # via praw
 protobuf==7.36.1
-    # via qdrant-client
+    # via
+    #   onnxruntime
+    #   qdrant-client
+py-rust-stemmers==0.1.8
+    # via fastembed
 pydantic==2.13.5
     # via
     #   fastapi
@@ -162,6 +182,7 @@ regex==2026.9.3
     # via transformers
 requests==2.34.2
     # via
+    #   fastembed
     #   langsmith
     #   prawcore
     #   requests-toolbelt
@@ -195,6 +216,7 @@ threadpoolctl==3.6.0
     # via scikit-learn
 tokenizers==0.23.2
     # via
+    #   fastembed
     #   langchain-huggingface
     #   sentence-transformers
     #   transformers
@@ -204,6 +226,7 @@ torch==2.14.0+cpu
     #   sentence-transformers
 tqdm==4.70.0
     # via
+    #   fastembed
     #   huggingface-hub
     #   sentence-transformers
     #   transformers

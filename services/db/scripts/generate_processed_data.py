@@ -1,8 +1,31 @@
+"""Turn raw r/PESU dumps into the per-post JSON files that populate_db.py loads.
+
+Input is two JSONL exports -- posts and comments -- which this reassembles into
+threads: for each post, every top-level comment becomes one document containing
+that comment and all of its replies, rendered as indented text.
+
+This is the offline half of what the live listener does per comment. The tree
+rendering is deliberately imported from ``app.utils`` rather than reimplemented,
+so a thread backfilled from a dump is byte-identical to the same thread indexed
+from the stream.
+
+    python scripts/generate_processed_data.py [workers]
+"""
+
 import json
 import os
 import sys
 import time
-from anytree import Node, RenderTree
+from collections.abc import Iterator
+from multiprocessing import Queue
+from pathlib import Path
+
+from anytree import Node
+
+# The scripts run from services/db, where `app` is importable.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from app.utils import render_tree  # noqa: E402
 
 POSTS_FILE = "r_r_PESU_posts.jsonl"
 COMMENTS_FILE = "r_r_PESU_comments.jsonl"
@@ -15,7 +38,13 @@ _CHILD_MAP = {}
 _CHILDREN_MAP = {}
 
 
-def clean_comment(body):
+def clean_comment(body: str | None) -> str | None:
+    """Drop comments that carry no content worth indexing.
+
+    Removed and deleted comments leave placeholder bodies, and AutoModerator
+    posts the same boilerplate on many threads -- indexing it would put
+    identical text in front of unrelated questions.
+    """
     if not body or body.lower() in ["[deleted]", "[removed]"]:
         return None
     if AUTOMOD_TEXT in body:
@@ -23,7 +52,13 @@ def clean_comment(body):
     return body
 
 
-def build_comment_tree(comment_id, parent=None):
+def build_comment_tree(comment_id: str, parent: Node | None = None) -> Node | None:
+    """Rebuild one comment and its replies as an anytree node.
+
+    The dump gives a flat list with parent pointers, so the tree is rebuilt from
+    the id maps this module populates. Returns None when the comment itself has
+    no usable body, which prunes that whole branch.
+    """
     comment = _CHILD_MAP[comment_id]
     text = clean_comment(comment.get("body"))
     if not text:
@@ -34,14 +69,8 @@ def build_comment_tree(comment_id, parent=None):
     return node
 
 
-def tree_to_string(root):
-    lines = []
-    for pre, _, node in RenderTree(root):
-        lines.append(f"{pre}{node.name}")
-    return "\n".join(lines)
-
-
-def worker(job, progress_q):
+def worker(job: dict, progress_q: Queue) -> int:
+    """Process one shard of posts, writing a JSON file per post with comments."""
     global _CHILD_MAP, _CHILDREN_MAP
     _CHILD_MAP = job["child_map"]
     _CHILDREN_MAP = job["children_map"]
@@ -58,9 +87,7 @@ def worker(job, progress_q):
                     continue
                 tree_root = build_comment_tree(root_id)
                 if tree_root:
-                    comment_objs.append(
-                        {"id": root_id, "body": tree_to_string(tree_root)}
-                    )
+                    comment_objs.append({"id": root_id, "body": render_tree(tree_root)})
 
             if comment_objs:
                 output = {
@@ -98,14 +125,16 @@ def worker(job, progress_q):
     return failures
 
 
-def load_jsonl(path):
-    with open(path, "r", encoding="utf-8") as f:
+def load_jsonl(path: str) -> Iterator[dict]:
+    """Yield each JSON object from a JSONL file, skipping blank lines."""
+    with open(path, encoding="utf-8") as f:
         for line in f:
             if line.strip():
                 yield json.loads(line)
 
 
-def chunkify(lst, n):
+def chunkify(lst: list, n: int) -> list[list]:
+    """Split a list into n contiguous, near-equal shards, dropping empty ones."""
     k, m = divmod(len(lst), n)
     out = []
     i = 0
@@ -116,7 +145,8 @@ def chunkify(lst, n):
     return [c for c in out if c]
 
 
-def build_job(post_ids, comments_by_post, roots, posts):
+def build_job(post_ids: list[str], comments_by_post: dict, roots: dict, posts: dict) -> dict:
+    """Build one worker payload: its posts plus the id maps needed to rebuild trees."""
     child_map = {}
     children_map = {}
     for pid in post_ids:
@@ -138,7 +168,8 @@ def build_job(post_ids, comments_by_post, roots, posts):
     }
 
 
-def print_progress(done, total, t0):
+def print_progress(done: int, total: int, t0: float) -> None:
+    """Draw a single-line progress bar with an ETA."""
     elapsed = time.time() - t0
     pct = done / total * 100
     rate = done / elapsed if elapsed else 0
@@ -146,18 +177,16 @@ def print_progress(done, total, t0):
     bar_w = 30
     filled = int(bar_w * done / total)
     bar = "#" * filled + "-" * (bar_w - filled)
-    sys.stdout.write(
-        f"\r[{bar}] {pct:5.1f}% | {done}/{total} | {elapsed:5.0f}s elapsed | ETA {eta:5.0f}s"
-    )
+    sys.stdout.write(f"\r[{bar}] {pct:5.1f}% | {done}/{total} | {elapsed:5.0f}s elapsed | ETA {eta:5.0f}s")
     sys.stdout.flush()
 
 
-def main():
+def main() -> None:
+    """Load the dumps, shard the posts across worker processes, and report progress."""
     import multiprocessing as mp
 
     workers = int(sys.argv[1]) if len(sys.argv) > 1 else mp.cpu_count()
 
-    t0 = time.time()
     print(f"Loading {POSTS_FILE} ...", flush=True)
     posts = {p["id"]: p for p in load_jsonl(POSTS_FILE)}
     print(f"Loading {COMMENTS_FILE} ...", flush=True)
@@ -175,7 +204,8 @@ def main():
     post_ids = list(posts.keys())
     total = len(post_ids)
     n = min(workers, total)
-    print(f"Posts: {total} | Comments: {sum(len(v) for v in comments_by_post.values())} | Workers: {n} ({mp.cpu_count()} cores detected)", flush=True)
+    comment_count = sum(len(v) for v in comments_by_post.values())
+    print(f"Posts: {total} | Comments: {comment_count} | Workers: {n} ({mp.cpu_count()} cores)", flush=True)
 
     chunks = chunkify(post_ids, n)
 

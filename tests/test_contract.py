@@ -96,6 +96,7 @@ class TestSingleSourceOfTruth:
             tuple(authored["metadata"]),
             (authored.get("sparse") or {}).get("vector_name", ""),
             str((authored.get("sparse") or {}).get("modifier", "")),
+            str((authored.get("sparse") or {}).get("model", "")),
         )
         assert tuple(api.load()) == expected
         assert tuple(db.load()) == expected

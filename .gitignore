@@ -39,6 +39,12 @@ pyrightconfig.json
 # Node / Frontend
 # =========================
 node_modules/
+# Repo-root build output. The migration re-anchored the frontend rules below to
+# services/api/frontend/, which left a root-level frontend/ uncovered -- 3 MB of
+# Next.js output was committed there before this was noticed.
+/frontend/
+out/
+
 services/api/frontend/node_modules/
 *.lockb
 

@@ -27,7 +27,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_qdrant import QdrantVectorStore
+from langchain_qdrant import FastEmbedSparse, QdrantVectorStore, RetrievalMode
 from praw.models import Comment
 from qdrant_client import QdrantClient
 
@@ -206,11 +206,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     created = contract_mod.ensure_collection(contract, client)
     print(f"Collection {contract.name!r} {'created' if created else 'already exists and matches the contract'}")
 
+    # Hybrid, so every point carries a sparse BM25 vector alongside the dense
+    # one. Writing dense-only would leave the collection's sparse vector empty
+    # and make enabling hybrid retrieval later a full re-index -- the cost the
+    # named dense vector was chosen to avoid. `sparse_vector_name` must be
+    # passed: langchain_qdrant defaults it to "langchain-sparse", not ours.
     vector_store = QdrantVectorStore(
         client=client,
         collection_name=contract.name,
         embedding=embeddings,
         vector_name=contract.vector_name,
+        sparse_embedding=FastEmbedSparse(model_name=contract.sparse_model),
+        sparse_vector_name=contract.sparse_vector_name,
+        retrieval_mode=RetrievalMode.HYBRID,
     )
 
     reddit = praw.Reddit(

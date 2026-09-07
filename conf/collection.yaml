@@ -44,6 +44,11 @@ collection:
   sparse:
     vector_name: "sparse"
     modifier: "idf"
+    # The model that turns text into sparse term vectors. Contracted because the
+    # writer and any future reader must tokenise identically -- Qdrant only
+    # applies the IDF weighting, it does not decide what a term is. Two sides
+    # using different tokenisers produce silently incomparable vectors.
+    model: "Qdrant/bm25"
 
   # Payload keys written by services/db on every point, enforced exactly: the
   # writer refuses to upsert a payload whose key set differs from this list, and

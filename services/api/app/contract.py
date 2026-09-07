@@ -32,6 +32,7 @@ class Contract(NamedTuple):
     # the sparse checks off rather than failing.
     sparse_vector_name: str = ""
     sparse_modifier: str = ""
+    sparse_model: str = ""
 
 
 def contract_path() -> Path:
@@ -89,6 +90,7 @@ def load(collection: str | None = None) -> Contract:
         metadata=tuple(collection_config["metadata"]),
         sparse_vector_name=sparse.get("vector_name", ""),
         sparse_modifier=str(sparse.get("modifier", "")),
+        sparse_model=str(sparse.get("model", "")),
     )
 
 

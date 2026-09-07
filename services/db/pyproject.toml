@@ -7,6 +7,9 @@ requires-python = ">=3.12"
 dependencies = [
     "anytree>=2.13.0",
     "fastapi>=0.116.1",
+    # Supplies the BM25 sparse embeddings the collection's `sparse` vector needs.
+    # Pulls onnxruntime, which is why the image grows noticeably.
+    "fastembed>=0.8.0",
     "langchain-core>=1.2.0",
     "langchain-huggingface>=1.2.1",
     "langchain-qdrant>=1.1.0",

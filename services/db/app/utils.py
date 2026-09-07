@@ -46,6 +46,20 @@ def build_anytree(comment: Comment, parent_node: Node | None = None) -> Node | N
         return None
 
 
+def render_tree(root: Node) -> str:
+    """Render an anytree node as indented text.
+
+    Shared with the bulk backfill in ``scripts/`` so a thread indexed from a
+    Reddit dump is byte-identical to the same thread indexed from the live
+    stream. If these two diverged, the same discussion would embed differently
+    depending on which path wrote it.
+    """
+    lines = [""]
+    for pre, _, node in RenderTree(root):
+        lines.append(f"{pre}{node.name}")
+    return "\n".join(lines)
+
+
 def build_thread_string(root_comment: Comment) -> str:
     """Render a whole thread as indented plain text.
 
@@ -66,8 +80,4 @@ def build_thread_string(root_comment: Comment) -> str:
     root_node = build_anytree(root_comment)
     if not root_node:
         return "COMMENT TREE UNAVAILABLE"
-
-    lines = [""]
-    for pre, _, node in RenderTree(root_node):
-        lines.append(f"{pre}{node.name}")
-    return "\n".join(lines)
+    return render_tree(root_node)
