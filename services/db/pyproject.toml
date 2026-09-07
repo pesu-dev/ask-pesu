@@ -5,15 +5,15 @@ description = "Reddit listener that keeps askPESU's Qdrant collection up to date
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "fastapi",
-    "uvicorn",
-    "praw",
-    "anytree",
-    "langchain",
-    "langchain-community",
-    "langchain-core",
-    "langchain-qdrant",
-    "pyyaml",
-    "qdrant-client",
-    "sentence-transformers",
+    "anytree>=2.13.0",
+    "fastapi>=0.116.1",
+    "langchain-core>=1.2.0",
+    "langchain-huggingface>=1.2.1",
+    "langchain-qdrant>=1.1.0",
+    "praw>=7.8.1",
+    "python-dotenv>=1.1.1",
+    "pyyaml>=6.0.2",
+    "qdrant-client>=1.9.0",
+    "sentence-transformers>=5.1.0",
+    "uvicorn>=0.35.0",
 ]

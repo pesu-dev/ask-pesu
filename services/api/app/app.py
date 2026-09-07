@@ -17,11 +17,10 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from google.api_core.exceptions import ResourceExhausted
 
 from app.docs import ask_docs, health_docs, index_docs, quota_docs
 from app.models import AskRequestModel, AskResponseModel, HealthResponseModel, QuotaResponseModel, ShortenQueryModel
-from app.quota import QuotaState
+from app.quota import QuotaExceededError, QuotaState
 from app.rag import RetrievalAugmentedGenerator
 
 load_dotenv()
@@ -149,9 +148,9 @@ def get_quota_status() -> dict:
     }
 
 
-@app.exception_handler(ResourceExhausted)
-async def resource_exhausted_exception_handler(_request: Request, exc: ResourceExhausted) -> JSONResponse:
-    """Handler for resource exhausted exceptions."""
+@app.exception_handler(QuotaExceededError)
+async def quota_exceeded_exception_handler(_request: Request, exc: QuotaExceededError) -> JSONResponse:
+    """Handler for LLM quota cooldown errors."""
     logging.warning(f"Quota exceeded: {exc}")
     return JSONResponse(
         status_code=429,
@@ -221,7 +220,7 @@ async def ask(payload: AskRequestModel) -> StreamingResponse:
     # Check if thinking mode is requested and enabled
     if payload.thinking and not THINKING_STATE.enabled:
         logging.warning("Thinking mode was requested but currently unavailable due to quota limits.")
-        raise ResourceExhausted(
+        raise QuotaExceededError(
             "Thinking mode is temporarily unavailable due to quota limits. "
             "Please try again later, or disable 'thinking' mode if enabled."
         )
@@ -229,7 +228,7 @@ async def ask(payload: AskRequestModel) -> StreamingResponse:
     # Check if primary LLM is requested and enabled
     if not payload.thinking and not PRIMARY_STATE.enabled:
         logging.warning("Primary LLM is currently unavailable due to quota limits.")
-        raise ResourceExhausted("Primary LLM is temporarily unavailable due to quota limits. Please try again later.")
+        raise QuotaExceededError("Primary LLM is temporarily unavailable due to quota limits. Please try again later.")
 
     if os.getenv("env") == "test":
         return StreamingResponse(test_stream(), media_type="text/plain")

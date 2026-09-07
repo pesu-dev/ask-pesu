@@ -9,6 +9,16 @@ import pytz
 IST = pytz.timezone("Asia/Kolkata")
 
 
+class QuotaExceededError(Exception):
+    """Raised when the requested LLM is in quota cooldown.
+
+    Signalled and handled entirely within this service. It was previously
+    `google.api_core.exceptions.ResourceExhausted`, borrowed from the Gemini era;
+    nothing calls Google any more, so the whole google-api-core tree was being
+    installed for one exception class.
+    """
+
+
 @dataclass
 class QuotaState:
     """Manages LLM quota state with cooldown logic."""
