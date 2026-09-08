@@ -379,6 +379,21 @@ If both copies exist and differ, the loader raises rather than silently preferri
 
 ## Dependencies
 
+**To set up locally, use `uv sync`:**
+
+```bash
+uv sync --extra api --extra db
+```
+
+That installs from the committed `uv.lock`, so the environment is exact, and it is the only way
+to get the dependencies right without thinking about indexes. `[tool.uv.sources]` pins `torch` to
+PyTorch's CPU index, which `uv sync` applies on its own — installing `requirements.txt` by hand
+needs both `--extra-index-url` and, under uv, `--index-strategy unsafe-best-match`, and getting
+either wrong yields either a 4 GB CUDA torch or a resolution failure.
+
+The images do install `requirements.txt` with pip, because a Space build has no lockfile and no
+uv. That is a deployment detail, not the local workflow.
+
 There is **one** `pyproject.toml` and **one** `requirements.txt`, both at the root. What the two
 services share is the base `dependencies`; what only one needs is an extra (`api` / `db`):
 
@@ -455,8 +470,8 @@ In production nothing reads `.env`; each Space injects the same names from its
 Two terminals. The backend:
 
 ```bash
+uv sync --extra api --extra db         # once, from the repository root
 cd services/api
-pip install -r ../../requirements.txt
 python -m app.app                      # http://localhost:7860
 ```
 
@@ -492,7 +507,6 @@ ENV=test python -m app.app
 
 ```bash
 cd services/db
-pip install -r ../../requirements.txt
 python -m app.app                      # http://localhost:7860
 ```
 

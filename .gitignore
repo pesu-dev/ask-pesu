@@ -81,3 +81,8 @@ services/*/conf/collection.yaml
 services/*/requirements.txt
 services/*/LICENSE
 services/*/.env.example
+
+# r/PESU JSONL exports for the backfill. Large, and r/PESU content rather than ours.
+dump/
+*.jsonl
+*.json

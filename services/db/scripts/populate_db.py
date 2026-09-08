@@ -104,6 +104,17 @@ def build_vector_store(contract: contract_mod.Contract, client: QdrantClient) ->
     )
 
 
+def _retire(staged: list[Path], completed_dir: Path) -> list[Path]:
+    """Move every fully-written file to ``completed_dir`` and return an empty list.
+
+    Called only after the batch holding those files' documents has been written,
+    so presence in ``completed/`` always means "stored", never "attempted".
+    """
+    for path in staged:
+        shutil.move(str(path), completed_dir / path.name)
+    return []
+
+
 def documents_in(path: Path) -> list[tuple[str, dict, str]]:
     """Turn one processed-post file into (text, payload, point id) tuples.
 
@@ -130,7 +141,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--data-dir", type=Path, default=Path("processed_data"), help="Processed post JSON files.")
     parser.add_argument("--completed-dir", type=Path, default=Path("completed"), help="Where finished files move to.")
-    parser.add_argument("--batch-size", type=int, default=64, help="Documents embedded per upsert.")
+    parser.add_argument(
+        "--batch-size", type=int, default=128, help="Documents embedded per upsert. Filled across files, not per file."
+    )
     parser.add_argument(
         "--dry-run",
         action="store_true",
@@ -175,6 +188,10 @@ def main() -> int:
     inserted = 0
     written: list[str] = []
     batch: list[tuple] = []
+    # Files whose documents are all sitting in the current batch. They move to
+    # completed/ only once that batch is written, which is what makes an
+    # interrupted run safe to resume: a file is there only if it is fully stored.
+    staged: list[Path] = []
     started = time.time()
     print_progress(0, len(files), started)
 
@@ -184,12 +201,21 @@ def main() -> int:
             # the listener does on every write.
             contract_mod.validate_payload(contract, payload)
             batch.append((text, payload, point_id))
-            if len(batch) >= args.batch_size:
-                inserted += flush_batch(vector_store, batch, written)
-        # Drain before moving the file, so a file in completed/ is fully stored.
-        inserted += flush_batch(vector_store, batch, written)
-        shutil.move(str(path), args.completed_dir / path.name)
+        staged.append(path)
+        # The batch fills across files rather than draining after each one. A
+        # post averages about three root comments, so draining per file would
+        # embed and upsert in threes however large --batch-size is -- roughly
+        # forty times the round trips, and the dominant cost of a full backfill.
+        # Whole files only: a file is added complete, so every file in `staged`
+        # is fully covered by the batch about to be written.
+        if len(batch) >= args.batch_size:
+            inserted += flush_batch(vector_store, batch, written)
+            staged = _retire(staged, args.completed_dir)
         print_progress(index, len(files), started)
+
+    # Whatever the last full batch left behind.
+    inserted += flush_batch(vector_store, batch, written)
+    staged = _retire(staged, args.completed_dir)
 
     print(f"\nFiles: {len(files)} | Documents written: {inserted}")
 
