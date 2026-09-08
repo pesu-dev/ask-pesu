@@ -379,11 +379,46 @@ If both copies exist and differ, the loader raises rather than silently preferri
 
 ## Dependencies
 
+**`uv sync` is the only supported way to install dependencies locally.** One command, from the
+repository root, for both services and every tool the repo uses:
+
+```bash
+uv sync --extra api --extra db
+```
+
+It installs from the committed `uv.lock`, so every contributor gets byte-identical versions, and
+it needs no flags beyond the two extras. What it brings:
+
+| What | Where it comes from | Note |
+|---|---|---|
+| both services' libraries | base `dependencies` + the `api` and `db` extras | the only part needing a flag; everything either service imports |
+| `pre-commit`, `ruff` | the `dev` group | a default group, so no flag; the same ruff version the hooks and CI run |
+| `torch==2.14.0+cpu` | the `cpu` group | a default group, so no flag; resolved from PyTorch's CPU index, not PyPI |
+
+Run things through it rather than activating the environment by hand — `uv run <command>` works
+from any directory in the repo, because uv walks up to this single root project:
+
+```bash
+uv run python -m app.app
+uv run ruff check .
+```
+
+`uv run` is itself a sync: it installs anything missing from the default set before running. It
+does **not** remove what is already installed, which is why the two extras survive a bare
+`uv run`. It does, however, restore a default group you deliberately excluded — which matters in
+exactly one place, the [GPU backfill](#backfilling-history), and is spelled out there.
+
+**Do not install `requirements.txt` locally.** It is a compiled artifact for the Space images,
+which have neither uv nor a lockfile, and it carries no `dev` group. Installing it by hand also
+has to reproduce the torch index redirection that `uv sync` applies on its own — `pip` needs
+`--extra-index-url`, uv additionally needs `--index-strategy unsafe-best-match`, and getting
+either wrong yields a 4 GB CUDA torch or a resolution failure.
+
 There is **one** `pyproject.toml` and **one** `requirements.txt`, both at the root. What the two
 services share is the base `dependencies`; what only one needs is an extra (`api` / `db`):
 
 ```bash
-uv pip compile pyproject.toml --extra api --extra db \
+uv pip compile pyproject.toml --extra api --extra db --group cpu \
     --python-platform linux --python-version 3.12 -o requirements.txt
 ```
 
@@ -394,24 +429,33 @@ resolved exactly **once**, so the writer and the reader cannot end up on differe
 the library that produces the vectors. `--python-platform` and `--python-version` are pinned so
 the file generated on a laptop is the file the linux/amd64 Space installs.
 
-`torch` is pinned to the `+cpu` build from PyTorch's own index. Both Spaces run on CPU, and the
-CUDA wheels were roughly 4 GB of image for libraries that are never loaded. It is declared as a
-direct dependency even though only `sentence-transformers` imports it, because uv's index
-redirection applies to direct dependencies only.
+`--group cpu` is load-bearing, not decoration. `torch` lives in a dependency group rather than in
+`dependencies`, so compiling without it leaves torch to resolve transitively from PyPI as the CUDA
+build — roughly 4 GB of image for libraries that are never loaded. Naming it directly is also what
+makes the redirection work at all: uv's `[tool.uv.sources]` applies to direct dependencies only,
+and only `sentence-transformers` actually imports torch.
 
-CI recompiles `requirements.txt` on every push and fails if the committed file differs, so a
-dependency edit cannot ship an old resolution to a Space.
+The `gpu` group is the same package from PyTorch's CUDA index, declared as a conflict with `cpu`
+so uv will install one or the other and never both. Both groups resolve the same torch *version*,
+so moving a machine onto CUDA cannot quietly change the library that produces the vectors — see
+[Backfilling history](#backfilling-history), the only place that wants it.
+
+CI recompiles `requirements.txt` on every push, with exactly this command, and fails if the
+committed file differs — so neither a dependency edit nor a forgotten `--group cpu` can ship the
+wrong resolution to a Space.
 
 ## Getting started
 
-**Prerequisites:** Python 3.12, Node.js 24 (what the Dockerfile builds with), and a Qdrant
-instance (the free [Qdrant Cloud](https://cloud.qdrant.io/) tier is enough). Docker only if you
-want to build images.
+**Prerequisites:** [uv](https://docs.astral.sh/uv/getting-started/installation/), Node.js 24
+(what the Dockerfile builds with), and a Qdrant instance (the free
+[Qdrant Cloud](https://cloud.qdrant.io/) tier is enough). Docker only if you want to build images.
+uv fetches Python 3.12 itself, so no separate Python install is required.
 
 ```bash
 git clone https://github.com/pesu-dev/ask-pesu.git
 cd ask-pesu
-cp .env.example .env          # then fill it in -- see below
+uv sync --extra api --extra db   # the only dependency install; see Dependencies
+cp .env.example .env             # then fill it in -- see below
 ```
 
 The repo targets **Python 3.12 exactly**: `.python-version`, both Dockerfile base images, both
@@ -455,10 +499,14 @@ In production nothing reads `.env`; each Space injects the same names from its
 Two terminals. The backend:
 
 ```bash
+uv sync --extra api --extra db         # once, from the repository root
 cd services/api
-pip install -r ../../requirements.txt
-python -m app.app                      # http://localhost:7860
+uv run python -m app.app               # http://localhost:7860
 ```
+
+`uv run` finds the root `.venv` from anywhere in the repo and keeps the working directory, so
+neither service needs the environment activated. Activating it and running `python` directly is
+equivalent; `uv run` is written throughout because it cannot be done half-way.
 
 Accepts `--host`, `--port`, `--config` and `--debug` (which enables reload and DEBUG logging).
 `/docs` serves Swagger UI.
@@ -485,15 +533,15 @@ canned NDJSON script — thinking steps, markdown, LaTeX and a Sources list — 
 mode, and every route still answers in its real shape.
 
 ```bash
-ENV=test python -m app.app
+ENV=test uv run python -m app.app
 ```
 
 ### DB listener
 
 ```bash
+uv sync --extra api --extra db         # once, from the repository root
 cd services/db
-pip install -r ../../requirements.txt
-python -m app.app                      # http://localhost:7860
+uv run python -m app.app               # http://localhost:7860
 ```
 
 Startup order, and what fails when:
@@ -540,7 +588,7 @@ comment and all its replies:
 
 ```bash
 cd services/db
-python scripts/generate_processed_data.py \
+uv run python scripts/generate_processed_data.py \
     --posts r_r_PESU_posts.jsonl \
     --comments r_r_PESU_comments.jsonl \
     --output-dir processed_data
@@ -557,13 +605,49 @@ derivation, same text layout, same payload keys, same dense and sparse vectors, 
 the contract.
 
 ```bash
-python scripts/populate_db.py --data-dir processed_data --dry-run   # check first
-python scripts/populate_db.py --data-dir processed_data
+uv run python scripts/populate_db.py --data-dir processed_data --dry-run   # check first
+uv run python scripts/populate_db.py --data-dir processed_data
 ```
 
 `--dry-run` validates the collection, parses every input file and checks each payload against
 the contract, without building the embedding model or writing anything — everything that can go
 wrong cheaply, before the expensive part.
+
+**Use a GPU if the machine has one.** The default `cpu` dependency group pins `torch==2.14.0+cpu`,
+which is right for the Spaces — they are CPU-only, and the CUDA wheels are 15 extra `nvidia-*`
+packages, about 4 GB of image — but it also means `torch.cuda.is_available()` is False locally and
+sentence-transformers quietly selects the CPU. Measured on this corpus, the contracted model runs
+at **0.5 documents per second on CPU and 137 on an RTX 3060**: the same backfill is either most of
+a day or about five minutes.
+
+Switching to CUDA is still a `uv sync`. The `gpu` group is the same torch from PyTorch's CUDA
+index, and `--no-group cpu` is required because `cpu` is a default group and the two are declared
+as conflicting — `--group gpu` on its own fails, naming the pair:
+
+```bash
+uv sync --extra api --extra db --no-group cpu --group gpu
+```
+
+Nothing else changes: same torch version, same lockfile, and `requirements.txt` is untouched, so
+this cannot leak into a Space. To go back, drop the flags — `uv sync --extra api --extra db`. If
+your driver needs a different CUDA release, edit the `pytorch-cu126` index URL in
+`pyproject.toml`, which is the one place that decides it.
+
+**Then carry those same flags on every `uv run` for the rest of the backfill:**
+
+```bash
+uv run --no-group cpu --group gpu python scripts/populate_db.py --data-dir processed_data --dry-run
+uv run --no-group cpu --group gpu python scripts/populate_db.py --data-dir processed_data
+```
+
+This is not decoration. `uv run` syncs the environment before it runs anything, and `cpu` is a
+default group, so the plain commands above would **reinstall the CPU build over the CUDA one** —
+silently, and the next command then has to download several GB again to undo it. Carrying the
+flags makes each command idempotent: it converges on the GPU environment whatever the last one
+left behind. That includes `--dry-run`, which needs no GPU itself but would still flip torch back.
+
+The check is the script's own first line of output: it prints the device it chose and warns when
+that device is the CPU. If it says `cpu` after a GPU sync, a bare `uv run` undid it.
 
 **The dump always wins.** It is a fresh snapshot taken at backfill time, so for any thread it is
 at least as complete as what the listener holds: the listener indexes a thread when a comment
@@ -683,12 +767,13 @@ single-sourced, that `requirements.txt` matches `pyproject.toml`, and that the t
 receives is complete. It also runs the one check that behaves like a test:
 
 ```bash
-python3 scripts/check_duplication.py
+uv run python scripts/check_duplication.py
 ```
 
-Four pairs of files must agree and cannot share code, because each side ships somewhere the other
+Five pairs of files must agree and cannot share code, because each side ships somewhere the other
 never reaches — a `git subtree split` sends only `services/<name>/`, the frontend is TypeScript,
-and Space frontmatter is read before any code runs. The script asserts each pair:
+Space frontmatter is read before any code runs, and pre-commit builds its hook environments from a
+git ref rather than from `uv.lock`. The script asserts each pair:
 
 | Pair | How it is checked |
 |---|---|
@@ -696,6 +781,7 @@ and Space frontmatter is read before any code runs. The script asserts each pair
 | both writers' payload dicts | keys extracted statically, compared to `conf/collection.yaml` |
 | each Space README's `models:`/`preload_from_hub:` | must list the contracted embedding model |
 | the NDJSON event names | pydantic `Literal` compared to the frontend's `StreamEvent` union |
+| the ruff version | `.pre-commit-config.yaml`'s `rev` compared to the `ruff==` pin in the `dev` group |
 
 The loaders have drifted once already, which is what the first of those exists to prevent.
 
@@ -703,14 +789,20 @@ The loaders have drifted once already, which is what the first of those exists t
 
 One ruff configuration in `pyproject.toml` covers both services, with no per-service exemptions.
 
+`pre-commit` and `ruff` arrive with `uv sync` — they are the `dev` group, which uv installs
+without being asked — so there is nothing extra to install:
+
 ```bash
-pip install pre-commit
-pre-commit install                     # run automatically on commit
-pre-commit run --all-files             # or on demand
+uv run pre-commit install              # run automatically on commit
+uv run pre-commit run --all-files      # or on demand
 ```
 
-`ruff check .` and `ruff format .` from the repository root behave identically to CI, which runs
-ruff through the same hooks rather than as a separate job.
+`uv run ruff check .` and `uv run ruff format .` from the repository root behave identically to
+CI, which runs ruff through the same hooks rather than as a separate job. The `dev` group pins
+ruff to the exact version `.pre-commit-config.yaml` uses, so a rule cannot pass locally and fail
+in CI — and because pre-commit builds its hook environments from a git ref and never reads
+`uv.lock`, that agreement is written twice and checked by
+[`scripts/check_duplication.py`](scripts/check_duplication.py) rather than assumed.
 
 ## Continuous integration
 
@@ -851,12 +943,13 @@ so it stays put until the next dispatch.
 
 ## Contributing
 
-Pull requests **must** come from a fork and **must** target `dev`; `source.yaml` enforces both.
-`main` is a deploy artifact and is advanced only by the production workflow. See
+Pull requests **must** come from a fork, **must not** come from that fork's `main`, and **must**
+target `dev`; `source.yaml` enforces all three. This repo's `main` is a deploy artifact and is
+advanced only by the production workflow. See
 [`.github/CONTRIBUTING.md`](.github/CONTRIBUTING.md) and
 [`.github/CODE_OF_CONDUCT.md`](.github/CODE_OF_CONDUCT.md).
 
-Before opening a PR: `pre-commit run --all-files`.
+Before opening a PR: `uv run pre-commit run --all-files`.
 
 Reviewers are assigned by [`.github/CODEOWNERS`](.github/CODEOWNERS). Changes to
 `conf/collection.yaml` affect both services and always require owner review.

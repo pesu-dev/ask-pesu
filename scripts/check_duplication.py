@@ -1,20 +1,23 @@
 """Assert the things this repository must keep in step but cannot share.
 
-Four pairs of files have to agree and are written separately, because each side
+Five pairs of files have to agree and are written separately, because each side
 is shipped somewhere the other never reaches. A `git subtree split` sends only
 ``services/<name>/``, so the two services cannot import a common module; the
-frontend is TypeScript; and a Space's README frontmatter is read by the platform
-before any code runs. That leaves agreement by hand, which is the kind that
-drifts silently -- the contract loaders already did once.
+frontend is TypeScript; a Space's README frontmatter is read by the platform
+before any code runs; and pre-commit resolves its own hook environments from a
+git ref, never from this project's lockfile. That leaves agreement by hand,
+which is the kind that drifts silently -- the contract loaders already did
+once.
 
 So each pair is checked here instead, and CI runs this on every push and pull
 request. Run it directly to check a working tree:
 
-    python3 scripts/check_duplication.py
+    uv run python scripts/check_duplication.py
 """
 
 import ast
 import re
+import tomllib
 from pathlib import Path
 
 import yaml
@@ -184,6 +187,43 @@ def check_stream_events() -> list[str]:
     ]
 
 
+def check_ruff_pin() -> list[str]:
+    """The ruff a contributor runs must be the ruff CI enforces.
+
+    pre-commit installs its hooks into environments it builds itself from the
+    ``rev`` in .pre-commit-config.yaml, and never consults uv.lock. The `dev`
+    dependency group is what puts ruff on a contributor's PATH for
+    ``uv run ruff``. So the version is written twice, and if the two drift a
+    rule can pass locally and fail in CI -- or the reverse, which is worse,
+    because it looks like CI is broken.
+    """
+    config = yaml.safe_load((ROOT / ".pre-commit-config.yaml").read_text())
+    hooked = next(
+        (repo["rev"].removeprefix("v") for repo in config["repos"] if "ruff-pre-commit" in repo["repo"]),
+        None,
+    )
+    if hooked is None:
+        return ["no ruff-pre-commit repo in .pre-commit-config.yaml; this check can no longer see the hook version"]
+
+    group = tomllib.loads((ROOT / "pyproject.toml").read_text()).get("dependency-groups", {}).get("dev")
+    if group is None:
+        return ["pyproject.toml has no `dev` dependency group; `uv sync` would install no ruff at all"]
+
+    pinned = next((spec.split("==", 1)[1] for spec in group if spec.startswith("ruff==")), None)
+    if pinned is None:
+        return [
+            "pyproject.toml's `dev` group does not pin ruff with `==`. It has to, so that "
+            f"`uv run ruff` is the {hooked} that .pre-commit-config.yaml runs."
+        ]
+
+    if pinned == hooked:
+        return []
+    return [
+        f"ruff versions disagree: .pre-commit-config.yaml runs {hooked}, pyproject.toml's `dev` "
+        f"group installs {pinned}. Change both together."
+    ]
+
+
 def main() -> int:
     """Run every check and report all failures, not just the first."""
     checks = (
@@ -191,6 +231,7 @@ def main() -> int:
         ("payload keys", check_payload_keys),
         ("Space frontmatter", check_space_frontmatter),
         ("stream events", check_stream_events),
+        ("ruff pin", check_ruff_pin),
     )
     failed = 0
     for label, check in checks:
