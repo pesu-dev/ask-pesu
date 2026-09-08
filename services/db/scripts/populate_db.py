@@ -21,7 +21,7 @@ Point ids come from the root comment id, so a repeat is an overwrite rather than
 a duplicate, and interrupted runs resume because each file moves to
 ``completed/`` only once every document in it is stored.
 
-    python scripts/populate_db.py --data-dir processed_data
+    uv run python scripts/populate_db.py --data-dir processed_data
 
 Run it with the listener stopped where possible. Both write by the same id so
 they converge rather than conflict, but there is no reason to pay for the same
@@ -108,9 +108,10 @@ def build_vector_store(
     print(f"Embedding on {device}.")
     if device.startswith("cpu"):
         print(
-            "  WARNING: no GPU in use. requirements.txt pins the CPU build of torch, which is "
-            "right for the Spaces but makes a full backfill take many hours. See the README "
-            "for installing a CUDA torch over the synced environment."
+            "  WARNING: no GPU in use. The default `cpu` dependency group pins the CPU build "
+            "of torch, which is right for the Spaces but makes a full backfill take many hours. "
+            "For a CUDA build, re-sync with: "
+            "uv sync --extra api --extra db --no-group cpu --group gpu"
         )
     if not contract.sparse_vector_name:
         return QdrantVectorStore(

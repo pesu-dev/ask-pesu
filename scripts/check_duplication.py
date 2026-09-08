@@ -10,7 +10,7 @@ drifts silently -- the contract loaders already did once.
 So each pair is checked here instead, and CI runs this on every push and pull
 request. Run it directly to check a working tree:
 
-    python3 scripts/check_duplication.py
+    uv run python scripts/check_duplication.py
 """
 
 import ast

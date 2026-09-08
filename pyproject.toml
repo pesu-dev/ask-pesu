@@ -6,8 +6,13 @@
 # never has to reach a Space. It is the *source* that one root requirements.txt
 # is compiled from:
 #
-#     uv pip compile pyproject.toml --extra api --extra db \
+#     uv pip compile pyproject.toml --extra api --extra db --group cpu \
 #         --python-platform linux --python-version 3.12 -o requirements.txt
+#
+# `--group cpu` is not optional. It is what puts torch in the file at all, and
+# therefore what selects the +cpu build; compiling without it resolves torch
+# transitively from PyPI and adds roughly 4 GB of CUDA libraries to both images.
+# CI recompiles with exactly this command and fails on any difference.
 #
 # Both extras go into that single file, so each image installs the union and
 # carries a little it does not import. That is deliberate: it resolves the
@@ -40,11 +45,9 @@ dependencies = [
     "langchain-qdrant>=1.1.0",
     "qdrant-client>=1.9.0",
     "sentence-transformers>=5.1.0",
-    # Not imported directly by services/db -- it arrives via
-    # sentence-transformers -- but declared because [tool.uv.sources] below only
-    # redirects DIRECT dependencies, and without it torch resolves to the 4 GB
-    # CUDA build instead of +cpu.
-    "torch>=2.10.0",
+    # torch is not here. It arrives with sentence-transformers, and which BUILD
+    # of it arrives has to be selectable, so it is declared in the `cpu` and
+    # `gpu` dependency groups below instead.
 ]
 
 [project.optional-dependencies]
@@ -63,15 +66,57 @@ db = [
     "fastembed>=0.8.0",
     "praw>=7.8.1",
 ]
+
+# Dependency groups rather than extras, because uv installs these by default and
+# `pip` cannot see them at all -- which is exactly the split wanted here. A
+# contributor running `uv sync` gets the linting tools and a CPU torch with no
+# extra flags, while requirements.txt is compiled from the extras plus
+# `--group cpu` and never carries `dev` or `gpu` into a Space.
+[dependency-groups]
+# The local toolchain. ruff is pinned to the exact version
+# .pre-commit-config.yaml runs, so `uv run ruff check .` and CI cannot disagree
+# about which rules exist.
 dev = [
     "pre-commit>=4.3.0",
-    "ruff>=0.12.12",
+    "ruff==0.12.12",
+]
+
+# torch, declared twice, resolved from two different indexes. Neither service
+# imports it directly -- sentence-transformers does -- but it is named here
+# because [tool.uv.sources] redirects DIRECT dependencies only; left to resolve
+# on its own it comes from PyPI as the CUDA build.
+#
+# `cpu` is the default, and is what requirements.txt and both Spaces are built
+# from. `gpu` exists for the backfill, which is roughly 270x faster on a GPU:
+#
+#     uv sync --extra api --extra db --no-group cpu --group gpu
+#
+# Both resolve the same torch VERSION and differ only in the build, so moving a
+# machine to CUDA cannot quietly change the library that produces the vectors.
+cpu = [
+    "torch>=2.10.0",
+]
+gpu = [
+    "torch>=2.10.0",
 ]
 
 [tool.uv]
 # There is no importable `ask_pesu` package at the root. This table describes
 # dependencies; it is not something to build or install.
 package = false
+
+# One torch or the other, never both. Declaring the conflict is what allows the
+# two groups above to name the same package from different indexes -- uv refuses
+# to lock without it. It also makes `--group gpu` on its own fail with an error
+# naming the pair, instead of installing the CPU build anyway.
+conflicts = [[{ group = "cpu" }, { group = "gpu" }]]
+
+# `dev` and `cpu` need no flag, which is what makes a plain `uv sync` the
+# correct and only local install.
+default-groups = [
+    "dev",
+    "cpu",
+]
 
 # torch resolves from PyTorch's CPU index. Both Spaces run on CPU, and the CUDA
 # wheels were ~4 GB of image for libraries that are never loaded. `explicit`
@@ -81,8 +126,19 @@ name = "pytorch-cpu"
 url = "https://download.pytorch.org/whl/cpu"
 explicit = true
 
+# The CUDA index the `gpu` group resolves against. This URL is the single place
+# that decides which CUDA release a GPU install targets -- change it here to
+# match a different driver, rather than installing torch by hand.
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
+
 [tool.uv.sources]
-torch = [{ index = "pytorch-cpu" }]
+torch = [
+    { index = "pytorch-cpu", group = "cpu" },
+    { index = "pytorch-cu126", group = "gpu" },
+]
 
 [tool.ruff.lint]
 select = [

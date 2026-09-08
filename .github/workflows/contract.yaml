@@ -59,10 +59,14 @@ jobs:
         # Starting from the committed pins detects the thing actually worth
         # detecting: a dependency added to or removed from pyproject.toml
         # without recompiling.
+        #
+        # `--group cpu` must match pyproject.toml's documented command exactly:
+        # it is what puts torch in the file, and therefore what selects the +cpu
+        # build over ~4 GB of CUDA wheels.
         run: |
           pipx install uv || pip install uv
           cp requirements.txt /tmp/requirements.check
-          uv pip compile pyproject.toml --extra api --extra db \
+          uv pip compile pyproject.toml --extra api --extra db --group cpu \
             --python-platform linux --python-version 3.12 -o /tmp/requirements.check --quiet
           diff <(grep -v '^#' requirements.txt) <(grep -v '^#' /tmp/requirements.check) \
             || { echo "::error::requirements.txt does not match pyproject.toml; recompile it (see pyproject.toml)"; exit 1; }

@@ -13,8 +13,8 @@ Posts are sharded across worker processes because the work is CPU-bound tree
 building over tens of thousands of posts, and each shard carries its own slice
 of the id maps so nothing is shared between processes.
 
-    python scripts/generate_processed_data.py
-    python scripts/generate_processed_data.py --posts dump/posts.jsonl \
+    uv run python scripts/generate_processed_data.py
+    uv run python scripts/generate_processed_data.py --posts dump/posts.jsonl \
         --comments dump/comments.jsonl --output-dir processed_data
 
 Its output is what ``populate_db.py`` reads, so run that next.
