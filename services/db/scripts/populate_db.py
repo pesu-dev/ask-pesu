@@ -77,14 +77,24 @@ def print_progress(done: int, total: int, started: float) -> None:
     sys.stdout.flush()
 
 
-def build_vector_store(contract: contract_mod.Contract, client: QdrantClient) -> QdrantVectorStore:
+def build_vector_store(
+    contract: contract_mod.Contract, client: QdrantClient, encode_batch_size: int
+) -> QdrantVectorStore:
     """Open the collection for writing, in the same mode the listener uses.
 
     ``sparse_vector_name`` has to be passed explicitly: langchain_qdrant
     defaults it to "langchain-sparse", which is not what the collection calls
     it. HYBRID also makes ``sparse_embedding`` mandatory.
+
+    Args:
+        contract: The loaded contract.
+        client: Qdrant client with write access.
+        encode_batch_size: Documents the embedding model processes at once.
+            Bounds peak GPU memory and nothing else -- a vector does not depend
+            on how many were computed alongside it -- so lowering it cannot make
+            this write documents the listener would embed differently.
     """
-    embeddings = HuggingFaceEmbeddings(model_name=contract.model)
+    embeddings = HuggingFaceEmbeddings(model_name=contract.model, encode_kwargs={"batch_size": encode_batch_size})
     contract_mod.validate_embedding(contract, embeddings)
 
     # Say which device this is about to use, because the difference is not
@@ -158,7 +168,16 @@ def main() -> int:
     parser.add_argument("--data-dir", type=Path, default=Path("processed_data"), help="Processed post JSON files.")
     parser.add_argument("--completed-dir", type=Path, default=Path("completed"), help="Where finished files move to.")
     parser.add_argument(
-        "--batch-size", type=int, default=128, help="Documents embedded per upsert. Filled across files, not per file."
+        "--batch-size", type=int, default=128, help="Documents per upsert. Filled across files, not per file."
+    )
+    # sentence-transformers sorts by length before batching, so the longest
+    # threads in the corpus arrive in one batch together. At 8k tokens each that
+    # is enough to exhaust a 6 GB card partway through a run: measured here, the
+    # default of 32 asked for 1.11 GiB with 869 MiB free and killed the run at
+    # file 4,322. Only peak memory depends on this, not the vectors, so the
+    # default is set to survive a laptop GPU rather than to saturate a large one.
+    parser.add_argument(
+        "--encode-batch-size", type=int, default=8, help="Documents the embedding model encodes at once."
     )
     parser.add_argument(
         "--dry-run",
@@ -196,7 +215,7 @@ def main() -> int:
         print("Every payload matches the contract. Nothing was written.")
         return 0
 
-    vector_store = build_vector_store(contract, client)
+    vector_store = build_vector_store(contract, client, args.encode_batch_size)
     args.completed_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"Writing {contract.name!r} from the dump; anything already stored is replaced.")
