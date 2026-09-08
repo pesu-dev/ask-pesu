@@ -86,6 +86,22 @@ def build_vector_store(contract: contract_mod.Contract, client: QdrantClient) ->
     """
     embeddings = HuggingFaceEmbeddings(model_name=contract.model)
     contract_mod.validate_embedding(contract, embeddings)
+
+    # Say which device this is about to use, because the difference is not
+    # marginal: measured on this corpus, the contracted model runs at roughly
+    # 0.5 documents per second on CPU and 137 on a consumer GPU. A full backfill
+    # is therefore either five minutes or the better part of a day, and nothing
+    # else in the output distinguishes the two until the ETA has been wrong for
+    # an hour. sentence-transformers picks the device itself; this only reports
+    # what it chose.
+    device = str(getattr(getattr(embeddings, "_client", None), "device", "unknown"))
+    print(f"Embedding on {device}.")
+    if device.startswith("cpu"):
+        print(
+            "  WARNING: no GPU in use. requirements.txt pins the CPU build of torch, which is "
+            "right for the Spaces but makes a full backfill take many hours. See the README "
+            "for installing a CUDA torch over the synced environment."
+        )
     if not contract.sparse_vector_name:
         return QdrantVectorStore(
             client=client,

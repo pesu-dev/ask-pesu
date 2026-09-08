@@ -570,6 +570,21 @@ discussion would embed differently depending on which path wrote it.
 derivation, same text layout, same payload keys, same dense and sparse vectors, all read from
 the contract.
 
+**Use a GPU if the machine has one.** `requirements.txt` pins `torch==2.14.0+cpu`, which is right
+for the Spaces — they are CPU-only, and the CUDA wheels added about 4 GB to the image — but it
+also means `torch.cuda.is_available()` is False locally and sentence-transformers quietly selects
+the CPU. Measured on this corpus, the contracted model runs at **0.5 documents per second on CPU
+and 137 on an RTX 3060**: the same backfill is either most of a day or about five minutes. The
+script prints which device it chose and warns when that device is the CPU.
+
+To install a CUDA build over the synced environment, without touching `requirements.txt` or the
+lockfile that the Spaces depend on:
+
+```bash
+uv pip uninstall torch
+uv pip install --index-url https://download.pytorch.org/whl/cu126 torch   # match your CUDA
+```
+
 ```bash
 python scripts/populate_db.py --data-dir processed_data --dry-run   # check first
 python scripts/populate_db.py --data-dir processed_data
