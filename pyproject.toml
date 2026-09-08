@@ -10,9 +10,10 @@
 #         --python-platform linux --python-version 3.12 -o requirements.txt
 #
 # `--group cpu` is not optional. It is what puts torch in the file at all, and
-# therefore what selects the +cpu build; compiling without it resolves torch
-# transitively from PyPI and adds roughly 4 GB of CUDA libraries to both images.
-# CI recompiles with exactly this command and fails on any difference.
+# therefore what selects the +cpu build. Compiling without it was measured: torch
+# resolves transitively from PyPI as the CUDA build and drags in 15 `nvidia-*`
+# packages, roughly 4 GB, into both images. CI recompiles with exactly this
+# command and fails on any difference.
 #
 # Both extras go into that single file, so each image installs the union and
 # carries a little it does not import. That is deliberate: it resolves the
@@ -91,8 +92,16 @@ dev = [
 #
 #     uv sync --extra api --extra db --no-group cpu --group gpu
 #
-# Both resolve the same torch VERSION and differ only in the build, so moving a
-# machine to CUDA cannot quietly change the library that produces the vectors.
+# Both currently resolve to the same torch VERSION and differ only in the build,
+# so moving a machine to CUDA does not change the library that produces the
+# vectors. They are separate resolutions, though, recorded separately in
+# uv.lock: if PyTorch ever ships a release to one index and not the other, a
+# `uv lock --upgrade` could move one and not the other. Check uv.lock rather
+# than assuming.
+#
+# Disabling BOTH groups (`--no-default-groups`) is the one way to get an
+# unintended torch: nothing declares it directly any more, so it resolves from
+# PyPI as the CUDA build. That only happens if asked for explicitly.
 cpu = [
     "torch>=2.10.0",
 ]
@@ -129,6 +138,12 @@ explicit = true
 # The CUDA index the `gpu` group resolves against. This URL is the single place
 # that decides which CUDA release a GPU install targets -- change it here to
 # match a different driver, rather than installing torch by hand.
+#
+# uv's own `torch-backend = "auto"` setting would replace all of this and pick an
+# index from the detected driver. It is deliberately not used: it makes the
+# resolution depend on the machine doing the resolving, and requirements.txt is
+# compiled on a contributor's laptop and installed on a linux/amd64 Space. A
+# laptop with a GPU would compile CUDA wheels into the file the Spaces install.
 [[tool.uv.index]]
 name = "pytorch-cu126"
 url = "https://download.pytorch.org/whl/cu126"

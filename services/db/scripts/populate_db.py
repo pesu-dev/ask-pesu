@@ -109,9 +109,12 @@ def build_vector_store(
     if device.startswith("cpu"):
         print(
             "  WARNING: no GPU in use. The default `cpu` dependency group pins the CPU build "
-            "of torch, which is right for the Spaces but makes a full backfill take many hours. "
-            "For a CUDA build, re-sync with: "
-            "uv sync --extra api --extra db --no-group cpu --group gpu"
+            "of torch, which is right for the Spaces but makes a full backfill take many hours.\n"
+            "  For a CUDA build:\n"
+            "    uv sync --extra api --extra db --no-group cpu --group gpu\n"
+            "  then carry the same flags on every run, because `uv run` syncs first and would "
+            "otherwise reinstall the CPU build:\n"
+            "    uv run --no-group cpu --group gpu python scripts/populate_db.py --data-dir ..."
         )
     if not contract.sparse_vector_name:
         return QdrantVectorStore(
