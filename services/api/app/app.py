@@ -165,8 +165,11 @@ async def test_stream() -> AsyncIterator[str]:
     """Replay a canned answer in the real NDJSON format, for ``ENV=test``.
 
     Lets the frontend be developed against realistic streaming -- including
-    thinking steps, markdown, LaTeX and a Sources list -- without a Qdrant
-    instance, an HF token, or spending inference quota.
+    thinking steps, markdown, LaTeX and citations -- without a Qdrant instance,
+    an HF token, or spending inference quota.
+
+    It must emit the same event types in the same order as the real pipeline,
+    or the mode stops exercising the surface it exists to exercise.
     """
     # Step 1
     yield json.dumps({"type": "step", "content": "Searching documents...\n"}) + "\n"
@@ -178,6 +181,29 @@ async def test_stream() -> AsyncIterator[str]:
     await asyncio.sleep(0.02)
     # Step 3
     yield json.dumps({"type": "step", "content": "Generating answer...\n"}) + "\n"
+    await asyncio.sleep(0.02)
+
+    # Citations arrive before the first token, exactly as in the real stream.
+    yield (
+        json.dumps(
+            {
+                "type": "sources",
+                "sources": [
+                    {
+                        "permalink": "https://reddit.com/r/PESU/comments/1phgfw0/",
+                        "title": '[Question] How does "relative grading" work at our clg?',
+                        "snippet": "relative grading has always been a mystery in pes, the coe decides a cutoff...",
+                    },
+                    {
+                        "permalink": "https://reddit.com/r/PESU/comments/1ikhflo/",
+                        "title": "GPA Doubt",
+                        "snippet": "wrt to second year idt it would be too difficult as long as you put in efforts...",
+                    },
+                ],
+            }
+        )
+        + "\n"
+    )
     await asyncio.sleep(0.02)
 
     tokens = [
@@ -196,9 +222,7 @@ async def test_stream() -> AsyncIterator[str]:
         "#### Example\n\n",
         "- Course 1: 4 credits, grade **A** = 9 points\n",
         "- Course 2: 2 credits, grade **S** = 10 points\n\n",
-        "So the SGPA is **(4 x 9 + 2 x 10) / 6 = 9.33**.\n\n",
-        "**Sources**\n\n",
-        "- https://www.reddit.com/r/PESU/\n",
+        "So the SGPA is **(4 x 9 + 2 x 10) / 6 = 9.33**.\n",
     ]
     for t in tokens:
         yield json.dumps({"type": "token", "content": t}) + "\n"

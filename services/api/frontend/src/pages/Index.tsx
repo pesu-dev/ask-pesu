@@ -29,6 +29,7 @@ import { useHealth } from "@/hooks/use-health";
 import {
   Conversation,
   Message,
+  Source,
   createConversation,
   createId,
 } from "@/lib/chat-store";
@@ -151,6 +152,9 @@ export default function Index() {
     let pendingTokens = "";
     let flushScheduled = false;
     let streamClosed = false; // set on done OR error; no further tokens are written
+    // Citations from the backend's `sources` event. Kept out of the message
+    // until `done` so a retry cannot leave a half-written list behind.
+    let streamSources: Source[] = [];
 
     const flush = () => {
       flushScheduled = false;
@@ -203,6 +207,14 @@ export default function Index() {
           } else if (evt.type === "token") {
             pendingTokens += evt.content;
             scheduleFlush();
+          } else if (evt.type === "sources") {
+            // Map the wire shape onto the stored one here, so nothing already
+            // in localStorage has to change.
+            streamSources = evt.sources.map((src) => ({
+              title: src.title,
+              url: src.permalink,
+              snippet: src.snippet,
+            }));
           } else if (evt.type === "done") {
             streamClosed = true;
             flush();
@@ -211,7 +223,10 @@ export default function Index() {
               return {
                 ...m,
                 content: cleanContent,
-                sources,
+                // The backend's citations are the documents actually retrieved,
+                // so they win. extractSources only covers a model that printed
+                // a list anyway, and conversations saved before this existed.
+                sources: streamSources.length > 0 ? streamSources : sources,
                 status: undefined,
               };
             });
@@ -323,6 +338,7 @@ export default function Index() {
     let pendingTokens = "";
     let flushScheduled = false;
     let streamClosed = false;
+    let streamSources: Source[] = [];
 
     const flush = () => {
       flushScheduled = false;
@@ -360,6 +376,14 @@ export default function Index() {
           } else if (evt.type === "token") {
             pendingTokens += evt.content;
             scheduleFlush();
+          } else if (evt.type === "sources") {
+            // Map the wire shape onto the stored one here, so nothing already
+            // in localStorage has to change.
+            streamSources = evt.sources.map((src) => ({
+              title: src.title,
+              url: src.permalink,
+              snippet: src.snippet,
+            }));
           } else if (evt.type === "done") {
             streamClosed = true;
             flush();
@@ -368,7 +392,10 @@ export default function Index() {
               return {
                 ...m,
                 content: cleanContent,
-                sources,
+                // The backend's citations are the documents actually retrieved,
+                // so they win. extractSources only covers a model that printed
+                // a list anyway, and conversations saved before this existed.
+                sources: streamSources.length > 0 ? streamSources : sources,
                 status: undefined,
               };
             });

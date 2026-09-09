@@ -30,11 +30,21 @@ export interface HistoryEntry {
   content: string;
 }
 
+// A thread the answer draws on, as sent by the backend. Deliberately not the
+// same shape as the stored `Source`: mapping between them at the event boundary
+// means conversations already in localStorage need no migration.
+export interface StreamSource {
+  permalink: string;
+  title: string;
+  snippet: string;
+}
+
 // One line of the /ask stream. Mirrors AskStreamEventModel in
 // services/api/app/models/response/ask.py -- change both together.
 export type StreamEvent =
   | { type: "step"; content: string }
   | { type: "token"; content: string }
+  | { type: "sources"; sources: StreamSource[] }
   | { type: "done" }
   | { type: "error"; content: string };
 
@@ -188,12 +198,13 @@ export async function askStream({
 }
 
 /**
- * Pull the citation list out of an answer and return the prose without it.
+ * Pull a trailing citation list out of an answer and return the prose without it.
  *
- * The system prompt asks the model to end with a `**Sources:**` list of markdown
- * links, which the UI renders as source cards instead of raw text. Models do not
- * follow that format perfectly, so this tolerates variations in the heading and
- * falls back to scanning for bullet-pointed links anywhere in the answer.
+ * This is now a FALLBACK. Citations arrive as a `sources` stream event carrying
+ * the threads retrieval actually selected, which is exact; the system prompt no
+ * longer asks the model to reprint them. Two cases still need this:
+ * conversations saved to localStorage before the event existed, and a model that
+ * writes a Sources list regardless of being told not to.
  */
 export function extractSources(content: string): { cleanContent: string; sources: Source[] } {
   const sources: Source[] = [];
@@ -216,33 +227,13 @@ export function extractSources(content: string): { cleanContent: string; sources
     }
   }
 
-  // If no sources found in dedicated section, extract from inline markdown links
-  if (sources.length === 0) {
-    const inlineMatches = content.matchAll(/[-•*]\s+\[([^\]]+)\]\((https?:\/\/[^\)]+)\)/g);
-    for (const match of inlineMatches) {
-      const [, linkText, url] = match;
-      sources.push({
-        title: linkText.trim(),
-        url,
-        snippet: linkText.trim(),
-      });
-    }
-  }
-
-  // Strip source citations from the displayed answer after extraction.
-  let cleanContent = content
-    .replace(/\n*\*?\*?Sources?\*?\*?:?\s*\n+([\s\S]*)$/i, "") // Remove Sources section
-    .trim();
-
-  // Remove lines that are just markdown links (source citations)
-  cleanContent = cleanContent
-    .split('\n')
-    .filter(line => {
-      const trimmed = line.trim();
-      // Skip lines that are just bullet-pointed markdown links
-      return !trimmed.match(/^[-•*]\s+\[([^\]]+)\]\((https?:\/\/[^\)]+)\)$/);
-    })
-    .join('\n')
+  // Strip a trailing Sources section, and nothing else. This used to also
+  // delete any line anywhere that was a bullet-pointed markdown link, which was
+  // safe only while the system prompt guaranteed such lines were citations. It
+  // no longer asks for them, so a link in a genuine list is just part of the
+  // answer and must survive.
+  const cleanContent = content
+    .replace(/\n*\*?\*?Sources?\*?\*?:?\s*\n+([\s\S]*)$/i, "")
     .trim();
 
   return { cleanContent, sources };

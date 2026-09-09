@@ -15,7 +15,7 @@ what makes them worth testing and cheap to test.
 import math
 
 import pytest
-from app.rag import blend, community_factor, deduplicate, diversify, recency_factor
+from app.rag import blend, community_factor, deduplicate, describe_sources, diversify, recency_factor
 from langchain_core.documents.base import Document
 
 DAY = 86400.0
@@ -181,3 +181,36 @@ class TestDeduplicate:
 
     def test_empty_input(self):
         assert deduplicate([]) == []
+
+
+class TestDescribeSources:
+    """Citations come from the documents themselves, not from the model's prose."""
+
+    LAYOUT = "TITLE: Placement policy explained\nCONTENT: body\nCOMMENT TREE: If you get a T1 you cannot sit again"
+
+    def test_reads_the_title_and_a_snippet_of_the_discussion(self):
+        (out,) = describe_sources([doc(text=self.LAYOUT, permalink="https://reddit.com/a")])
+        assert out["title"] == "Placement policy explained"
+        assert out["snippet"].startswith("If you get a T1")
+        assert out["permalink"] == "https://reddit.com/a"
+
+    def test_collapses_documents_that_share_a_thread(self):
+        docs = [doc(text=self.LAYOUT, permalink="https://reddit.com/a") for _ in range(3)]
+        assert len(describe_sources(docs)) == 1
+
+    def test_falls_back_to_the_permalink_when_there_is_no_title(self):
+        (out,) = describe_sources([doc(text="no layout here", permalink="https://reddit.com/b")])
+        assert out["title"] == "https://reddit.com/b"
+        # An empty preview is worse than a rough one.
+        assert out["snippet"] == "no layout here"
+
+    def test_skips_documents_with_no_permalink(self):
+        assert describe_sources([doc(text=self.LAYOUT)]) == []
+
+    def test_truncates_long_snippets(self):
+        long_doc = doc(text="TITLE: t\nCONTENT: c\nCOMMENT TREE: " + "word " * 500, permalink="https://reddit.com/c")
+        (out,) = describe_sources([long_doc], snippet_chars=50)
+        assert len(out["snippet"]) == 50
+
+    def test_no_documents(self):
+        assert describe_sources([]) == []

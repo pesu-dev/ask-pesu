@@ -154,6 +154,48 @@ def deduplicate(docs: list[Document]) -> list[Document]:
     return out
 
 
+def describe_sources(docs: list[Document], snippet_chars: int = 200) -> list[dict]:
+    """Turn retrieved documents into the citations the stream reports.
+
+    These are the threads retrieval actually selected, which is the whole point:
+    the alternative is asking the model to reprint links it was shown and
+    parsing them back out of its prose, where it can drop one, invent one, or
+    format the list in a way the parser does not expect.
+
+    Documents are stored as a TITLE line, a CONTENT line and then the COMMENT
+    TREE, so the title is recoverable without another payload key. Anything that
+    does not match that layout falls back to the permalink rather than raising
+    -- a citation is not worth failing a request over.
+
+    Several documents can share a post and therefore a permalink, so the list is
+    collapsed to one entry per thread, keeping the first (best-ranked).
+
+    Args:
+        docs: Documents in final rank order.
+        snippet_chars: How much of the discussion to include as a preview.
+
+    Returns:
+        One dict per distinct thread, in rank order.
+    """
+    out: list[dict] = []
+    seen: set[str] = set()
+    for doc in docs:
+        permalink = doc.metadata.get("permalink")
+        if not permalink or permalink in seen:
+            continue
+        seen.add(permalink)
+
+        first_line, _, rest = doc.page_content.partition("\n")
+        title = first_line[len("TITLE: ") :].strip() if first_line.startswith("TITLE: ") else ""
+        _, _, tree = rest.partition("COMMENT TREE:")
+        # Prefer the discussion, fall back to whatever followed the title, and
+        # finally to the raw document -- an empty preview is worse than a rough
+        # one.
+        snippet = " ".join((tree or rest or doc.page_content).split())[:snippet_chars]
+        out.append({"permalink": permalink, "title": title or permalink, "snippet": snippet})
+    return out
+
+
 def recency_factor(created_utc: float | None, now: float, grace_days: float, half_life_days: float) -> float:
     """Score how current a thread is, from 1.0 (fresh) down towards 0.0 (ancient).
 
@@ -893,6 +935,11 @@ class RetrievalAugmentedGenerator:
             # which is what lets the stream report its own sources.
             search_query, docs = await self.retrieve(query, chat_history)
             logging.info(f"Retrieved {len(docs)} documents for {search_query!r}")
+
+            # Before the first token, so a client can render citations while the
+            # answer is still being written. Emitted even when empty, so the UI
+            # can distinguish "no sources" from "sources not sent yet".
+            yield json.dumps({"type": "sources", "sources": describe_sources(docs)}) + "\n"
 
             async for chunk in answer_chain.astream(
                 {

@@ -138,11 +138,8 @@ rag:
       You must answer using knowledge only from the r/PESU subreddit, which will be provided to you as context.
       Always answer accurately, comprehensively and in depth, based on the context, optionally formatted in markdown.
 
-      End your response with EXACTLY this format and nothing after:
-
-      **Sources:**
-      - [Brief description of source](URL)
-      - [Another description](URL)
+      Do NOT end with a list of sources or links. The threads you were given are reported to the user
+      separately and exactly; repeating them wastes your response and risks citing a link you were never shown.
 
       If the context does not contain the answer, respond with "I'm sorry, I don't have that information."
       If asked anything unrelated to PES University, politely decline.
@@ -161,6 +158,11 @@ rag:
       - Admission routes: KCET, JEE Mains, management quota
       - Grading: SGPA (semester GPA), CGPA (cumulative GPA)
       - Expand any other abbreviations including the above when they appear in the question.
+
+      CRITICAL: expand an abbreviation ALONGSIDE the original, never in place of it.
+      Write "CSE (Computer Science Engineering)", not "Computer Science Engineering".
+      Retrieval searches a lexical index as well as a semantic one, and the threads themselves
+      say "CSE" -- replacing the abbreviation deletes the exact token that matches them.
 
       Rewrite rules:
       1. ONLY use the chat history if the user's question is ambiguous or refers to previous context (e.g., pronouns like 'he', 'she', 'it', 'they', 'that').
