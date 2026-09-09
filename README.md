@@ -20,7 +20,7 @@ means one schema contract, shared by everything.
 - [Running the services](#running-the-services) · [Backfilling history](#backfilling-history) · [Configuration](#configuration)
 - [The frontend](#the-frontend) · [Quota and cooldowns](#quota-and-cooldowns) · [Failure behaviour](#failure-behaviour)
 - [Testing](#testing) · [Linting and formatting](#linting-and-formatting) · [Continuous integration](#continuous-integration)
-- [Deployment](#deployment) · [Rollback](#rollback) · [Contributing](#contributing) · [Known issues](#known-issues)
+- [Deployment](#deployment) · [Rollback](#rollback) · [Contributing](#contributing)
 
 ---
 
@@ -1047,28 +1047,6 @@ Before opening a PR: `uv run pre-commit run --all-files`.
 
 Reviewers are assigned by [`.github/CODEOWNERS`](.github/CODEOWNERS). Changes to
 `conf/collection.yaml` affect both services and always require owner review.
-
-## Known issues
-
-Only work that is actually pending lives here. Deliberate limits are documented where the
-subsystem is explained, rather than collected as though someone intends to fix them.
-
-- **Nothing detects a stale answer** ([#77](https://github.com/pesu-dev/ask-pesu/issues/77)).
-  Ranking has no recency term, deliberately — see [Configuration](#configuration) — so a 2021
-  thread about fees or cutoffs is cited as confidently as a 2026 one. Handling that properly
-  means judging whether the *question* is time-sensitive, not penalising every old document.
-- **The answer prompt gets no conversation history**
-  ([#78](https://github.com/pesu-dev/ask-pesu/issues/78)). Retrieval resolves a follow-up like "what
-  about ECE?" into a standalone query and finds the right threads, but the model writing the
-  answer receives the question exactly as typed, with no history to interpret it against. Adding
-  a `MessagesPlaceholder` is a small change; the reason it is not made here is that it needs a
-  matching system-prompt rule forbidding the model to answer *from* the history rather than from
-  the retrieved context, and that pairing cannot be verified without spending inference quota.
-- **The reranker reads at most ~512 tokens**
-  ([#80](https://github.com/pesu-dev/ask-pesu/issues/80)). Documents are stored title-and-body first, so what
-  gets truncated on a long thread is the comment tree — the part that answers the question. The
-  real fix is chunking at write time in `services/db` so documents are answer-sized, which needs
-  a re-index.
 
 ## License
 
