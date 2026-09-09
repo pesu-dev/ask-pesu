@@ -714,7 +714,7 @@ Runtime behaviour that is *not* part of the collection contract lives in
 | `rerank.score_threshold` | `0.3` | **The** relevance cutoff, on the cross-encoder's 0–1 sigmoid scale |
 | `rerank.top_n` | `6` | Documents that reach the answer prompt |
 | `rerank.max_per_post` | `3` | Cap per thread, so one discussion cannot fill the context |
-| `ranking.recency_weight` | `0.15` | How much staleness may reorder results |
+| `ranking.recency_weight` | `0.0` | Off. Age is a poor proxy for staleness here; see below |
 | `ranking.grace_days` | `365` | Age below which nothing is penalised at all |
 | `ranking.half_life_days` | `730` | Days after the grace period to halve the recency factor |
 | `ranking.community_weight` | `0.0` | Off; see below |
@@ -728,17 +728,26 @@ only excluded documents below a cosine similarity of **−0.4**. The cross-encod
 always the only real filter, and it is now the only one. Startup refuses the stale key with an
 error explaining this.
 
-**On the ranking weights.** The multiplier is `1 - wr - wc + wr·recency + wc·community`, bounded
-in `[1-wr-wc, 1]` — a pure penalty, so nothing can score above its own relevance. At the shipped
-weights the largest relevance gap it can invert is about **18%**, which makes it a tie-breaker,
-not a re-ranker. Raising the weights until the ordering visibly changes is how you break
-retrieval, not how you tune it.
+**On the ranking weights — both ship at `0.0`.** The multiplier is
+`1 - wr - wc + wr·recency + wc·community`, bounded in `[1-wr-wc, 1]`, so it is a pure penalty and
+nothing can score above its own relevance. That bound suggests a weight of `0.15` can only invert
+a relevance gap of about 18% — a tie-breaker.
 
-`community_weight` ships at `0.0` and is wired only so it can be switched on. The stored `score`
-is the **submission's**, so it is identical across every document from one post — no
-discriminating power exactly where the ranking has to choose — and it cannot go negative, so a
-downvoted answer looks like an unrated one. The root comment's score is the signal worth having
-and is not in the collection yet.
+Measured, that is wrong. Across eight representative questions the cross-encoder scores of the
+top six documents span **0.2% to 11%**, and in **8 of 8** the whole set fitted inside a 15%
+swing. At that weight recency is not breaking ties; it *is* the sort order, with relevance only
+choosing the candidates.
+
+And on this corpus, sorting by age is close to backwards. r/PESU directs repeated questions to
+existing threads, and its best answers are old: one contributor alone wrote **1,776 root
+comments — 3.8% of every document in the collection** — at a median score of 5 against a corpus
+median of 2. Ranking that down by age discards what the community treats as canonical.
+
+The signal actually wanted is endorsement and authorship. Both are measured on the wrong object
+today: `score` and `author` are the **submission's**, identical across every document from one
+post, saying nothing about who wrote the answer or how it was received — and `score` cannot go
+negative, so a downvoted answer looks like an unrated one. Fixing that needs a
+`conf/collection.yaml` key and a payload-only backfill; see [Known issues](#known-issues).
 
 Prompt and model changes go here first — they are configuration, not code. Anything that would
 make already-stored vectors unreadable belongs in `conf/collection.yaml` instead.

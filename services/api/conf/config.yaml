@@ -99,9 +99,30 @@ rag:
   #
   # The multiplier is `1 - wr - wc + wr*recency + wc*community`, bounded in
   # [1-wr-wc, 1] -- a pure penalty that cannot boost anything above its own
-  # relevance. At the weights below the largest relevance gap it can invert is
-  # about 18%, which makes this a tie-breaker, NOT a re-ranker. Raising the
-  # weights until it visibly reorders results is how you break retrieval.
+  # relevance.
+  #
+  # BOTH WEIGHTS SHIP AT ZERO. Read this before raising either.
+  #
+  # The bound above is real but misleading. It says a weight of 0.15 can only
+  # invert a relevance gap up to ~18%, which sounds like a tie-breaker. Measured
+  # on 2026-09-09 across eight representative questions, the cross-encoder
+  # scores of the top six documents -- the ones that actually reach the prompt --
+  # span between 0.2% and 11%, and in 8 of 8 queries the whole set fitted inside
+  # a 15% swing. So a weight of 0.15 does not break ties: it becomes the primary
+  # sort, and relevance only chooses which documents are in the running.
+  #
+  # That matters because on this corpus, ordering by recency is close to
+  # backwards. r/PESU's best answers are old: it directs repeated questions to
+  # existing threads, and one contributor alone wrote 1,776 root comments --
+  # 3.8% of every document in the collection -- at a median score of 5 against a
+  # corpus median of 2. Demoting that content by age loses the answers the
+  # community itself treats as canonical.
+  #
+  # The signal actually wanted here is endorsement and authorship, not age, and
+  # both are measured on the wrong object today: `score` and `author` are the
+  # SUBMISSION's, so they are identical for every document from one post and say
+  # nothing about who wrote the answer or how it was received. Fixing that needs
+  # a conf/collection.yaml key and a payload-only backfill.
   ranking:
     # Community endorsement. OFF, and wired only so it can be switched on: the
     # stored `score` is the SUBMISSION's, so it is identical for every document
@@ -115,10 +136,13 @@ rag:
     # median is 2 against the post median of 8.
     reference_score: 100
 
-    # Staleness. r/PESU answers about fees, faculty and cutoffs expire; answers
-    # about how SGPA is computed do not. One weight serves both, which is the
-    # reason it is small.
-    recency_weight: 0.15
+    # Staleness. OFF. Answers about fees, faculty and cutoffs do expire, but
+    # answers about how SGPA is computed do not, and one global weight cannot
+    # tell those apart -- it just demotes everything old, including the threads
+    # the subreddit itself points people at. If this is ever switched on it
+    # should be gated on the question looking time-sensitive, not applied to
+    # every query.
+    recency_weight: 0.0
     # Age below which a document is treated as current, with no penalty at all.
     # Post creation time tracks thread age closely -- 89% of root comments are
     # written within a day of the post -- so this is measuring the right thing.
