@@ -274,10 +274,10 @@ def rank(docs: list[Document]) -> list[Document]:
     from a snapshot of the corpus and would drift as it grew.
 
     **The sort is stable, and that is load-bearing.** Documents arrive in
-    cross-encoder order, and two-thirds of the corpus sits at three upvotes or
-    fewer, so ties are common -- and a tie keeps the relevance order it came in
-    with. The effect is "upvotes where they differ, relevance where they do
-    not", without either being expressed as a weight.
+    cross-encoder order, and most answers carry very few upvotes, so ties are
+    the common case -- and a tie keeps the relevance order it came in with. The
+    effect is "upvotes where they differ, relevance where they do not", without
+    either being expressed as a weight.
 
     A missing score sorts as zero: neither endorsed nor rejected, so it sits
     above genuinely downvoted answers and below genuinely upvoted ones.
@@ -668,8 +668,8 @@ class RetrievalAugmentedGenerator:
         Documents from the same post are grouped under one heading. Each is
         stored as a TITLE line, a CONTENT line and then the COMMENT TREE, where
         the first two are the submission's and identical across every comment
-        tree on that post. Corpus-wide that prefix is 54% of a median document,
-        so repeating it per document is pure waste.
+        tree on that post -- often a large share of the document, so repeating
+        it once per answer is waste.
 
         Nothing caps how many documents one post contributes, so this is what
         keeps several answers from the same post affordable: they share one

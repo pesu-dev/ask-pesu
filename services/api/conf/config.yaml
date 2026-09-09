@@ -49,27 +49,27 @@ rag:
     # written in that vocabulary hybrid is clearly ahead. Re-check with
     # scripts/eval_retrieval.py rather than trusting a number recorded here.
     mode: hybrid
-    # Documents per phrasing. Together with `query_expansions` this is the only
-    # control on the candidate pool: the original query is searched alongside
-    # each phrasing, so the pool is at most (query_expansions + 1) * k before
-    # deduplication -- 60 at these settings.
+    # Documents fetched per phrasing. With `query_expansions` this sets the
+    # candidate pool, since the original query is searched alongside each
+    # phrasing: the pool is (query_expansions + 1) * k before deduplication.
     #
-    # The searches are concurrent, so `k` costs almost nothing in network time.
-    # What it buys is cross-encoder work, paid in full before the first token
-    # reaches the user: roughly 43 ms per document on two CPU threads, linear,
-    # so a pool of 60 is about 2.6s of silence, and a Space's shared vCPUs are
-    # slower again. Nothing downstream caps the pool, which is deliberate.
+    # The searches run concurrently, so this costs little in network time. What
+    # it buys is cross-encoder work, which grows with the pool and is paid in
+    # full before the first token reaches the user. That makes this the dial
+    # between recall and time-to-first-token, and nothing downstream caps the
+    # pool, so it is the only thing standing between a large value and a long
+    # silence. Time a representative question after changing it.
     k: 15
     # Alternative phrasings the LLM writes for each question, to reach
     # discussions whose wording the question misses. Each one costs a search and
     # its `k` documents of cross-encoder time; they are written in a single LLM
     # response, so the LLM cost does not scale with this.
     query_expansions: 3
-    # Minimum relevance, applied to the normalised cosine score. DENSE ONLY, and
-    # it must be null under hybrid: Reciprocal Rank Fusion returns scores around
-    # 0.02, so any value that looks reasonable for a cosine similarity would
-    # discard every document. Startup refuses the combination rather than
-    # letting it silently return nothing.
+    # Minimum relevance, applied to the cosine score. DENSE ONLY, and it must be
+    # null under hybrid: fusing two rankings produces a score derived from rank
+    # position rather than similarity, on a far smaller scale, so a threshold
+    # chosen for cosine discards every document. Startup refuses the combination
+    # rather than letting it silently return nothing.
     score_threshold: null
 
   rerank:
@@ -102,10 +102,10 @@ rag:
     # Not a filter: everything it drops has already cleared the cutoff, so
     # raising it costs context and lowers no quality bar.
     top_n: 6
-    # Cross-encoder passes allowed at once. One, because a cpu-basic Space has
-    # two vCPUs and concurrent torch inferences thrash rather than overlap --
-    # serialising makes p95 better, not worse. Worth raising only on hardware
-    # with cores to spare.
+    # Cross-encoder passes allowed at once. Serialised, because the Spaces have
+    # few cores and concurrent torch inferences contend for them rather than
+    # overlapping -- letting requests queue is faster than letting them fight.
+    # Worth raising only on hardware with cores to spare.
     concurrency: 1
 
   # How the retrieved threads are described in the `sources` stream event.

@@ -723,7 +723,7 @@ Runtime behaviour that is *not* part of the collection contract lives in
 | `llm.*.timeout` | `120` | Seconds to wait on the provider before failing the stream |
 | `retrieval.mode` | `hybrid` | `dense` is vector search alone; `hybrid` also queries the BM25 sparse vector and lets Qdrant fuse the two |
 | `retrieval.query_expansions` | `3` | Alternative phrasings written per question; the original is searched too, so `query_expansions + 1` searches run |
-| `retrieval.k` | `15` | Documents **per phrasing**, and the only control on pool size — 4 concurrent searches run, so the pool is at most `4 × k`. Costs ~43 ms per document of cross-encoder time before the first token |
+| `retrieval.k` | `15` | Documents **per phrasing**. With `query_expansions` it sets the candidate pool, and so the cross-encoder work paid before the first token |
 | `retrieval.score_threshold` | `null` | Cosine cutoff, **dense only**. Must stay `null` under hybrid; startup refuses otherwise |
 | `rerank.enabled` | `true` | Turning it off skips the torch and sentence-transformers load at startup. Not permitted under hybrid |
 | `rerank.model` | `cross-encoder/ms-marco-MiniLM-L6-v2` | The cross-encoder |
@@ -742,12 +742,10 @@ refuses the older `search_kwargs` shape with an error explaining this.
 
 **The cross-encoder filters; endorsement ranks.** That split is measured, not stylistic.
 
-Its scores barely separate the documents that reach the prompt: across eight representative
-questions the top six span **0.2% to 11%**. So it cannot rank. It also cannot sharply filter —
-against the labelled questions in `eval_retrieval.py`, the scores of known-correct documents and
-of everything else overlap heavily (medians 0.97 and 0.76), so raising the gate discards right
-answers about as fast as wrong ones. Its job is to drop the obviously irrelevant tail, and
-something else has to choose between the survivors.
+Its scores barely separate the documents that reach the prompt, so it cannot rank them. It also
+cannot sharply filter: the scores it gives correct answers and irrelevant ones overlap enough
+that raising the gate discards the right ones about as fast as the wrong ones. Its job is to drop
+the obviously off-topic tail, and something else has to choose between the survivors.
 
 That something is **upvotes on the answer**, read from `root_comment_score`. The plain `score` is
 the **submission's** — identical across every document from one post, so it ranks none of them,
@@ -760,9 +758,9 @@ with relevance, and dropping that multiplication removed the last configuration 
 from a snapshot of the corpus — the kind that silently drifts as the collection grows.
 
 **The sort is stable, and that is load-bearing.** Documents arrive in cross-encoder order, and
-two-thirds of the corpus sits at three upvotes or fewer, so ties are common — and a tie keeps the
-relevance order it came in with. The behaviour is *upvotes where they differ, relevance where
-they do not*, with neither expressed as a weight.
+most answers carry very few upvotes, so ties are the common case — and a tie keeps the relevance
+order it came in with. The behaviour is *upvotes where they differ, relevance where they do not*,
+with neither expressed as a weight.
 
 **Nothing caps how many answers one thread contributes.** A document is one comment tree, so
 several documents from one post are several *different people answering the same question*,
@@ -776,9 +774,8 @@ everything it drops has already cleared the cutoff.
 
 **There is deliberately no recency term.** Age is not a proxy for usefulness here. r/PESU
 directs repeated questions to existing threads, so its most-referenced answers are old on
-purpose: one contributor alone wrote **1,776 root comments — 3.8% of every document in the
-collection** — at a median score of 5 against a corpus median of 2. Weighting by recency demotes
-exactly what the community treats as canonical.
+purpose, and its most prolific contributors wrote the bulk of them years ago at well above the
+typical score. Weighting by recency demotes exactly what the community treats as canonical.
 
 Prompt and model changes go here first — they are configuration, not code. Anything that would
 make already-stored vectors unreadable belongs in `conf/collection.yaml` instead.
