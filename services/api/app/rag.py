@@ -4,7 +4,7 @@ One :class:`RetrievalAugmentedGenerator` is built during the FastAPI lifespan an
 reused for every request; construction loads an embedding model and optionally a
 cross-encoder, so it is far too expensive to do per request.
 
-A question travels through eight stages:
+A question travels through seven stages:
 
 1. **Rewrite.** With chat history, the question plus that history becomes one
    standalone query -- this is what resolves "is it hard?" into something
@@ -23,13 +23,11 @@ A question travels through eight stages:
    and drops anything below the configured threshold. This is the only stage
    that filters, and it filters rather than orders: its scores separate the
    surviving documents by only a few percent.
-6. **Rank.** Endorsement decides the order -- the answer's own score, and its
-   author's track record for answers too few people saw to be scored well.
-   Strictly after the cutoff, so it reorders only documents that already answer
-   the question and can never promote one that does not.
-7. **Diversify.** At most a few documents from any one thread, then the top
-   ``top_n``, so a single discussion cannot fill the context window.
-8. **Generate.** The surviving documents are formatted into the answer prompt and
+6. **Rank.** Endorsement decides the order of what survived, using the answer's
+   own score. Strictly after the cutoff, so it reorders only documents that
+   already answer the question and can never promote one that does not. The
+   best ``top_n`` go on.
+7. **Generate.** The surviving documents are formatted into the answer prompt and
    streamed from the LLM token by token, after the threads they came from have
    been reported as a ``sources`` event.
 
@@ -92,16 +90,10 @@ THINK_END = "</think>"
 # itself. Answers are synthesised from the comment thread, so citing `url` there
 # would send the reader to a page that does not contain what was cited.
 #
-# `post_id` groups documents that share a thread, for the per-post cap and for
-# collapsing the repeated post body out of the prompt. `created_utc` and `score`
-# feed the ranking weights.
-REQUIRED_METADATA = (
-    "permalink",
-    "post_id",
-    "created_utc",
-    "root_comment_score",
-    "root_comment_author",
-)
+# `post_id` groups documents that share a thread, so the repeated post title and
+# body is emitted once rather than per document. `root_comment_score` is the
+# ranking signal and `created_utc` feeds the recency weight.
+REQUIRED_METADATA = ("permalink", "post_id", "created_utc", "root_comment_score")
 
 
 # The two ways the provider refuses us for want of budget rather than for a bad
@@ -301,11 +293,6 @@ def recency_factor(created_utc: float | None, now: float, grace_days: float, hal
     return 0.5 ** (max(0.0, age_days - grace_days) / half_life_days)
 
 
-# What an unrated or unknown contributor is worth. Deliberately mid-scale: a
-# missing signal must neither promote nor bury a document.
-_NEUTRAL_AUTHORITY = 0.5
-
-
 def community_factor(score: float | None, reference_score: float) -> float:
     """Score how strongly the community endorsed a thread, on a 0..1 scale.
 
@@ -332,63 +319,7 @@ def community_factor(score: float | None, reference_score: float) -> float:
     return min(1.0, math.log1p(max(float(score), 0.0)) / math.log1p(reference_score))
 
 
-def author_authority(client: QdrantClient, collection: str, reference_score: float, min_answers: int) -> dict:
-    """Score each contributor by how their answers are typically received.
-
-    An answer's own score says how *this* reply landed; a contributor's track
-    record says whether to trust one that few people happened to see. On this
-    corpus the difference is large -- the most prolific contributor has written
-    thousands of answers at more than twice the median score -- and a niche
-    question answered well by them may carry only one or two votes.
-
-    Computed once at startup by reading the whole collection's payloads, which
-    is a few seconds because neither vectors nor document text are fetched. It
-    is a snapshot: contributors who become active after a restart are not
-    reflected until the next one, which is acceptable for a ranking nudge.
-
-    Authors below ``min_answers`` are omitted rather than scored, because a
-    median over one or two answers is noise, and callers treat a missing author
-    as neutral.
-
-    Args:
-        client: A Qdrant client.
-        collection: Collection to read.
-        reference_score: Median score at which authority saturates.
-        min_answers: Answers required before an author is scored at all.
-
-    Returns:
-        ``{author: authority in [0, 1]}``.
-    """
-    scores: dict[str, list[float]] = {}
-    offset = None
-    while True:
-        points, offset = client.scroll(
-            collection_name=collection,
-            limit=2000,
-            offset=offset,
-            with_payload=["metadata.root_comment_author", "metadata.root_comment_score"],
-            with_vectors=False,
-        )
-        for point in points:
-            payload = (point.payload or {}).get("metadata") or {}
-            author, score = payload.get("root_comment_author"), payload.get("root_comment_score")
-            if author and isinstance(score, int | float) and not isinstance(score, bool):
-                scores.setdefault(str(author), []).append(float(score))
-        if offset is None:
-            break
-
-    authority = {}
-    for author, values in scores.items():
-        if len(values) < min_answers:
-            continue
-        values.sort()
-        median = values[len(values) // 2]
-        authority[author] = min(1.0, math.log1p(max(median, 0.0)) / math.log1p(reference_score))
-    logging.info(f"Author authority computed for {len(authority)} of {len(scores)} contributors.")
-    return authority
-
-
-def blend(docs: list[Document], now: float, ranking_cfg: dict, authority: dict | None = None) -> list[Document]:
+def blend(docs: list[Document], now: float, ranking_cfg: dict) -> list[Document]:
     """Reorder documents by relevance tempered with recency and endorsement.
 
     The multiplier is ``1 - wr - wc + wr*recency + wc*community``, bounded in
@@ -422,17 +353,13 @@ def blend(docs: list[Document], now: float, ranking_cfg: dict, authority: dict |
             carrying ``_score``.
         now: POSIX timestamp for the current time.
         ranking_cfg: The ``rag.ranking`` block.
-        authority: Contributor track records from :func:`author_authority`.
-            Absent authors are treated as neutral.
 
     Returns:
         The same documents, best first, each annotated with ``_final``.
     """
     weight_recency = ranking_cfg["recency_weight"]
     weight_community = ranking_cfg["community_weight"]
-    weight_authority = ranking_cfg["authority_weight"]
-    base = 1.0 - weight_recency - weight_community - weight_authority
-    authority = authority or {}
+    base = 1.0 - weight_recency - weight_community
 
     for doc in docs:
         recency = recency_factor(
@@ -444,70 +371,12 @@ def blend(docs: list[Document], now: float, ranking_cfg: dict, authority: dict |
         # The ANSWER's score, not the submission's. The submission's is identical
         # across every document from one thread and so ranks none of them.
         community = community_factor(doc.metadata.get("root_comment_score"), ranking_cfg["reference_score"])
-        # An unknown or too-infrequent contributor is neutral, not penalised.
-        writer = doc.metadata.get("root_comment_author")
-        writer_authority = authority.get(str(writer), _NEUTRAL_AUTHORITY) if writer else _NEUTRAL_AUTHORITY
-
-        multiplier = (
-            base + weight_recency * recency + weight_community * community + weight_authority * writer_authority
-        )
+        multiplier = base + weight_recency * recency + weight_community * community
         doc.metadata["_recency"] = recency
         doc.metadata["_community"] = community
-        doc.metadata["_authority"] = writer_authority
         doc.metadata["_final"] = doc.metadata.get("_score", 0.0) * multiplier
 
     return sorted(docs, key=lambda d: d.metadata["_final"], reverse=True)
-
-
-def diversify(docs: list[Document], top_n: int, max_per_post: int | None) -> list[Document]:
-    """Take the best ``top_n`` documents, optionally capping any one thread.
-
-    **The cap is off by default and should usually stay off.** A document is one
-    comment tree, so several documents from one post are several *different
-    people answering the same question* -- often the best possible result.
-    Capping them evicts good answers and pulls in lower-ranked documents from
-    other threads to replace them, which is a bad trade. The repeated post body
-    that would otherwise make this wasteful is already handled: ``format_docs``
-    emits it once per thread, not once per document.
-
-    It exists for one failure mode: a post whose many mediocre answers all score
-    well enough to crowd out a better thread. That is a ranking problem, and
-    capping is a blunt way to contain it while the ranking is being fixed.
-
-    When a cap is set and leaves fewer than ``top_n`` documents, it is *relaxed*
-    and the selection retried rather than topped up with leftovers, which keeps
-    "no post contributes more than the cap" true of whatever comes back instead
-    of quietly violating it.
-
-    Args:
-        docs: Documents, already ordered best first.
-        top_n: How many to return.
-        max_per_post: Cap on documents from any one post, or None for no cap.
-
-    Returns:
-        At most ``top_n`` documents, order preserved.
-    """
-    if max_per_post is None:
-        return docs[:top_n]
-    cap = max_per_post
-    while cap <= top_n:
-        counts: dict[str, int] = {}
-        kept: list[Document] = []
-        for doc in docs:
-            post_id = doc.metadata.get("post_id")
-            # An unknown post is never capped: bucketing every such document
-            # together would collapse unrelated threads into one.
-            if post_id is None or counts.get(post_id, 0) < cap:
-                if post_id is not None:
-                    counts[post_id] = counts.get(post_id, 0) + 1
-                kept.append(doc)
-                if len(kept) == top_n:
-                    return kept
-        if len(kept) == len(docs):
-            # Nothing was held back, so relaxing the cap cannot find more.
-            return kept
-        cap += 1
-    return docs[:top_n]
 
 
 class ScoredRetriever(BaseRetriever):
@@ -736,18 +605,6 @@ class RetrievalAugmentedGenerator:
         # and they thrash each other; serialising makes p95 better, not worse.
         self._rerank_gate = asyncio.Semaphore(1)
 
-        # A snapshot of who writes well, read once here rather than per request.
-        # Skipped entirely when the weight is zero, so a deployment that does not
-        # rank on it does not pay for it.
-        self.authority: dict = {}
-        if self.ranking_cfg["authority_weight"] > 0:
-            self.authority = author_authority(
-                self.qdrant_client,
-                self.contract.name,
-                self.ranking_cfg["reference_score"],
-                self.ranking_cfg["authority_min_answers"],
-            )
-
         # Two answer chains differing only in which model writes the answer.
         # This is the only LCEL left, and streaming is the reason it stays.
         self._answer_primary = self.prompt | self.llm_primary | StrOutputParser()
@@ -781,8 +638,8 @@ class RetrievalAugmentedGenerator:
         if "reranker" in rag_cfg:
             raise ValueError(
                 "conf/config.yaml: rag.reranker was renamed to rag.rerank, which also now carries the "
-                "relevance cutoff (score_threshold), the candidate ceiling (max_candidates), how many "
-                "documents reach the prompt (top_n) and the per-post cap (max_per_post)."
+                "relevance cutoff (score_threshold), the candidate ceiling (max_candidates) and how "
+                "many documents reach the prompt (top_n)."
             )
 
         mode = self.retrieval_cfg["mode"]
@@ -849,9 +706,8 @@ class RetrievalAugmentedGenerator:
            a follow-up the original may be contentless, and scoring "is it
            hard?" against a comment tree produces noise. This is also where the
            relevance cutoff is applied, and it is the only filter.
-        6. **Blend** in recency and endorsement. Strictly after the cutoff, so
-           these only reorder documents that already answer the question.
-        7. **Diversify**, so one thread cannot fill the whole context window.
+        6. **Rank** by endorsement. Strictly after the cutoff, so this only
+           reorders documents that already answer the question.
 
         Args:
             question: The user's question, as asked.
@@ -872,9 +728,8 @@ class RetrievalAugmentedGenerator:
         docs = docs[: self.rerank_cfg["max_candidates"]]
 
         docs = await self.rerank(search_query, docs)
-        docs = blend(docs, time.time(), self.ranking_cfg, self.authority)
-        docs = diversify(docs, self.rerank_cfg["top_n"], self.rerank_cfg["max_per_post"])
-        return search_query, docs
+        docs = blend(docs, time.time(), self.ranking_cfg)
+        return search_query, docs[: self.rerank_cfg["top_n"]]
 
     def format_docs(self, docs: list[Document]) -> str:
         """Flatten retrieved documents into the ``{context}`` block of the answer prompt.
@@ -885,12 +740,9 @@ class RetrievalAugmentedGenerator:
         tree on that post. Corpus-wide that prefix is 54% of a median document,
         so repeating it per document is pure waste.
 
-        In practice the saving here is small -- 0 to 2% on real queries --
-        because :func:`diversify` runs first and usually leaves at most one
-        document per post, so there is rarely a prefix left to collapse. The
-        two overlap, and diversity gets there first. This still matters when a
-        post genuinely contributes several comment trees, and would matter much
-        more if ``max_per_post`` were raised.
+        Nothing caps how many documents one thread contributes, so this is what
+        keeps several answers from the same post affordable: they share one
+        heading and the post body is written once rather than per answer.
 
         Each group is prefixed with the thread's permalink, which is what the
         answer cites. `permalink` rather than `url` because for a link post

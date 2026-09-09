@@ -15,7 +15,7 @@ what makes them worth testing and cheap to test.
 import math
 
 import pytest
-from app.rag import blend, community_factor, deduplicate, describe_sources, diversify, recency_factor
+from app.rag import blend, community_factor, deduplicate, describe_sources, recency_factor
 from langchain_core.documents.base import Document
 
 DAY = 86400.0
@@ -24,15 +24,13 @@ NOW = 1_800_000_000.0
 RANKING = {
     "recency_weight": 0.0,
     "community_weight": 0.30,
-    "authority_weight": 0.10,
-    "authority_min_answers": 5,
     "grace_days": 365,
     "half_life_days": 730,
     "reference_score": 25,
 }
 # Recency is off by default, so the tests that exercise the decay switch it on
 # explicitly rather than depending on the shipped value.
-WITH_RECENCY = {**RANKING, "recency_weight": 0.15, "community_weight": 0.0, "authority_weight": 0.0}
+WITH_RECENCY = {**RANKING, "recency_weight": 0.15, "community_weight": 0.0}
 
 
 def doc(**metadata: object) -> Document:
@@ -101,12 +99,10 @@ class TestBlend:
         assert out.metadata["_final"] <= 0.9 + 1e-9
 
     def test_worst_case_penalty_is_bounded_by_the_weights(self):
-        worst = doc(_score=1.0, created_utc=NOW - 50_000 * DAY, root_comment_score=0, root_comment_author="nobody")
-        (out,) = blend([worst], NOW, RANKING, {})
-        floor = 1 - RANKING["recency_weight"] - RANKING["community_weight"] - RANKING["authority_weight"]
-        # An unknown author is neutral, not zero, so the floor is not reached.
-        assert out.metadata["_final"] > floor
-        assert out.metadata["_final"] <= 1.0
+        worst = doc(_score=1.0, created_utc=NOW - 50_000 * DAY, root_comment_score=0)
+        (out,) = blend([worst], NOW, RANKING)
+        floor = 1 - RANKING["recency_weight"] - RANKING["community_weight"]
+        assert out.metadata["_final"] == pytest.approx(floor, abs=1e-6)
 
     def test_recency_breaks_a_tie(self):
         old = doc(_score=0.80, created_utc=NOW - 3000 * DAY, root_comment_score=10, post_id="a")
@@ -124,61 +120,9 @@ class TestBlend:
         assert out.metadata["_final"] == 0.0
 
     def test_zero_weights_preserve_relevance_exactly(self):
-        cfg = {**RANKING, "recency_weight": 0.0, "community_weight": 0.0, "authority_weight": 0.0}
+        cfg = {**RANKING, "recency_weight": 0.0, "community_weight": 0.0}
         (out,) = blend([doc(_score=0.42, created_utc=NOW - 9999 * DAY, root_comment_score=0)], NOW, cfg)
         assert out.metadata["_final"] == pytest.approx(0.42)
-
-
-class TestDiversify:
-    """One thread must not fill the whole context window."""
-
-    def test_caps_documents_per_post(self):
-        # Five documents on one post, three on another. The cap binds without
-        # needing relaxation, because there are enough documents elsewhere.
-        docs = [doc(post_id="a", _final=1.0 - i / 100) for i in range(5)]
-        docs += [doc(post_id="b", _final=0.5 - i / 100) for i in range(3)]
-        picked = [d.metadata["post_id"] for d in diversify(docs, top_n=4, max_per_post=2)]
-        assert picked == ["a", "a", "b", "b"]
-
-    def test_relaxes_the_cap_rather_than_returning_too_few(self):
-        # Everything is on one post, so honouring a cap of 1 would return 1
-        # document when 4 were asked for.
-        docs = [doc(post_id="p", _final=1.0 - i / 10) for i in range(8)]
-        assert len(diversify(docs, top_n=4, max_per_post=1)) == 4
-
-    def test_prefers_spread_across_posts(self):
-        docs = [
-            doc(post_id="a", _final=0.99),
-            doc(post_id="a", _final=0.98),
-            doc(post_id="b", _final=0.50),
-        ]
-        assert [d.metadata["post_id"] for d in diversify(docs, top_n=2, max_per_post=1)] == ["a", "b"]
-
-    def test_documents_without_a_post_id_are_never_bucketed_together(self):
-        docs = [doc(post_id=None, _final=1.0) for _ in range(4)]
-        assert len(diversify(docs, top_n=4, max_per_post=1)) == 4
-
-    def test_preserves_incoming_order(self):
-        docs = [doc(post_id=str(i), _final=1.0 - i) for i in range(5)]
-        assert [d.metadata["post_id"] for d in diversify(docs, top_n=3, max_per_post=1)] == ["0", "1", "2"]
-
-    def test_fewer_documents_than_requested_is_fine(self):
-        assert len(diversify([doc(post_id="a", _final=1.0)], top_n=6, max_per_post=3)) == 1
-
-    def test_no_documents_at_all(self):
-        assert diversify([], top_n=6, max_per_post=3) == []
-
-    def test_no_cap_keeps_every_answer_from_one_thread(self):
-        # The shipped default. Several documents from one post are several
-        # different people answering the question, which is usually the best
-        # result available -- capping evicts them for lower-ranked documents
-        # from unrelated threads.
-        docs = [doc(post_id="p", _final=1.0 - i / 100) for i in range(8)]
-        assert len(diversify(docs, top_n=6, max_per_post=None)) == 6
-
-    def test_no_cap_still_respects_top_n(self):
-        docs = [doc(post_id=str(i), _final=1.0 - i) for i in range(9)]
-        assert len(diversify(docs, top_n=4, max_per_post=None)) == 4
 
 
 class TestDeduplicate:
@@ -235,32 +179,25 @@ class TestDescribeSources:
         assert describe_sources([]) == []
 
 
-class TestAuthority:
-    """A trusted contributor's answer is not buried for having few votes."""
-
-    AUTH = {"rowlet-owl": 1.0, "quiet-person": 0.1}
-
-    def test_a_trusted_author_lifts_a_low_scoring_answer(self):
-        trusted = doc(_score=0.90, root_comment_score=1, root_comment_author="rowlet-owl", post_id="a")
-        unknown = doc(_score=0.90, root_comment_score=1, root_comment_author="quiet-person", post_id="b")
-        order = [d.metadata["post_id"] for d in blend([unknown, trusted], NOW, RANKING, self.AUTH)]
-        assert order == ["a", "b"]
-
-    def test_an_unlisted_author_is_neutral_not_penalised(self):
-        listed = doc(_score=0.90, root_comment_score=5, root_comment_author="quiet-person", post_id="low")
-        unlisted = doc(_score=0.90, root_comment_score=5, root_comment_author="brand-new", post_id="unknown")
-        order = [d.metadata["post_id"] for d in blend([listed, unlisted], NOW, RANKING, self.AUTH)]
-        # Neutral (0.5) beats a measured-poor track record (0.1).
-        assert order == ["unknown", "low"]
-
-    def test_a_missing_author_does_not_raise(self):
-        (out,) = blend([doc(_score=0.5, root_comment_score=3)], NOW, RANKING, self.AUTH)
-        assert out.metadata["_authority"] == 0.5
+class TestEndorsementRanks:
+    """Endorsement, not relevance, orders the documents that clear the gate."""
 
     def test_endorsement_outranks_a_small_relevance_gap(self):
         # The cross-encoder separates the top documents by only a few percent,
-        # so a well-endorsed answer must be able to overcome that.
-        weak_but_endorsed = doc(_score=0.95, root_comment_score=40, root_comment_author="x", post_id="endorsed")
-        strong_but_ignored = doc(_score=0.99, root_comment_score=0, root_comment_author="x", post_id="ignored")
-        order = [d.metadata["post_id"] for d in blend([strong_but_ignored, weak_but_endorsed], NOW, RANKING, {})]
-        assert order == ["endorsed", "ignored"]
+        # so a well-endorsed answer has to be able to overcome that.
+        endorsed = doc(_score=0.95, root_comment_score=40, post_id="endorsed")
+        ignored = doc(_score=0.99, root_comment_score=0, post_id="ignored")
+        assert [d.metadata["post_id"] for d in blend([ignored, endorsed], NOW, RANKING)] == ["endorsed", "ignored"]
+
+    def test_relevance_still_holds_a_weak_document_down(self):
+        # The gate is permissive, so endorsement must not be able to promote
+        # something that barely answers the question.
+        barely = doc(_score=0.35, root_comment_score=200, post_id="barely")
+        solid = doc(_score=0.98, root_comment_score=2, post_id="solid")
+        assert [d.metadata["post_id"] for d in blend([barely, solid], NOW, RANKING)] == ["solid", "barely"]
+
+    def test_several_answers_from_one_thread_all_survive(self):
+        # Nothing caps per thread: they are different people answering, and
+        # keeping them is usually the best available result.
+        docs = [doc(_score=0.9, root_comment_score=10 - i, post_id="p") for i in range(6)]
+        assert len(blend(docs, NOW, RANKING)) == 6

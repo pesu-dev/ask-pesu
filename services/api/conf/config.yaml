@@ -116,29 +116,15 @@ rag:
     score_threshold: 0.3
     # Documents that actually reach the answer prompt.
     top_n: 6
-    # Cap on documents from any one thread, or null for no cap. NULL is right
-    # here and the cap is the exception.
-    #
-    # A document is one comment tree, so several documents from one post are
-    # several different people answering the same question -- frequently the
-    # best result available, not duplication. Capping evicts those good answers
-    # and pulls in lower-ranked documents from unrelated threads to replace
-    # them. The repeated post title and body that would make this wasteful is
-    # already handled: format_docs emits it once per thread.
-    #
-    # Set it only to contain a specific failure -- a post whose many mediocre
-    # answers all score well enough to crowd out a better thread -- and treat
-    # that as a ranking problem to fix rather than a cap to keep.
-    max_per_post: null
 
-  # Preferences applied AFTER the relevance cutoff, so they reorder documents
-  # that already answer the question and can never promote one that does not.
+  # Applied AFTER the relevance cutoff, so this reorders documents that already
+  # answer the question and can never promote one that does not.
   #
   # The multiplier is `1 - wr - wc + wr*recency + wc*community`, bounded in
   # [1-wr-wc, 1] -- a pure penalty that cannot boost anything above its own
   # relevance.
   #
-  # BOTH WEIGHTS SHIP AT ZERO. Read this before raising either.
+  # Read this before raising `recency_weight` above zero.
   #
   # The bound above is real but misleading. It says a weight of 0.15 can only
   # invert a relevance gap up to ~18%, which sounds like a tie-breaker. Measured
@@ -174,16 +160,7 @@ rag:
     # cannot rank one reply above another.
     community_weight: 0.30
 
-    # How much the contributor's track record decides the order, for answers too
-    # few people saw to have a meaningful score of their own. Computed at
-    # startup from the collection -- a few seconds, payload only -- as each
-    # author's median answer score.
-    authority_weight: 0.10
-    # Answers a contributor needs before they are scored at all. A median over
-    # one or two answers is noise; below this an author is neutral.
-    authority_min_answers: 5
-
-    # Score at which both terms above saturate. Tuned for COMMENT scores, whose
+    # Score at which the term above saturates. Tuned for COMMENT scores, whose
     # median is 2 and 90th percentile 12 -- an order of magnitude below post
     # scores, so a value picked for those would leave almost every answer
     # indistinguishable near zero.

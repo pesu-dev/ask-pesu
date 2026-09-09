@@ -131,11 +131,10 @@ Anything older than that window comes from [the backfill scripts](#backfilling-h
    both texts together, which a vector search structurally cannot. It scores the query
    retrieval actually used, so a follow-up is judged on its resolved form rather than on "is
    it hard?".
-6. **Ranking** — endorsement decides the order of what survived: the answer's own score, and
-   its author's track record for answers too few people saw to have a meaningful score. Strictly
-   after the cutoff, so it only reorders documents that already answer the question.
-7. **Select** — the top `top_n`, optionally capped per thread (off by default).
-8. **Generate** — `Qwen/Qwen3-4B-Instruct-2507` via Hugging Face Inference (`nscale` provider),
+6. **Ranking** — endorsement decides the order of what survived, using the answer's own score.
+   Strictly after the cutoff, so it only reorders documents that already answer the question.
+   The best `top_n` go on.
+7. **Generate** — `Qwen/Qwen3-4B-Instruct-2507` via Hugging Face Inference (`nscale` provider),
    streamed token by token, after the retrieved threads have been reported as a `sources` event.
 
 Both retrieval-side LLM calls always use the **primary** model, even in thinking mode, so
@@ -720,14 +719,11 @@ Runtime behaviour that is *not* part of the collection contract lives in
 | `rerank.max_candidates` | `50` | Ceiling on pairs scored, which bounds time-to-first-token (~61 ms per pair on two CPU threads) |
 | `rerank.score_threshold` | `0.3` | **The** relevance cutoff, on the cross-encoder's 0–1 sigmoid scale. Deliberately permissive; see below |
 | `rerank.top_n` | `6` | Documents that reach the answer prompt |
-| `rerank.max_per_post` | `null` | No cap. Several answers from one thread are usually the best result; see below |
 | `ranking.recency_weight` | `0.0` | Off. Age is a poor proxy for staleness here; see below |
 | `ranking.grace_days` | `365` | Age below which nothing is penalised at all |
 | `ranking.half_life_days` | `730` | Days after the grace period to halve the recency factor |
 | `ranking.community_weight` | `0.30` | How much the answer's own score decides the order |
-| `ranking.authority_weight` | `0.10` | How much its author's track record decides the order |
-| `ranking.authority_min_answers` | `5` | Answers before a contributor is scored rather than treated as neutral |
-| `ranking.reference_score` | `25` | Score at which both terms saturate, tuned for comment scores |
+| `ranking.reference_score` | `25` | Score at which the endorsement term saturates, tuned for comment scores |
 | `prompts.*` | — | System, answer and query-rewrite prompts |
 
 **On the two thresholds.** There is deliberately only one that filters. A retrieval-side cutoff
@@ -746,25 +742,22 @@ of everything else overlap heavily (medians 0.97 and 0.76), so raising the gate 
 answers about as fast as wrong ones. Its job is to drop the obviously irrelevant tail, and
 something else has to choose between the survivors.
 
-That something is **endorsement**: `ranking.community_weight` on the answer's own score, and
-`ranking.authority_weight` on its author's median score across the corpus, for good answers too
-few people saw to be scored well. Both read `root_comment_*` fields, which describe the *reply*.
-The plain `score` and `author` are the **submission's** — identical across every document from
-one thread, so they rank none of them, and `score` cannot go negative, so a downvoted answer
-looks like an unrated one.
+That something is **endorsement**: `ranking.community_weight` on the answer's own score, read
+from `root_comment_score`. The plain `score` is the **submission's** — identical across every
+document from one thread, so it ranks none of them, and it cannot go negative, so a downvoted
+answer looks like an unrated one.
 
 The multiplier is `1 - Σw + Σ(w·factor)`, bounded in `[1-Σw, 1]`: a pure penalty, so nothing
-scores above its own relevance. With `Σw = 0.40` it can invert a relevance gap of up to 67% —
-which is intended, since the gaps it must overcome are the 0.2–11% above.
+scores above its own relevance. At `0.30` it can invert a relevance gap of up to 43% — which is
+intended, since the gaps it must overcome are the 0.2–11% above. Relevance stays a factor rather
+than being discarded once a document clears the gate, because the gate is permissive: without it,
+a barely-relevant answer with a heavily-upvoted comment could lead.
 
-**`rerank.max_per_post` ships at `null` — no cap — deliberately.** A document is one comment
-tree, so several documents from one post are several *different people answering the same
-question*, which is frequently the best result available rather than duplication. Capping evicts
-those and pulls in lower-ranked documents from unrelated threads to replace them. The repeated
-post title and body that would otherwise make this wasteful is already handled: `format_docs`
-emits it once per thread. Set a cap only to contain a specific failure — a post whose many
-mediocre answers all score well enough to crowd out a better thread — and treat that as a
-ranking problem to fix rather than a cap to keep.
+**Nothing caps how many answers one thread contributes.** A document is one comment tree, so
+several documents from one post are several *different people answering the same question*,
+which is frequently the best result available rather than duplication. The repeated post title
+and body that would make that wasteful is already handled: `format_docs` emits it once per
+thread.
 
 **`ranking.recency_weight` ships at `0.0`, deliberately.** Age is not a proxy for usefulness
 here. r/PESU directs repeated questions to existing threads, so its most-referenced answers are
