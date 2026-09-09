@@ -4,7 +4,7 @@ One :class:`RetrievalAugmentedGenerator` is built during the FastAPI lifespan an
 reused for every request; construction loads an embedding model and optionally a
 cross-encoder, so it is far too expensive to do per request.
 
-A question travels through six stages:
+A question travels through eight stages:
 
 1. **Rewrite.** With chat history, the question plus that history becomes one
    standalone query -- this is what resolves "is it hard?" into something
@@ -20,9 +20,18 @@ A question travels through six stages:
    document more than once.
 5. **Rerank.** A cross-encoder scores every (query, document) pair properly --
    attending to both texts at once, which a bi-encoder vector search cannot do --
-   and drops anything below the configured threshold.
-6. **Generate.** The surviving documents are formatted into the answer prompt and
-   streamed from the LLM token by token.
+   and drops anything below the configured threshold. This is the only stage
+   that filters, and it filters rather than orders: its scores separate the
+   surviving documents by only a few percent.
+6. **Rank.** Endorsement decides the order -- the answer's own score, and its
+   author's track record for answers too few people saw to be scored well.
+   Strictly after the cutoff, so it reorders only documents that already answer
+   the question and can never promote one that does not.
+7. **Diversify.** At most a few documents from any one thread, then the top
+   ``top_n``, so a single discussion cannot fill the context window.
+8. **Generate.** The surviving documents are formatted into the answer prompt and
+   streamed from the LLM token by token, after the threads they came from have
+   been reported as a ``sources`` event.
 
 Stages 1 and 2 always use the *primary* model even in thinking mode, so thinking
 tokens are never spent on query rewriting.

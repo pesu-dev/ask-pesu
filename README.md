@@ -80,8 +80,13 @@ its boilerplate appears on many threads and would otherwise be retrieved for unr
 questions.
 
 Every point is written with **two vectors**: the dense embedding, and a BM25 sparse vector from
-`fastembed`. The reader currently queries dense only. Writing sparse now is what makes turning
-on hybrid retrieval a configuration change later instead of re-embedding the whole collection.
+`fastembed`. The reader queries both and lets Qdrant fuse them, which is possible without ever
+re-embedding the collection precisely because the sparse vector was written from the start.
+
+The payload records the **answer** as well as the submission it sits under. `root_comment_score`
+and `root_comment_author` are the reply's own, and are what ranking uses; the plain `score` and
+`author` belong to the post and are identical across every document from one thread, so they
+cannot distinguish one reply from another.
 
 A stream only yields comments posted after it opens, so a restart would otherwise leave a
 permanent hole — and this service restarts on every promotion. Before opening the stream it
@@ -280,7 +285,7 @@ index. Point local work at it; point deployed services at `ask-pesu-prod`.
 | Vector size / distance | 768 / Cosine |
 | Dense vector name | `dense` — named, not the unnamed default, so one collection can hold both vectors |
 | Sparse vector | `sparse`, `modifier: idf`, from `Qdrant/bm25` — written by the db, not yet queried by the api |
-| Payload keys | `root_comment_id`, `post_id`, `author`, `url`, `permalink`, `score`, `upvote_ratio`, `created_utc`, `flair`, `nsfw` |
+| Payload keys | `root_comment_id`, `root_comment_score`, `root_comment_author`, `post_id`, `author`, `url`, `permalink`, `score`, `upvote_ratio`, `created_utc`, `flair`, `nsfw` |
 | Citation target | `permalink` — for a link post `url` is the external article, not the discussion |
 
 It is enforced, not merely documented:
@@ -1045,6 +1050,12 @@ Reviewers are assigned by [`.github/CODEOWNERS`](.github/CODEOWNERS). Changes to
 Only work that is actually pending lives here. Deliberate limits are documented where the
 subsystem is explained, rather than collected as though someone intends to fix them.
 
+- **The answer prompt gets no conversation history.** Retrieval resolves a follow-up like "what
+  about ECE?" into a standalone query and finds the right threads, but the model writing the
+  answer receives the question exactly as typed, with no history to interpret it against. Adding
+  a `MessagesPlaceholder` is a small change; the reason it is not made here is that it needs a
+  matching system-prompt rule forbidding the model to answer *from* the history rather than from
+  the retrieved context, and that pairing cannot be verified without spending inference quota.
 - **The reranker reads at most ~512 tokens.** Documents are stored title-and-body first, so what
   gets truncated on a long thread is the comment tree — the part that answers the question. The
   real fix is chunking at write time in `services/db` so documents are answer-sized, which needs

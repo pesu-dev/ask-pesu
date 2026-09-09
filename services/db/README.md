@@ -20,6 +20,7 @@ models:
 - Qdrant/bm25
 preload_from_hub:
 - Alibaba-NLP/gte-modernbert-base
+- Qdrant/bm25
 tags:
 - assistant
 - question answering
