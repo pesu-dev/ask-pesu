@@ -162,6 +162,9 @@ def documents_in(path: Path) -> list[tuple[str, dict, str]]:
         # actually indexing -- so set it per document or the two disagree.
         payload = dict(post["metadata"])
         payload["root_comment_id"] = comment["id"]
+        # Same reason: per document, not per post.
+        payload["root_comment_score"] = comment.get("score")
+        payload["root_comment_author"] = comment.get("author")
         rows.append((text, payload, convert_to_uuid(comment["id"])))
     return rows
 

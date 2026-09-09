@@ -114,7 +114,18 @@ def worker(job: dict, progress_q: Queue) -> None:
                     continue
                 tree_root = build_comment_tree(root_id)
                 if tree_root:
-                    comment_objs.append({"id": root_id, "body": render_tree(tree_root)})
+                    raw = _CHILD_MAP[root_id]
+                    comment_objs.append(
+                        {
+                            "id": root_id,
+                            "body": render_tree(tree_root),
+                            # The root comment's own score and author, which is
+                            # what ranking needs -- the post's tell you nothing
+                            # about which reply under it is any good.
+                            "score": raw.get("score"),
+                            "author": raw.get("author"),
+                        }
+                    )
 
             if comment_objs:
                 output = {
@@ -124,10 +135,14 @@ def worker(job: dict, progress_q: Queue) -> None:
                     "metadata": {
                         # One metadata block per post, but each entry in
                         # "comments" is a separate thread with its own root.
-                        # populate_db.py overwrites this per document with the
-                        # id of the thread it is actually writing, so what is
-                        # stored here is only a placeholder.
+                        # populate_db.py overwrites these three per document
+                        # with the values of the thread it is actually writing,
+                        # so what is stored here is only a placeholder. They are
+                        # present at all because the payload's key set is
+                        # contracted and checked against conf/collection.yaml.
                         "root_comment_id": roots[post_id][0],
+                        "root_comment_score": _CHILD_MAP.get(roots[post_id][0], {}).get("score"),
+                        "root_comment_author": _CHILD_MAP.get(roots[post_id][0], {}).get("author"),
                         "post_id": post_id,
                         "author": post.get("author"),
                         "url": post.get("url"),

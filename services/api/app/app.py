@@ -515,6 +515,13 @@ def main() -> None:
         force=True,
     )
 
+    # Libraries that narrate every HTTP request at INFO. Loading the embedding
+    # model alone makes a dozen calls to huggingface.co, and each retrieval makes
+    # more, so left alone these bury the service's own lines completely. Their
+    # warnings and errors still come through.
+    for noisy in ("httpx", "httpcore", "urllib3", "sentence_transformers", "filelock"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
+
     # Run the app
     uvicorn.run("app.app:app", host=args.host, port=args.port, reload=args.debug)
 

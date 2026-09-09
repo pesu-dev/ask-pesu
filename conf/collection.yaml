@@ -66,8 +66,16 @@ collection:
   # reliably addresses the discussion an answer was drawn from. Both writers
   # store it already prefixed with https://reddit.com, because Reddit's own API
   # returns a bare path.
+  # NOTE the two `root_comment_*` keys describe the ANSWER; everything else
+  # describes the submission it sits under. That distinction is the whole point
+  # of them: `score` and `author` are the post's, so they are identical across
+  # every document from one thread and say nothing about who wrote a particular
+  # reply or how the community received it. Ranking needs the answer's own
+  # numbers, which is what these carry.
   metadata:
     - root_comment_id
+    - root_comment_score
+    - root_comment_author
     - post_id
     - author
     - url

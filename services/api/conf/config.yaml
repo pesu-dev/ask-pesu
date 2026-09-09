@@ -81,11 +81,27 @@ rag:
     # first token reaches the user, so this bounds time-to-first-token no matter
     # how many phrasings the multi-query step invented.
     max_candidates: 30
-    # THE relevance cutoff, on the cross-encoder's own 0..1 sigmoid scale. Raise
-    # it for stricter answers and more "I don't have that information"; lower it
-    # to answer more often from weaker context. Applied BEFORE the ranking
-    # weights below, so a document is admitted on relevance alone and only then
-    # reordered.
+    # THE relevance cutoff, on the cross-encoder's own 0..1 sigmoid scale, and
+    # deliberately permissive. Applied BEFORE the ranking weights below, so a
+    # document is admitted on relevance alone and only then reordered.
+    #
+    # Raising it looks tempting and does not pay. Measured against the labelled
+    # questions in scripts/eval_retrieval.py, the score distributions of known-
+    # correct documents and of everything else retrieved overlap heavily
+    # (medians 0.97 and 0.76), so a higher gate discards right answers about as
+    # fast as wrong ones:
+    #
+    #     threshold   correct kept   others kept
+    #          0.30            92%           70%
+    #          0.70            85%           53%
+    #          0.90            73%           40%
+    #          0.98            37%           25%
+    #
+    # And "others" overstates the error, because several threads legitimately
+    # answer the same question and only one of them is labelled. So this model
+    # discriminates too weakly on this corpus to be a sharp filter: its job is
+    # to drop the obviously irrelevant tail, and `ranking` below decides the
+    # order of what survives.
     score_threshold: 0.3
     # Documents that actually reach the answer prompt.
     top_n: 6
@@ -124,17 +140,33 @@ rag:
   # nothing about who wrote the answer or how it was received. Fixing that needs
   # a conf/collection.yaml key and a payload-only backfill.
   ranking:
-    # Community endorsement. OFF, and wired only so it can be switched on: the
-    # stored `score` is the SUBMISSION's, so it is identical for every document
-    # from the same post -- no discriminating power exactly where the ranking
-    # has to choose -- and it cannot go negative, so a downvoted answer is
-    # indistinguishable from an unrated one. The root comment's score is the
-    # signal worth having and is not in the collection yet.
-    community_weight: 0.0
-    # Scale for the community term when it is switched on: the post score at
-    # which it saturates. Would want to be ~25 for root-comment scores, whose
-    # median is 2 against the post median of 8.
-    reference_score: 100
+    # How much the ANSWER's own score decides the order. This is the primary
+    # ranking signal, and it is meant to lead rather than nudge: the
+    # cross-encoder separates the documents reaching the prompt by only a few
+    # percent, so it filters well and ranks poorly, and something else has to
+    # choose between the survivors. Community endorsement is what "verified"
+    # means on a subreddit that redirects repeated questions to existing
+    # threads.
+    #
+    # Read from `root_comment_score`, not `score`. The latter is the
+    # SUBMISSION's, identical across every document from one thread, so it
+    # cannot rank one reply above another.
+    community_weight: 0.30
+
+    # How much the contributor's track record decides the order, for answers too
+    # few people saw to have a meaningful score of their own. Computed at
+    # startup from the collection -- a few seconds, payload only -- as each
+    # author's median answer score.
+    authority_weight: 0.10
+    # Answers a contributor needs before they are scored at all. A median over
+    # one or two answers is noise; below this an author is neutral.
+    authority_min_answers: 5
+
+    # Score at which both terms above saturate. Tuned for COMMENT scores, whose
+    # median is 2 and 90th percentile 12 -- an order of magnitude below post
+    # scores, so a value picked for those would leave almost every answer
+    # indistinguishable near zero.
+    reference_score: 25
 
     # Staleness. OFF. Answers about fees, faculty and cutoffs do expire, but
     # answers about how SGPA is computed do not, and one global weight cannot

@@ -27,11 +27,12 @@ A question travels through six stages:
 Stages 1 and 2 always use the *primary* model even in thinking mode, so thinking
 tokens are never spent on query rewriting.
 
-Only the last stage is a LangChain Expression Language (LCEL) chain. Retrieval
-used to be one too, which meant the documents it found were consumed inside the
-chain and never surfaced -- so the backend could not tell a client which threads
-an answer was drawn from, and had to ask the model to reprint the links instead.
-Running the retrieval stages explicitly is what makes the documents available to
+Only the last stage is a LangChain Expression Language (LCEL) chain, because
+streaming is what LCEL is for here. The retrieval stages run explicitly instead:
+expressed as a chain they emit only the answer text, and the documents they
+found stay inside it, which leaves the backend unable to tell a client which
+threads an answer was drawn from except by asking the model to reprint the
+links. Running them explicitly is what makes the documents available to
 :meth:`RetrievalAugmentedGenerator.generate`.
 
 The collection name, embedding model and vector geometry are not configured here.
@@ -85,7 +86,13 @@ THINK_END = "</think>"
 # `post_id` groups documents that share a thread, for the per-post cap and for
 # collapsing the repeated post body out of the prompt. `created_utc` and `score`
 # feed the ranking weights.
-REQUIRED_METADATA = ("permalink", "post_id", "created_utc", "score")
+REQUIRED_METADATA = (
+    "permalink",
+    "post_id",
+    "created_utc",
+    "root_comment_score",
+    "root_comment_author",
+)
 
 
 # The two ways the provider refuses us for want of budget rather than for a bad
@@ -105,9 +112,9 @@ def _quota_refusal(error: BaseException) -> int | None:
     that is already refusing us -- and, worse, showing the user a raw HTTP error
     with a billing URL in it.
 
-    A 402 was previously invisible here: the message reads "You have depleted
-    your monthly included credits", which contains none of the words matched
-    below, so no cooldown ever started.
+    A 402 is why the status code is checked first rather than the message: it
+    reads "You have depleted your monthly included credits", which contains none
+    of the words matched below.
 
     Args:
         error: The exception raised during generation.
@@ -285,6 +292,11 @@ def recency_factor(created_utc: float | None, now: float, grace_days: float, hal
     return 0.5 ** (max(0.0, age_days - grace_days) / half_life_days)
 
 
+# What an unrated or unknown contributor is worth. Deliberately mid-scale: a
+# missing signal must neither promote nor bury a document.
+_NEUTRAL_AUTHORITY = 0.5
+
+
 def community_factor(score: float | None, reference_score: float) -> float:
     """Score how strongly the community endorsed a thread, on a 0..1 scale.
 
@@ -311,7 +323,63 @@ def community_factor(score: float | None, reference_score: float) -> float:
     return min(1.0, math.log1p(max(float(score), 0.0)) / math.log1p(reference_score))
 
 
-def blend(docs: list[Document], now: float, ranking_cfg: dict) -> list[Document]:
+def author_authority(client: QdrantClient, collection: str, reference_score: float, min_answers: int) -> dict:
+    """Score each contributor by how their answers are typically received.
+
+    An answer's own score says how *this* reply landed; a contributor's track
+    record says whether to trust one that few people happened to see. On this
+    corpus the difference is large -- the most prolific contributor has written
+    thousands of answers at more than twice the median score -- and a niche
+    question answered well by them may carry only one or two votes.
+
+    Computed once at startup by reading the whole collection's payloads, which
+    is a few seconds because neither vectors nor document text are fetched. It
+    is a snapshot: contributors who become active after a restart are not
+    reflected until the next one, which is acceptable for a ranking nudge.
+
+    Authors below ``min_answers`` are omitted rather than scored, because a
+    median over one or two answers is noise, and callers treat a missing author
+    as neutral.
+
+    Args:
+        client: A Qdrant client.
+        collection: Collection to read.
+        reference_score: Median score at which authority saturates.
+        min_answers: Answers required before an author is scored at all.
+
+    Returns:
+        ``{author: authority in [0, 1]}``.
+    """
+    scores: dict[str, list[float]] = {}
+    offset = None
+    while True:
+        points, offset = client.scroll(
+            collection_name=collection,
+            limit=2000,
+            offset=offset,
+            with_payload=["metadata.root_comment_author", "metadata.root_comment_score"],
+            with_vectors=False,
+        )
+        for point in points:
+            payload = (point.payload or {}).get("metadata") or {}
+            author, score = payload.get("root_comment_author"), payload.get("root_comment_score")
+            if author and isinstance(score, int | float) and not isinstance(score, bool):
+                scores.setdefault(str(author), []).append(float(score))
+        if offset is None:
+            break
+
+    authority = {}
+    for author, values in scores.items():
+        if len(values) < min_answers:
+            continue
+        values.sort()
+        median = values[len(values) // 2]
+        authority[author] = min(1.0, math.log1p(max(median, 0.0)) / math.log1p(reference_score))
+    logging.info(f"Author authority computed for {len(authority)} of {len(scores)} contributors.")
+    return authority
+
+
+def blend(docs: list[Document], now: float, ranking_cfg: dict, authority: dict | None = None) -> list[Document]:
     """Reorder documents by relevance tempered with recency and endorsement.
 
     The multiplier is ``1 - wr - wc + wr*recency + wc*community``, bounded in
@@ -329,21 +397,33 @@ def blend(docs: list[Document], now: float, ranking_cfg: dict) -> list[Document]
     at the low end, which is exactly where the scores mean least.
 
     This must run *after* the relevance cutoff. Filtering on the blended score
-    would make the threshold mean "relevant, conditioned on being recent and
-    popular", which is not a number anyone can reason about.
+    would make the threshold mean "relevant, conditioned on being endorsed",
+    which is not a number anyone can reason about.
+
+    The weights are what decide whether this nudges or leads. The cross-encoder
+    separates the documents that reach the prompt by only a few percent, so a
+    weight above roughly that spread makes the corresponding signal the sort
+    order rather than a tie-break. That is intended for endorsement, which
+    discriminates well here, and is exactly why recency is not used: age is not
+    a proxy for usefulness on a corpus whose community redirects questions to
+    older threads.
 
     Args:
         docs: Documents that already cleared the relevance threshold, each
             carrying ``_score``.
         now: POSIX timestamp for the current time.
         ranking_cfg: The ``rag.ranking`` block.
+        authority: Contributor track records from :func:`author_authority`.
+            Absent authors are treated as neutral.
 
     Returns:
         The same documents, best first, each annotated with ``_final``.
     """
     weight_recency = ranking_cfg["recency_weight"]
     weight_community = ranking_cfg["community_weight"]
-    base = 1.0 - weight_recency - weight_community
+    weight_authority = ranking_cfg["authority_weight"]
+    base = 1.0 - weight_recency - weight_community - weight_authority
+    authority = authority or {}
 
     for doc in docs:
         recency = recency_factor(
@@ -352,9 +432,19 @@ def blend(docs: list[Document], now: float, ranking_cfg: dict) -> list[Document]
             ranking_cfg["grace_days"],
             ranking_cfg["half_life_days"],
         )
-        community = community_factor(doc.metadata.get("score"), ranking_cfg["reference_score"])
-        multiplier = base + weight_recency * recency + weight_community * community
+        # The ANSWER's score, not the submission's. The submission's is identical
+        # across every document from one thread and so ranks none of them.
+        community = community_factor(doc.metadata.get("root_comment_score"), ranking_cfg["reference_score"])
+        # An unknown or too-infrequent contributor is neutral, not penalised.
+        writer = doc.metadata.get("root_comment_author")
+        writer_authority = authority.get(str(writer), _NEUTRAL_AUTHORITY) if writer else _NEUTRAL_AUTHORITY
+
+        multiplier = (
+            base + weight_recency * recency + weight_community * community + weight_authority * writer_authority
+        )
         doc.metadata["_recency"] = recency
+        doc.metadata["_community"] = community
+        doc.metadata["_authority"] = writer_authority
         doc.metadata["_final"] = doc.metadata.get("_score", 0.0) * multiplier
 
     return sorted(docs, key=lambda d: d.metadata["_final"], reverse=True)
@@ -607,10 +697,10 @@ class RetrievalAugmentedGenerator:
         else:
             self.cross_encoder = None
 
-        # Retrieval is not a chain. It used to be, and the documents it found
-        # were consumed inside the chain and never surfaced -- which is why the
-        # backend could not tell the client which threads an answer came from,
-        # and had to ask the model to reprint the links instead.
+        # Retrieval is assembled from parts rather than composed into a chain,
+        # so `retrieve` can hand the documents back to the caller. A chain would
+        # consume them internally and yield only text, leaving nothing to report
+        # as the answer's sources.
         #
         # Both retrieval-side steps always use the primary model, so thinking
         # tokens are never spent on reformulating a question.
@@ -628,6 +718,18 @@ class RetrievalAugmentedGenerator:
         # without this every concurrent request starts its own torch inference
         # and they thrash each other; serialising makes p95 better, not worse.
         self._rerank_gate = asyncio.Semaphore(1)
+
+        # A snapshot of who writes well, read once here rather than per request.
+        # Skipped entirely when the weight is zero, so a deployment that does not
+        # rank on it does not pay for it.
+        self.authority: dict = {}
+        if self.ranking_cfg["authority_weight"] > 0:
+            self.authority = author_authority(
+                self.qdrant_client,
+                self.contract.name,
+                self.ranking_cfg["reference_score"],
+                self.ranking_cfg["authority_min_answers"],
+            )
 
         # Two answer chains differing only in which model writes the answer.
         # This is the only LCEL left, and streaming is the reason it stays.
@@ -753,7 +855,7 @@ class RetrievalAugmentedGenerator:
         docs = docs[: self.rerank_cfg["max_candidates"]]
 
         docs = await self.rerank(search_query, docs)
-        docs = blend(docs, time.time(), self.ranking_cfg)
+        docs = blend(docs, time.time(), self.ranking_cfg, self.authority)
         docs = diversify(docs, self.rerank_cfg["top_n"], self.rerank_cfg["max_per_post"])
         return search_query, docs
 

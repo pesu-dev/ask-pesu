@@ -200,11 +200,11 @@ export async function askStream({
 /**
  * Pull a trailing citation list out of an answer and return the prose without it.
  *
- * This is now a FALLBACK. Citations arrive as a `sources` stream event carrying
- * the threads retrieval actually selected, which is exact; the system prompt no
- * longer asks the model to reprint them. Two cases still need this:
- * conversations saved to localStorage before the event existed, and a model that
- * writes a Sources list regardless of being told not to.
+ * This is a FALLBACK. Citations arrive as a `sources` stream event carrying the
+ * threads retrieval actually selected, which is exact, and the system prompt
+ * asks the model not to reprint them. Two cases still need this: conversations
+ * restored from localStorage that predate the event, and a model that writes a
+ * Sources list regardless of being told not to.
  */
 export function extractSources(content: string): { cleanContent: string; sources: Source[] } {
   const sources: Source[] = [];
@@ -227,11 +227,11 @@ export function extractSources(content: string): { cleanContent: string; sources
     }
   }
 
-  // Strip a trailing Sources section, and nothing else. This used to also
-  // delete any line anywhere that was a bullet-pointed markdown link, which was
-  // safe only while the system prompt guaranteed such lines were citations. It
-  // no longer asks for them, so a link in a genuine list is just part of the
-  // answer and must survive.
+  // Strip a trailing Sources section, and nothing else. Deleting every
+  // bullet-pointed markdown link anywhere in the answer would be safe only if
+  // such lines were guaranteed to be citations; the system prompt asks for no
+  // source list, so a link inside a genuine list is part of the answer and has
+  // to survive.
   const cleanContent = content
     .replace(/\n*\*?\*?Sources?\*?\*?:?\s*\n+([\s\S]*)$/i, "")
     .trim();

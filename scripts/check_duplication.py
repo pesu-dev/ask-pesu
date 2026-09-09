@@ -217,7 +217,7 @@ def check_config_keys() -> list[str]:
         if isinstance(value, ast.Subscript) and isinstance(value.slice, ast.Constant):
             aliases[target.attr] = value.slice.value
     if not aliases:
-        return ["no `self.*_cfg` config aliases found in app/rag.py; this check can no longer see them"]
+        return ["no `self.*_cfg` config aliases found in app/rag.py; this check cannot see the keys it compares"]
 
     problems = []
     for node in ast.walk(tree):

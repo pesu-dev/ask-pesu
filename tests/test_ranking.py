@@ -22,12 +22,17 @@ DAY = 86400.0
 NOW = 1_800_000_000.0
 
 RANKING = {
-    "recency_weight": 0.15,
-    "community_weight": 0.10,
+    "recency_weight": 0.0,
+    "community_weight": 0.30,
+    "authority_weight": 0.10,
+    "authority_min_answers": 5,
     "grace_days": 365,
     "half_life_days": 730,
-    "reference_score": 100,
+    "reference_score": 25,
 }
+# Recency is off by default, so the tests that exercise the decay switch it on
+# explicitly rather than depending on the shipped value.
+WITH_RECENCY = {**RANKING, "recency_weight": 0.15, "community_weight": 0.0, "authority_weight": 0.0}
 
 
 def doc(**metadata: object) -> Document:
@@ -91,34 +96,36 @@ class TestBlend:
     """The multiplier is a pure penalty and only ever a tie-breaker."""
 
     def test_never_scores_above_the_documents_own_relevance(self):
-        best = doc(_score=0.9, created_utc=NOW, score=10_000)
+        best = doc(_score=0.9, created_utc=NOW, root_comment_score=10_000)
         (out,) = blend([best], NOW, RANKING)
         assert out.metadata["_final"] <= 0.9 + 1e-9
 
     def test_worst_case_penalty_is_bounded_by_the_weights(self):
-        ancient = doc(_score=1.0, created_utc=NOW - 50_000 * DAY, score=0)
-        (out,) = blend([ancient], NOW, RANKING)
-        floor = 1 - RANKING["recency_weight"] - RANKING["community_weight"]
-        assert out.metadata["_final"] == pytest.approx(floor, abs=1e-3)
+        worst = doc(_score=1.0, created_utc=NOW - 50_000 * DAY, root_comment_score=0, root_comment_author="nobody")
+        (out,) = blend([worst], NOW, RANKING, {})
+        floor = 1 - RANKING["recency_weight"] - RANKING["community_weight"] - RANKING["authority_weight"]
+        # An unknown author is neutral, not zero, so the floor is not reached.
+        assert out.metadata["_final"] > floor
+        assert out.metadata["_final"] <= 1.0
 
     def test_recency_breaks_a_tie(self):
-        old = doc(_score=0.80, created_utc=NOW - 3000 * DAY, score=10, post_id="a")
-        new = doc(_score=0.80, created_utc=NOW, score=10, post_id="b")
-        assert [d.metadata["post_id"] for d in blend([old, new], NOW, RANKING)] == ["b", "a"]
+        old = doc(_score=0.80, created_utc=NOW - 3000 * DAY, root_comment_score=10, post_id="a")
+        new = doc(_score=0.80, created_utc=NOW, root_comment_score=10, post_id="b")
+        assert [d.metadata["post_id"] for d in blend([old, new], NOW, WITH_RECENCY)] == ["b", "a"]
 
     def test_does_not_invert_a_large_relevance_gap(self):
         # A clearly better but ancient answer must still win.
-        strong_old = doc(_score=0.85, created_utc=NOW - 3000 * DAY, score=0, post_id="strong")
-        weak_new = doc(_score=0.60, created_utc=NOW, score=500, post_id="weak")
-        assert blend([weak_new, strong_old], NOW, RANKING)[0].metadata["post_id"] == "strong"
+        strong_old = doc(_score=0.85, created_utc=NOW - 3000 * DAY, root_comment_score=0, post_id="strong")
+        weak_new = doc(_score=0.60, created_utc=NOW, root_comment_score=500, post_id="weak")
+        assert blend([weak_new, strong_old], NOW, WITH_RECENCY)[0].metadata["post_id"] == "strong"
 
     def test_missing_score_metadata_does_not_raise(self):
         (out,) = blend([doc()], NOW, RANKING)
         assert out.metadata["_final"] == 0.0
 
     def test_zero_weights_preserve_relevance_exactly(self):
-        cfg = {**RANKING, "recency_weight": 0.0, "community_weight": 0.0}
-        (out,) = blend([doc(_score=0.42, created_utc=NOW - 9999 * DAY, score=0)], NOW, cfg)
+        cfg = {**RANKING, "recency_weight": 0.0, "community_weight": 0.0, "authority_weight": 0.0}
+        (out,) = blend([doc(_score=0.42, created_utc=NOW - 9999 * DAY, root_comment_score=0)], NOW, cfg)
         assert out.metadata["_final"] == pytest.approx(0.42)
 
 
@@ -214,3 +221,34 @@ class TestDescribeSources:
 
     def test_no_documents(self):
         assert describe_sources([]) == []
+
+
+class TestAuthority:
+    """A trusted contributor's answer is not buried for having few votes."""
+
+    AUTH = {"rowlet-owl": 1.0, "quiet-person": 0.1}
+
+    def test_a_trusted_author_lifts_a_low_scoring_answer(self):
+        trusted = doc(_score=0.90, root_comment_score=1, root_comment_author="rowlet-owl", post_id="a")
+        unknown = doc(_score=0.90, root_comment_score=1, root_comment_author="quiet-person", post_id="b")
+        order = [d.metadata["post_id"] for d in blend([unknown, trusted], NOW, RANKING, self.AUTH)]
+        assert order == ["a", "b"]
+
+    def test_an_unlisted_author_is_neutral_not_penalised(self):
+        listed = doc(_score=0.90, root_comment_score=5, root_comment_author="quiet-person", post_id="low")
+        unlisted = doc(_score=0.90, root_comment_score=5, root_comment_author="brand-new", post_id="unknown")
+        order = [d.metadata["post_id"] for d in blend([listed, unlisted], NOW, RANKING, self.AUTH)]
+        # Neutral (0.5) beats a measured-poor track record (0.1).
+        assert order == ["unknown", "low"]
+
+    def test_a_missing_author_does_not_raise(self):
+        (out,) = blend([doc(_score=0.5, root_comment_score=3)], NOW, RANKING, self.AUTH)
+        assert out.metadata["_authority"] == 0.5
+
+    def test_endorsement_outranks_a_small_relevance_gap(self):
+        # The cross-encoder separates the top documents by only a few percent,
+        # so a well-endorsed answer must be able to overcome that.
+        weak_but_endorsed = doc(_score=0.95, root_comment_score=40, root_comment_author="x", post_id="endorsed")
+        strong_but_ignored = doc(_score=0.99, root_comment_score=0, root_comment_author="x", post_id="ignored")
+        order = [d.metadata["post_id"] for d in blend([strong_but_ignored, weak_but_endorsed], NOW, RANKING, {})]
+        assert order == ["endorsed", "ignored"]

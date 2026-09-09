@@ -114,7 +114,8 @@ Anything older than that window comes from [the backfill scripts](#backfilling-h
    say `CSE`, and replacing it deletes the token the lexical index matches on.
 2. **Multi-query expansion** — `MultiQueryRetriever` asks the LLM for several phrasings and
    unions what each retrieves, recovering passages a single phrasing would miss. The rewritten
-   query is included in that set (`include_original=True`), which it was not before.
+   query is itself included in that set (`include_original=True`), which the library does not
+   do by default.
 3. **Retrieval** — `k=12` per phrasing through `ScoredRetriever`, which keeps each document's
    score and records which *scale* it is on. Hybrid by default: Qdrant fuses the dense vector
    with the BM25 sparse vector using Reciprocal Rank Fusion.
@@ -125,8 +126,9 @@ Anything older than that window comes from [the backfill scripts](#backfilling-h
    both texts together, which a vector search structurally cannot. It scores the query
    retrieval actually used, so a follow-up is judged on its resolved form rather than on "is
    it hard?".
-6. **Ranking** — recency and community weights reorder what survived. Strictly after the
-   cutoff, so they can only reorder documents that already answer the question.
+6. **Ranking** — endorsement decides the order of what survived: the answer's own score, and
+   its author's track record for answers too few people saw to have a meaningful score. Strictly
+   after the cutoff, so it only reorders documents that already answer the question.
 7. **Diversify** — at most `max_per_post` documents from any one thread, then `top_n` overall.
 8. **Generate** — `Qwen/Qwen3-4B-Instruct-2507` via Hugging Face Inference (`nscale` provider),
    streamed token by token, after the retrieved threads have been reported as a `sources` event.
@@ -134,10 +136,10 @@ Anything older than that window comes from [the backfill scripts](#backfilling-h
 Both retrieval-side LLM calls always use the **primary** model, even in thinking mode, so
 thinking tokens are never spent reformulating a question.
 
-Only step 8 is a LangChain Expression Language chain. Retrieval used to be one too, which meant
-the documents it found were consumed inside the chain and never surfaced — so the backend could
-not tell a client which threads an answer came from, and asked the model to reprint the links
-instead.
+Only step 8 is a LangChain Expression Language chain, because streaming is what LCEL earns its
+place for. The retrieval stages run explicitly: expressed as a chain they yield only the answer
+text and keep their documents inside, which leaves the backend unable to say which threads an
+answer came from except by asking the model to reprint the links.
 
 Step 5 is a filter, not just a sort, and it is the **only** filter. If nothing clears the
 threshold the answer prompt receives no context and the system prompt makes the model say it
@@ -711,43 +713,52 @@ Runtime behaviour that is *not* part of the collection contract lives in
 | `rerank.enabled` | `true` | Turning it off skips the torch and sentence-transformers load at startup. Not permitted under hybrid |
 | `rerank.model` | `cross-encoder/ms-marco-MiniLM-L6-v2` | The cross-encoder |
 | `rerank.max_candidates` | `30` | Ceiling on pairs scored, which bounds time-to-first-token |
-| `rerank.score_threshold` | `0.3` | **The** relevance cutoff, on the cross-encoder's 0–1 sigmoid scale |
+| `rerank.score_threshold` | `0.3` | **The** relevance cutoff, on the cross-encoder's 0–1 sigmoid scale. Deliberately permissive; see below |
 | `rerank.top_n` | `6` | Documents that reach the answer prompt |
 | `rerank.max_per_post` | `3` | Cap per thread, so one discussion cannot fill the context |
 | `ranking.recency_weight` | `0.0` | Off. Age is a poor proxy for staleness here; see below |
 | `ranking.grace_days` | `365` | Age below which nothing is penalised at all |
 | `ranking.half_life_days` | `730` | Days after the grace period to halve the recency factor |
-| `ranking.community_weight` | `0.0` | Off; see below |
-| `ranking.reference_score` | `100` | Score at which the community factor saturates |
+| `ranking.community_weight` | `0.30` | How much the answer's own score decides the order |
+| `ranking.authority_weight` | `0.10` | How much its author's track record decides the order |
+| `ranking.authority_min_answers` | `5` | Answers before a contributor is scored rather than treated as neutral |
+| `ranking.reference_score` | `25` | Score at which both terms saturate, tuned for comment scores |
 | `prompts.*` | — | System, answer and query-rewrite prompts |
 
-**On the two thresholds.** They used to be one number reused in two places, on two different
-scales. Worse, the retrieval half never did anything: `langchain_core` pops `score_threshold`
-and applies it client-side to a *normalised* score, `(cosine + 1) / 2`, so the configured `0.3`
-only excluded documents below a cosine similarity of **−0.4**. The cross-encoder cutoff was
-always the only real filter, and it is now the only one. Startup refuses the stale key with an
-error explaining this.
+**On the two thresholds.** There is deliberately only one that filters. A retrieval-side cutoff
+is close to useless here: `langchain_core` pops `score_threshold` and applies it client-side to a
+*normalised* score, `(cosine + 1) / 2`, so a value like `0.3` excludes only documents below a
+cosine similarity of **−0.4** — and under hybrid it would be applied to a Reciprocal Rank Fusion
+score around `0.02` and discard everything. The cross-encoder cutoff is the real filter. Startup
+refuses the older `search_kwargs` shape with an error explaining this.
 
-**On the ranking weights — both ship at `0.0`.** The multiplier is
-`1 - wr - wc + wr·recency + wc·community`, bounded in `[1-wr-wc, 1]`, so it is a pure penalty and
-nothing can score above its own relevance. That bound suggests a weight of `0.15` can only invert
-a relevance gap of about 18% — a tie-breaker.
+**The cross-encoder filters; endorsement ranks.** That split is measured, not stylistic.
 
-Measured, that is wrong. Across eight representative questions the cross-encoder scores of the
-top six documents span **0.2% to 11%**, and in **8 of 8** the whole set fitted inside a 15%
-swing. At that weight recency is not breaking ties; it *is* the sort order, with relevance only
-choosing the candidates.
+Its scores barely separate the documents that reach the prompt: across eight representative
+questions the top six span **0.2% to 11%**. So it cannot rank. It also cannot sharply filter —
+against the labelled questions in `eval_retrieval.py`, the scores of known-correct documents and
+of everything else overlap heavily (medians 0.97 and 0.76), so raising the gate discards right
+answers about as fast as wrong ones. Its job is to drop the obviously irrelevant tail, and
+something else has to choose between the survivors.
 
-And on this corpus, sorting by age is close to backwards. r/PESU directs repeated questions to
-existing threads, and its best answers are old: one contributor alone wrote **1,776 root
-comments — 3.8% of every document in the collection** — at a median score of 5 against a corpus
-median of 2. Ranking that down by age discards what the community treats as canonical.
+That something is **endorsement**: `ranking.community_weight` on the answer's own score, and
+`ranking.authority_weight` on its author's median score across the corpus, for good answers too
+few people saw to be scored well. Both read `root_comment_*` fields, which describe the *reply*.
+The plain `score` and `author` are the **submission's** — identical across every document from
+one thread, so they rank none of them, and `score` cannot go negative, so a downvoted answer
+looks like an unrated one.
 
-The signal actually wanted is endorsement and authorship. Both are measured on the wrong object
-today: `score` and `author` are the **submission's**, identical across every document from one
-post, saying nothing about who wrote the answer or how it was received — and `score` cannot go
-negative, so a downvoted answer looks like an unrated one. Fixing that needs a
-`conf/collection.yaml` key and a payload-only backfill; see [Known issues](#known-issues).
+The multiplier is `1 - Σw + Σ(w·factor)`, bounded in `[1-Σw, 1]`: a pure penalty, so nothing
+scores above its own relevance. With `Σw = 0.40` it can invert a relevance gap of up to 67% —
+which is intended, since the gaps it must overcome are the 0.2–11% above.
+
+**`ranking.recency_weight` ships at `0.0`, deliberately.** Age is not a proxy for usefulness
+here. r/PESU directs repeated questions to existing threads, so its most-referenced answers are
+old on purpose: one contributor alone wrote **1,776 root comments — 3.8% of every document in
+the collection** — at a median score of 5 against a corpus median of 2. Weighting by recency
+demotes exactly what the community treats as canonical. If it is ever switched on it should be
+gated on the question looking time-sensitive — fees, cutoffs, placement statistics — not applied
+to every query.
 
 Prompt and model changes go here first — they are configuration, not code. Anything that would
 make already-stored vectors unreadable belongs in `conf/collection.yaml` instead.
@@ -1034,14 +1045,6 @@ Reviewers are assigned by [`.github/CODEOWNERS`](.github/CODEOWNERS). Changes to
 Only work that is actually pending lives here. Deliberate limits are documented where the
 subsystem is explained, rather than collected as though someone intends to fix them.
 
-- **Community endorsement is measured on the wrong thing.** `ranking.community_weight` is wired
-  but ships at `0.0`, because the stored `score` is the submission's rather than the answering
-  comment's: identical across every document from one post, and unable to go negative. Measured
-  over all 47,011 root comments, the comment's own score is weakly correlated with the post's
-  (Spearman +0.235), differs by 5 or more points between the best and worst answer on 48.6% of
-  multi-comment posts, and goes as low as −91. Fixing it needs a `conf/collection.yaml` key and
-  both writers, but no re-index — point ids derive from the root comment, so it is a payload-only
-  backfill with `set_payload`.
 - **The reranker reads at most ~512 tokens.** Documents are stored title-and-body first, so what
   gets truncated on a long thread is the comment tree — the part that answers the question. The
   real fix is chunking at write time in `services/db` so documents are answer-sized, which needs

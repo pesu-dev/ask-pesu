@@ -147,6 +147,12 @@ def index_comment(comment: Comment, root_comment: Comment | None = None) -> bool
 
     metadata = {
         "root_comment_id": root_comment.id,
+        # The answer's own score and author, as opposed to the submission's
+        # below. A thread's documents all share a post but each is a different
+        # reply by a different person, so these are the only fields that can
+        # tell them apart.
+        "root_comment_score": root_comment.score,
+        "root_comment_author": str(root_comment.author) if root_comment.author else None,
         "post_id": submission.id,
         "author": str(submission.author) if submission.author else None,
         "url": submission.url,
