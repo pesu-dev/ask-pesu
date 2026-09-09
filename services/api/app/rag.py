@@ -678,6 +678,9 @@ class RetrievalAugmentedGenerator:
         Each group is prefixed with the thread's permalink, which is what the
         answer cites. `permalink` rather than `url` because for a link post
         `url` is the external article, not the discussion the answer came from.
+        A document that somehow carries no permalink is still emitted, without
+        the heading: :func:`describe_sources` takes the same view, and losing a
+        citation is a far smaller failure than losing the answer.
 
         Order matters -- the model weights earlier context more heavily -- so
         documents arrive best-first and that order is preserved, with the
@@ -696,17 +699,19 @@ class RetrievalAugmentedGenerator:
         index_of: dict[str, int] = {}
         for doc in docs:
             post_id = doc.metadata.get("post_id")
+            permalink = doc.metadata.get("permalink")
+            heading = f"{permalink}\n" if permalink else ""
             head, separator, tree = doc.page_content.partition("COMMENT TREE:")
             # A document that does not carry the expected layout is emitted
             # whole rather than dropped or mangled.
             if not separator:
-                blocks.append([f"{doc.metadata['permalink']}\n{doc.page_content}"])
+                blocks.append([f"{heading}{doc.page_content}"])
                 continue
             seen = index_of.get(post_id) if post_id is not None else None
             if seen is None:
                 if post_id is not None:
                     index_of[post_id] = len(blocks)
-                blocks.append([f"{doc.metadata['permalink']}\n{head.rstrip()}", f"{separator}{tree}"])
+                blocks.append([f"{heading}{head.rstrip()}", f"{separator}{tree}"])
             else:
                 blocks[seen].append(f"{separator}{tree}")
         return "\n\n".join("\n".join(block) for block in blocks)
