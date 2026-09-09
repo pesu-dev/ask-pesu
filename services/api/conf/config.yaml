@@ -71,6 +71,15 @@ rag:
     # shared vCPUs, so treat those as a floor. Nothing downstream caps the pool,
     # which is deliberate -- one knob, and it is this one.
     k: 15
+    # Alternative phrasings the LLM writes for each question. The original query
+    # is searched as well, so the number of searches is this plus one, and the
+    # candidate pool is (query_expansions + 1) * k.
+    #
+    # Both halves of that cost something: each phrasing is part of one LLM
+    # response, and each search adds k documents for the cross-encoder to score.
+    # Raising it widens recall for questions whose wording misses the corpus's,
+    # which is what it is for.
+    query_expansions: 3
     # Minimum relevance, applied to the normalised cosine score. DENSE ONLY, and
     # it must be null under hybrid: Reciprocal Rank Fusion returns scores around
     # 0.02, so any value that looks reasonable for a cosine similarity would
@@ -118,7 +127,19 @@ rag:
     # order of what survives.
     score_threshold: 0.3
     # Documents that actually reach the answer prompt.
+    #
+    # NOT MEASURED. Six is a guess -- enough threads to answer from several
+    # perspectives, few enough that the model is not asked to read a wall of
+    # text. Nobody has checked whether four would answer as well or nine would
+    # answer better, and this is not a filter: everything it drops has already
+    # cleared the relevance cutoff, so raising it costs context and lowers no
+    # quality bar.
     top_n: 6
+    # Cross-encoder passes allowed at once. One, because a cpu-basic Space has
+    # two vCPUs and concurrent torch inferences thrash rather than overlap --
+    # serialising makes p95 better, not worse. Worth raising only on hardware
+    # with cores to spare.
+    concurrency: 1
 
   # Applied AFTER the relevance cutoff, so this reorders documents that already
   # answer the question and can never promote one that does not.
@@ -146,15 +167,54 @@ rag:
     # cannot rank one reply above another.
     community_weight: 0.30
 
-    # Score at which the term above saturates. Tuned for COMMENT scores, whose
-    # median is 2 and 90th percentile 12 -- an order of magnitude below post
-    # scores, so a value picked for those would leave almost every answer
-    # indistinguishable near zero.
+    # Upvotes at which an answer counts as fully endorsed. Above this the term
+    # is clipped, so 25 and 195 upvotes rank identically.
+    #
+    # Derived from the measured distribution of ROOT COMMENT scores, not tuned
+    # against retrieval quality: median 2, p90 12, p99 45, max 195. That puts 25
+    # between the 90th and 99th percentile, so a strongly-upvoted answer
+    # saturates while ordinary ones stay spread out -- score 2 scores 0.34, 12
+    # scores 0.79, 25 and above score 1.0.
+    #
+    # Post scores are an order of magnitude larger (median 8, p90 63), so a
+    # value chosen for those would leave almost every answer near zero and
+    # separating nothing.
     reference_score: 25
+
+  # How the retrieved threads are described in the `sources` stream event.
+  sources:
+    # Characters of the discussion shown as a preview under each title. Presentation
+    # only -- it does not affect what the model reads or how anything ranks.
+    snippet_chars: 200
 
   # The three prompts the pipeline uses. `{question}`, `{context}`, `{input}` and
   # `{chat_history}` are filled in by app/rag.py; renaming one breaks the chain.
   prompts:
+    # Writes the alternative phrasings the multi-query step searches with.
+    # `{count}` is filled in from rag.retrieval.query_expansions and `{question}`
+    # by the retriever.
+    #
+    # This replaces the library's default prompt, which hardcodes "3 different
+    # versions" in its text -- so the count could not be configured without
+    # supplying a prompt. Two other things are worth keeping here: the output
+    # parser splits the response on newlines and keeps every non-empty line, so
+    # numbering or a preamble would become part of the queries; and abbreviations
+    # must survive, because the sparse half of hybrid retrieval matches them
+    # literally and the corpus writes "CSE", not "Computer Science Engineering".
+    multi_query_prompt: |
+      You are helping search an index of r/PESU discussions.
+
+      Write {count} alternative phrasings of the question below. Vary the wording and the angle,
+      so that between them they match discussions a single phrasing would miss.
+
+      Keep any abbreviation the question uses -- CSE, ECE, PESSAT, SGPA, CGPA -- exactly as
+      written in at least one phrasing. The index matches those tokens literally and expanding
+      them everywhere loses the match.
+
+      Output one phrasing per line and nothing else: no numbering, no bullets, no blank lines,
+      no preamble.
+
+      Question: {question}
     system_prompt: |
       You are askPESU, a helpful assistant developed by the PESU Dev team that helps users find information about PES University.
       You must answer using knowledge only from the r/PESU subreddit, which will be provided to you as context.

@@ -722,14 +722,17 @@ Runtime behaviour that is *not* part of the collection contract lives in
 | `llm.*.max_new_tokens` | `2048` | Generation cap. A thinking model spends part of it on reasoning |
 | `llm.*.timeout` | `120` | Seconds to wait on the provider before failing the stream |
 | `retrieval.mode` | `hybrid` | `dense` is vector search alone; `hybrid` also queries the BM25 sparse vector and lets Qdrant fuse the two |
+| `retrieval.query_expansions` | `3` | Alternative phrasings written per question; the original is searched too, so `query_expansions + 1` searches run |
 | `retrieval.k` | `15` | Documents **per phrasing**, and the only control on pool size — 4 concurrent searches run, so the pool is at most `4 × k`. Costs ~43 ms per document of cross-encoder time before the first token |
 | `retrieval.score_threshold` | `null` | Cosine cutoff, **dense only**. Must stay `null` under hybrid; startup refuses otherwise |
 | `rerank.enabled` | `true` | Turning it off skips the torch and sentence-transformers load at startup. Not permitted under hybrid |
 | `rerank.model` | `cross-encoder/ms-marco-MiniLM-L6-v2` | The cross-encoder |
 | `rerank.score_threshold` | `0.3` | **The** relevance cutoff, and the only place a document is dropped for being a poor answer. Deliberately permissive; see below |
-| `rerank.top_n` | `6` | Documents that reach the answer prompt |
+| `rerank.top_n` | `6` | Documents that reach the answer prompt. **Not measured** — see below |
+| `rerank.concurrency` | `1` | Cross-encoder passes at once; serialised because two vCPUs thrash |
 | `ranking.community_weight` | `0.30` | How much the answer's own score decides the order |
-| `ranking.reference_score` | `25` | Score at which the endorsement term saturates, tuned for comment scores |
+| `ranking.reference_score` | `25` | Upvotes at which endorsement saturates; between the p90 (12) and p99 (45) of comment scores |
+| `sources.snippet_chars` | `200` | Preview length in the `sources` event; presentation only |
 | `prompts.*` | — | System, answer and query-rewrite prompts |
 
 **On the two thresholds.** There is deliberately only one that filters. A retrieval-side cutoff
@@ -764,6 +767,13 @@ several documents from one post are several *different people answering the same
 which is frequently the best result available rather than duplication. The repeated post title
 and body that would make that wasteful is already handled: `format_docs` emits it once per
 thread.
+
+**Two of these numbers are guesses, and are labelled as such in the config.** `rerank.top_n` was
+never measured — six is "enough perspectives, not a wall of text", and nobody has checked whether
+four answers as well. `ranking.reference_score` is derived from the measured distribution of
+comment scores (median 2, p90 12, p99 45, max 195) rather than tuned against retrieval quality;
+25 sits between the p90 and p99, so a strongly-upvoted answer saturates while ordinary ones stay
+spread out. Everything else in these tables has a measurement behind it.
 
 **There is deliberately no recency term.** Age is not a proxy for usefulness here. r/PESU
 directs repeated questions to existing threads, so its most-referenced answers are old on

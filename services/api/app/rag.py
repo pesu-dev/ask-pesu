@@ -63,7 +63,7 @@ from langchain_core.callbacks import CallbackManagerForRetrieverRun
 from langchain_core.documents.base import Document
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.output_parsers import StrOutputParser
-from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
 from langchain_core.retrievers import BaseRetriever
 from langchain_huggingface import ChatHuggingFace, HuggingFaceEndpoint
 from langchain_huggingface.embeddings import HuggingFaceEmbeddings
@@ -418,6 +418,7 @@ class RetrievalAugmentedGenerator:
         self.retrieval_cfg = self.config["rag"]["retrieval"]
         self.rerank_cfg = self.config["rag"]["rerank"]
         self.ranking_cfg = self.config["rag"]["ranking"]
+        self.sources_cfg = self.config["rag"]["sources"]
 
         # The collection name, embedding model and vector geometry are contracted
         # with services/db, not configured per service. Everything is checked
@@ -544,21 +545,42 @@ class RetrievalAugmentedGenerator:
         self.multiquery = MultiQueryRetriever.from_llm(
             retriever=self.retriever,
             llm=self.llm_primary,
+            prompt=self._multi_query_prompt(),
             # Defaults to False, which would keep the rewritten query -- the one
             # built to be self-contained and retrieval-friendly -- from ever
             # reaching the index. Only the LLM's paraphrases of it would.
             include_original=True,
         )
 
-        # One cross-encoder pass at a time. The Spaces run on two vCPUs, and
-        # without this every concurrent request starts its own torch inference
-        # and they thrash each other; serialising makes p95 better, not worse.
-        self._rerank_gate = asyncio.Semaphore(1)
+        # Cross-encoder passes allowed at once. Serialised by default because a
+        # cpu-basic Space has two vCPUs, and concurrent torch inferences thrash
+        # rather than overlap.
+        self._rerank_gate = asyncio.Semaphore(self.rerank_cfg["concurrency"])
 
         # Two answer chains differing only in which model writes the answer.
         # This is the only LCEL left, and streaming is the reason it stays.
         self._answer_primary = self.prompt | self.llm_primary | StrOutputParser()
         self._answer_thinking = self.prompt | self.llm_thinking | StrOutputParser()
+
+    def _multi_query_prompt(self) -> PromptTemplate:
+        """Build the prompt that writes the alternative phrasings.
+
+        Supplied rather than left to the library, whose default prompt hardcodes
+        "3 different versions" in its wording -- so the count cannot be
+        configured without replacing the prompt outright.
+
+        ``{count}`` is substituted here rather than declared as an input
+        variable, because it is fixed for the life of the process and the
+        retriever only ever passes ``{question}``.
+
+        Returns:
+            A prompt template taking ``question``.
+        """
+        template = self.config["rag"]["prompts"]["multi_query_prompt"]
+        return PromptTemplate(
+            input_variables=["question"],
+            template=template.replace("{count}", str(self.retrieval_cfg["query_expansions"])),
+        )
 
     def _validate_config(self) -> None:
         """Refuse to start on a configuration that cannot work.
@@ -908,7 +930,8 @@ class RetrievalAugmentedGenerator:
             # Before the first token, so a client can render citations while the
             # answer is still being written. Emitted even when empty, so the UI
             # can distinguish "no sources" from "sources not sent yet".
-            yield json.dumps({"type": "sources", "sources": describe_sources(docs)}) + "\n"
+            sources = describe_sources(docs, self.sources_cfg["snippet_chars"])
+            yield json.dumps({"type": "sources", "sources": sources}) + "\n"
 
             async for chunk in answer_chain.astream(
                 {
