@@ -2,8 +2,9 @@
 //
 // Owns the streaming lifecycle. Two paths call askStream -- handleSubmit for a
 // normal question and handleThinkLonger for re-answering an existing reply with
-// the thinking model -- and both must handle all four event types, since a
-// dropped `error` event leaves a failure invisible.
+// the thinking model -- and both must handle every event type, since a dropped
+// `error` event leaves a failure invisible and a dropped `sources` event leaves
+// the reply with no citations.
 //
 // Tokens are buffered and flushed on requestAnimationFrame: the model emits far
 // faster than the browser can usefully repaint, so applying every token as its

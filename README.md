@@ -656,9 +656,9 @@ wrong cheaply, before the expensive part.
 **Use a GPU if the machine has one.** The default `cpu` dependency group pins the CPU build of
 torch, which is right for the Spaces — they are CPU-only, and the CUDA wheels pull in a long tail
 of `nvidia-*` packages — but it also means `torch.cuda.is_available()` is False locally and
-sentence-transformers quietly selects the CPU. Measured on this corpus, the contracted model runs
-at **0.5 documents per second on CPU and 137 on an RTX 3060**: the same backfill is either most of
-a day or about five minutes.
+sentence-transformers quietly selects the CPU. The difference is not marginal — embedding is what
+the backfill spends its time on, and a GPU turns a run measured in hours into one measured in
+minutes. `populate_db.py` prints the device it chose, and warns when that is the CPU.
 
 Switching to CUDA is still a `uv sync`. The `gpu` group is the same torch from PyTorch's CUDA
 index, and `--no-group cpu` is required because `cpu` is a default group and the two are declared
@@ -732,8 +732,9 @@ Runtime behaviour that is *not* part of the collection contract lives in
 is close to useless here: `langchain_core` pops `score_threshold` and applies it client-side to a
 *normalised* score, `(cosine + 1) / 2`, so a value like `0.3` excludes only documents below a
 cosine similarity of **−0.4** — and under hybrid it would be applied to a Reciprocal Rank Fusion
-score around `0.02` and discard everything. The cross-encoder cutoff is the real filter. Startup
-refuses the older `search_kwargs` shape with an error explaining this.
+score, which is derived from rank position rather than similarity and lives on a scale small
+enough that any value chosen for a cosine discards everything. The cross-encoder cutoff is the
+real filter. Startup refuses the older `search_kwargs` shape with an error explaining this.
 
 **The cross-encoder filters; endorsement ranks.** That split is measured, not stylistic.
 
@@ -788,7 +789,7 @@ relative URLs and production needs no CORS configuration.
 
 | Path | What is there |
 |---|---|
-| `src/lib/api.ts` | The NDJSON client: parses `step`/`token`/`error`/`done` events off the stream |
+| `src/lib/api.ts` | The NDJSON client: parses `step`/`token`/`sources`/`error`/`done` events off the stream |
 | `src/lib/chat-store.ts`, `chat-persistence.ts` | Conversation state, persisted to `localStorage` |
 | `src/components/chat/` | Message rendering, sources, input, welcome screen, error banner |
 | `src/hooks/use-quota.ts`, `use-health.ts` | Poll `/quota` and `/health` so the UI can disable a mode before it is used |

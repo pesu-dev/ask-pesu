@@ -88,7 +88,8 @@ dev = [
 # on its own it comes from PyPI as the CUDA build.
 #
 # `cpu` is the default, and is what requirements.txt and both Spaces are built
-# from. `gpu` exists for the backfill, which is roughly 270x faster on a GPU:
+# from. `gpu` exists for the backfill, whose cost is dominated by embedding
+# and which is therefore orders of magnitude faster on a GPU:
 #
 #     uv sync --extra api --extra db --no-group cpu --group gpu
 #

@@ -314,9 +314,11 @@ class ScoredRetriever(BaseRetriever):
     similarity, which is meaningless. This returns whatever the mode actually
     produced.
 
-    Note the scale therefore depends on the mode: cosine under ``dense``, a
-    Reciprocal Rank Fusion score around 0.02 under ``hybrid``. Nothing compares
-    scores across modes, and nothing may threshold the fused one.
+    Note the scale therefore depends on the mode: a cosine similarity under
+    ``dense``, a Reciprocal Rank Fusion score under ``hybrid`` -- which is
+    derived from rank position rather than similarity, and lives on a far
+    smaller scale. Nothing compares scores across modes, and nothing may
+    threshold the fused one.
 
     ``_score`` is locally attached, not part of the payload written by
     ``services/db``, and is not in the collection contract.
@@ -411,9 +413,9 @@ class RetrievalAugmentedGenerator:
         # turning it on here is a constructor change and not a re-index.
         #
         # Qdrant fuses the dense and sparse rankings with Reciprocal Rank
-        # Fusion, so the score it returns is rank-derived and lands around 0.02,
-        # nothing like a cosine similarity. Nothing may threshold on it; see
-        # _validate_config.
+        # Fusion, so the score it returns is derived from rank position rather
+        # than similarity and is nothing like a cosine. Nothing may threshold on
+        # it; see _validate_config.
         mode = self.retrieval_cfg["mode"]
         sparse_kwargs = {}
         if mode == "hybrid":
@@ -461,8 +463,9 @@ class RetrievalAugmentedGenerator:
             )
         )
 
-        # Answer prompt: system rules (cite sources, refuse off-topic questions)
-        # plus the human turn carrying {question} and the retrieved {context}.
+        # Answer prompt: system rules (answer only from context, do not
+        # reprint the sources, refuse off-topic questions) plus the human turn
+        # carrying {question} and the retrieved {context}.
         self.prompt = ChatPromptTemplate.from_messages(
             [
                 ("system", self.config["rag"]["prompts"]["system_prompt"]),
@@ -683,8 +686,8 @@ class RetrievalAugmentedGenerator:
         thread and equally attributable.
 
         Args:
-            docs: Documents surviving retrieval, reranking and diversification,
-                already ordered best first.
+            docs: Documents surviving retrieval and reranking, already
+                ordered best first.
 
         Returns:
             The documents as one blank-line-separated string.
@@ -839,6 +842,8 @@ class RetrievalAugmentedGenerator:
         Each yielded string is one complete JSON object plus a newline, so the
         client can parse incrementally without buffering the whole response:
 
+        - ``{"type": "sources", "sources": [...]}`` the threads retrieval
+          selected, sent once, before the first token
         - ``{"type": "step", "content": ...}``  reasoning, thinking mode only
         - ``{"type": "token", "content": ...}`` a piece of the answer
         - ``{"type": "error", "content": ...}`` generation failed
