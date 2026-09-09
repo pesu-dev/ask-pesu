@@ -51,9 +51,17 @@ rag:
     # 0.507. Those literal tokens are unreachable by paraphrase, which is
     # exactly what a lexical index is for.
     mode: hybrid
-    # Documents per phrasing. The multi-query step generates several phrasings
-    # and the union is deduplicated, so the candidate pool is larger than this.
-    k: 12
+    # Documents per phrasing, and the ONLY control on how large the candidate
+    # pool gets. The multi-query step writes 3 phrasings and the original query
+    # is searched too, so 4 searches run and the pool is at most 4 x k before
+    # deduplication -- about 30 at this setting.
+    #
+    # That number is also the cross-encoder's workload, measured at ~61 ms per
+    # document on two CPU threads and paid before the first token reaches the
+    # user. Raising `k` to 20 is 80 documents and roughly 5s of silence, so this
+    # is a recall-against-latency dial and nothing downstream will save you from
+    # setting it carelessly.
+    k: 8
     # Minimum relevance, applied to the normalised cosine score. DENSE ONLY, and
     # it must be null under hybrid: Reciprocal Rank Fusion returns scores around
     # 0.02, so any value that looks reasonable for a cosine similarity would
@@ -76,26 +84,14 @@ rag:
     # 6, is a legacy alias that Hugging Face answers with a 307 to this one -- it
     # works, but every file lookup at startup pays a redirect.
     model: "cross-encoder/ms-marco-MiniLM-L6-v2"
-    # Ceiling on how many (query, document) pairs reach the cross-encoder. Every
-    # pair is CPU-bound torch inference paid before the first token reaches the
-    # user, so this bounds time-to-first-token no matter how many phrasings the
-    # multi-query step invented.
-    #
-    # Measured on two CPU threads, which approximates a cpu-basic Space: about
-    # 61 ms per pair, linear -- 1.85s at 30 pairs, 3.03s at 50. A Space's shared
-    # vCPUs are slower than the machine that was measured, so treat those as a
-    # floor.
-    #
-    # If recall matters more than latency here, raise `k` and this together --
-    # a cap that truncates is silently discarding candidates the ranking never
-    # sees, and a larger `k` behind a small cap buys nothing.
-    max_candidates: 30
     # THE relevance cutoff, on the cross-encoder's own 0..1 sigmoid scale, and
-    # deliberately permissive. Applied BEFORE the ranking weights below, so a
-    # document is admitted on relevance alone and only then reordered.
+    # the only place anything is discarded for being a poor answer. Applied
+    # BEFORE the ranking weights below, so a document is admitted on relevance
+    # alone and only then reordered.
     #
-    # Raising it looks tempting and does not pay. Measured against the labelled
-    # questions in scripts/eval_retrieval.py, the score distributions of known-
+    # Deliberately permissive. Raising it looks tempting and does not pay.
+    #
+    # Measured against the labelled questions in scripts/eval_retrieval.py, the score distributions of known-
     # correct documents and of everything else retrieved overlap heavily
     # (medians 0.97 and 0.76), so a higher gate discards right answers about as
     # fast as wrong ones:

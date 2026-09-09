@@ -127,13 +127,14 @@ Anything older than that window comes from [the backfill scripts](#backfilling-h
    unions what each retrieves, recovering passages a single phrasing would miss. The rewritten
    query is itself included in that set (`include_original=True`), which the library does not
    do by default.
-3. **Retrieval** — `k=12` per phrasing through `ScoredRetriever`, which keeps each document's
-   score and records which *scale* it is on. Hybrid by default: Qdrant fuses the dense vector
-   with the BM25 sparse vector using Reciprocal Rank Fusion.
+3. **Retrieval** — `k=8` per phrasing through `ScoredRetriever`, which keeps each document's
+   score. Hybrid by default: Qdrant fuses the dense vector with the BM25 sparse vector using
+   Reciprocal Rank Fusion. Four searches run, so the pool is at most `4 × k`.
 4. **Deduplication** — the union collapses on the stored point id, keeping the best-scoring
    copy. This runs before reranking so the cross-encoder never pays to score a point twice.
 5. **Rerank** — `cross-encoder/ms-marco-MiniLM-L6-v2` scores every (query, document) pair
-   through a sigmoid and drops anything below `rerank.score_threshold`. A cross-encoder reads
+   through a sigmoid and drops anything below `rerank.score_threshold`. This is the only place
+   a document is discarded for being a poor answer. A cross-encoder reads
    both texts together, which a vector search structurally cannot. It scores the query
    retrieval actually used, so a follow-up is judged on its resolved form rather than on "is
    it hard?".
@@ -151,7 +152,9 @@ place for. The retrieval stages run explicitly: expressed as a chain they yield 
 text and keep their documents inside, which leaves the backend unable to say which threads an
 answer came from except by asking the model to reprint the links.
 
-Step 5 is a filter, not just a sort, and it is the **only** filter. If nothing clears the
+Step 5 is the **only** filter. `k` bounds how much is retrieved and `top_n` bounds how much the
+model reads, but neither judges whether a document answers the question — the cutoff is the one
+thing that does. If nothing clears the
 threshold the answer prompt receives no context and the system prompt makes the model say it
 does not have that information — an admission is better than an answer invented from weak
 context.
@@ -718,12 +721,11 @@ Runtime behaviour that is *not* part of the collection contract lives in
 | `llm.*.max_new_tokens` | `2048` | Generation cap. A thinking model spends part of it on reasoning |
 | `llm.*.timeout` | `120` | Seconds to wait on the provider before failing the stream |
 | `retrieval.mode` | `hybrid` | `dense` is vector search alone; `hybrid` also queries the BM25 sparse vector and lets Qdrant fuse the two |
-| `retrieval.k` | `12` | Documents retrieved **per generated phrasing**, so the candidate pool is larger than this |
+| `retrieval.k` | `8` | Documents **per phrasing**, and the only control on pool size — 4 searches run, so the pool is at most `4 × k` |
 | `retrieval.score_threshold` | `null` | Cosine cutoff, **dense only**. Must stay `null` under hybrid; startup refuses otherwise |
 | `rerank.enabled` | `true` | Turning it off skips the torch and sentence-transformers load at startup. Not permitted under hybrid |
 | `rerank.model` | `cross-encoder/ms-marco-MiniLM-L6-v2` | The cross-encoder |
-| `rerank.max_candidates` | `30` | Ceiling on pairs scored, which bounds time-to-first-token (~61 ms per pair on two CPU threads) |
-| `rerank.score_threshold` | `0.3` | **The** relevance cutoff, on the cross-encoder's 0–1 sigmoid scale. Deliberately permissive; see below |
+| `rerank.score_threshold` | `0.3` | **The** relevance cutoff, and the only place a document is dropped for being a poor answer. Deliberately permissive; see below |
 | `rerank.top_n` | `6` | Documents that reach the answer prompt |
 | `ranking.community_weight` | `0.30` | How much the answer's own score decides the order |
 | `ranking.reference_score` | `25` | Score at which the endorsement term saturates, tuned for comment scores |

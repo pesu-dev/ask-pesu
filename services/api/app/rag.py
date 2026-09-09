@@ -588,8 +588,7 @@ class RetrievalAugmentedGenerator:
         if "reranker" in rag_cfg:
             raise ValueError(
                 "conf/config.yaml: rag.reranker was renamed to rag.rerank, which also now carries the "
-                "relevance cutoff (score_threshold), the candidate ceiling (max_candidates) and how "
-                "many documents reach the prompt (top_n)."
+                "relevance cutoff (score_threshold) and how many documents reach the prompt (top_n)."
             )
 
         mode = self.retrieval_cfg["mode"]
@@ -651,12 +650,12 @@ class RetrievalAugmentedGenerator:
         2. **Expand** into several phrasings and union what each retrieves.
         3. **Deduplicate** on the stored point id. This must come before
            reranking, or the cross-encoder pays to score the same point twice.
-        4. **Truncate** the candidate pool, bounding time-to-first-token.
-        5. **Rerank** against the search query -- not the original question. For
+        4. **Rerank** against the search query -- not the original question. For
            a follow-up the original may be contentless, and scoring "is it
            hard?" against a comment tree produces noise. This is also where the
-           relevance cutoff is applied, and it is the only filter.
-        6. **Rank** by endorsement. Strictly after the cutoff, so this only
+           relevance cutoff is applied, and it is the only place anything is
+           discarded for being a poor answer.
+        5. **Rank** by endorsement. Strictly after the cutoff, so this only
            reorders documents that already answer the question.
 
         Args:
@@ -669,13 +668,6 @@ class RetrievalAugmentedGenerator:
         """
         search_query = await self.search_query_for(question, chat_history)
         docs = deduplicate(await self.multiquery.ainvoke(search_query))
-
-        # Bound what reaches the cross-encoder. Every pair is CPU-bound torch
-        # inference paid before the first token, and the multi-query step
-        # decides how many phrasings to invent, so without a ceiling the
-        # time-to-first-token is set by the LLM's verbosity.
-        docs.sort(key=lambda d: d.metadata.get("_score", 0.0), reverse=True)
-        docs = docs[: self.rerank_cfg["max_candidates"]]
 
         docs = await self.rerank(search_query, docs)
         docs = blend(docs, self.ranking_cfg)
