@@ -188,24 +188,16 @@ def check_stream_events() -> list[str]:
     ]
 
 
-def check_config_keys() -> list[str]:
-    """Every `rag.*` key that app/rag.py subscripts must exist in conf/config.yaml.
+def _config_aliases(tree: ast.Module) -> dict[str, str]:
+    """Find the `self.<name>_cfg = self.config["rag"]["<block>"]` assignments.
 
-    The service reads its configuration with plain subscripts, so a key renamed
-    in one file and not the other is a KeyError -- raised at startup, which
-    means the Space builds for twenty minutes and then fails to boot. Comparing
-    the two statically turns that into a failed check on the pull request.
+    Discovered rather than hardcoded, so a block added to app/rag.py is covered
+    the moment it is aliased, without anyone remembering to list it here.
 
-    Only the three blocks reached through a ``self.<name>_cfg`` alias are
-    covered, which is where the volume of keys is. The aliases are discovered
-    from the assignments themselves rather than hardcoded, so adding a fourth
-    block does not silently escape the check.
+    Returns:
+        Attribute name to the config block it aliases, e.g.
+        ``{"retrieval_cfg": "retrieval"}``.
     """
-    source = (ROOT / "services" / "api" / "app" / "rag.py").read_text()
-    tree = ast.parse(source)
-    config = yaml.safe_load((ROOT / "services" / "api" / "conf" / "config.yaml").read_text())["rag"]
-
-    # self.retrieval_cfg = self.config["rag"]["retrieval"]  ->  {"retrieval_cfg": "retrieval"}
     aliases: dict[str, str] = {}
     for node in ast.walk(tree):
         if not isinstance(node, ast.Assign) or len(node.targets) != 1:
@@ -216,23 +208,60 @@ def check_config_keys() -> list[str]:
         # Unwrap ...["rag"]["<block>"] and keep the last subscript.
         if isinstance(value, ast.Subscript) and isinstance(value.slice, ast.Constant):
             aliases[target.attr] = value.slice.value
-    if not aliases:
-        return ["no `self.*_cfg` config aliases found in app/rag.py; this check cannot see the keys it compares"]
+    return aliases
 
-    problems = []
+
+def _keys_read(tree: ast.Module, aliases: dict[str, str]) -> dict[str, set[str]]:
+    """Collect every ``self.<alias>["key"]`` subscript, grouped by config block."""
+    read: dict[str, set[str]] = {block: set() for block in aliases.values()}
     for node in ast.walk(tree):
-        # self.<alias>["key"]
         if not isinstance(node, ast.Subscript) or not isinstance(node.slice, ast.Constant):
             continue
         owner = node.value
         if not isinstance(owner, ast.Attribute) or owner.attr not in aliases:
             continue
-        block = aliases[owner.attr]
-        key = node.slice.value
-        if key not in (config.get(block) or {}):
+        read[aliases[owner.attr]].add(node.slice.value)
+    return read
+
+
+def check_config_keys() -> list[str]:
+    """The `rag.*` keys app/rag.py subscripts and the ones conf/config.yaml defines must match.
+
+    Checked in both directions, because the two failures are different and both
+    are silent in their own way.
+
+    A key the code reads and the file does not define is a KeyError at startup,
+    after the Space has spent a full build getting there. A key the file defines
+    and the code never reads is worse in a quieter way: it is set by somebody who
+    expects it to do something, and it does nothing, which is exactly what
+    ``_validate_config`` refuses whole stale *blocks* for. This is that same rule
+    one level down, at the key.
+
+    Only the blocks reached through a ``self.<name>_cfg`` alias are covered,
+    which is where the volume of keys is; ``llm`` and ``prompts`` are read
+    through their full paths and are not seen here. The aliases are discovered
+    from the assignments themselves rather than hardcoded, so adding a block
+    does not silently escape the check.
+    """
+    source = (ROOT / "services" / "api" / "app" / "rag.py").read_text()
+    tree = ast.parse(source)
+    config = yaml.safe_load((ROOT / "services" / "api" / "conf" / "config.yaml").read_text())["rag"]
+
+    aliases = _config_aliases(tree)
+    if not aliases:
+        return ["no `self.*_cfg` config aliases found in app/rag.py; this check cannot see the keys it compares"]
+
+    problems = []
+    for block, keys in _keys_read(tree, aliases).items():
+        defined = set(config.get(block) or {})
+        for key in sorted(keys - defined):
             problems.append(
-                f"app/rag.py reads rag.{block}.{key}, which conf/config.yaml does not define "
-                f"(it has {sorted(config.get(block) or {})})"
+                f"app/rag.py reads rag.{block}.{key}, which conf/config.yaml does not define (it has {sorted(defined)})"
+            )
+        for key in sorted(defined - keys):
+            problems.append(
+                f"conf/config.yaml defines rag.{block}.{key}, which app/rag.py never reads -- "
+                f"remove it, or read it where it is meant to take effect"
             )
     return sorted(set(problems))
 
