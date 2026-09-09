@@ -344,23 +344,24 @@ class ScoredRetriever(BaseRetriever):
     out of the kwargs so Qdrant never sees it. Under hybrid retrieval it would
     be normalising a Reciprocal Rank Fusion score as though it were a cosine
     similarity, which is meaningless. This returns whatever the mode actually
-    produced, and ``_score_kind`` records which that is so nothing downstream
-    compares the two scales by accident.
+    produced.
 
-    Both underscore keys are locally attached, not part of the payload written
-    by ``services/db``, and are not in the collection contract.
+    Note the scale therefore depends on the mode: cosine under ``dense``, a
+    Reciprocal Rank Fusion score around 0.02 under ``hybrid``. Nothing compares
+    scores across modes, and nothing may threshold the fused one.
+
+    ``_score`` is locally attached, not part of the payload written by
+    ``services/db``, and is not in the collection contract.
     """
 
     vector_store: QdrantVectorStore
     k: int
-    score_kind: str
     score_threshold: float | None = None
 
     def _annotate(self, results: list[tuple[Document, float]]) -> list[Document]:
-        """Attach each score, and the scale it is on, to its document."""
+        """Attach each score to its document."""
         for doc, score in results:
             doc.metadata["_score"] = score
-            doc.metadata["_score_kind"] = self.score_kind
         return [doc for doc, _ in results]
 
     def _get_relevant_documents(self, query: str, *, run_manager: CallbackManagerForRetrieverRun) -> list[Document]:
@@ -516,7 +517,6 @@ class RetrievalAugmentedGenerator:
             # Under hybrid this is None, enforced by _validate_config: the fused
             # score is a rank artefact and cannot be thresholded.
             score_threshold=self.retrieval_cfg["score_threshold"],
-            score_kind="rrf" if mode == "hybrid" else "cosine",
         )
 
         # torch and sentence_transformers are imported lazily: together they are
