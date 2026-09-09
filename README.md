@@ -127,9 +127,10 @@ Anything older than that window comes from [the backfill scripts](#backfilling-h
    unions what each retrieves, recovering passages a single phrasing would miss. The rewritten
    query is itself included in that set (`include_original=True`), which the library does not
    do by default.
-3. **Retrieval** — `k=8` per phrasing through `ScoredRetriever`, which keeps each document's
+3. **Retrieval** — `k=15` per phrasing through `ScoredRetriever`, which keeps each document's
    score. Hybrid by default: Qdrant fuses the dense vector with the BM25 sparse vector using
-   Reciprocal Rank Fusion. Four searches run, so the pool is at most `4 × k`.
+   Reciprocal Rank Fusion. The four searches run concurrently, so the pool is at most `4 × k`
+   and costs roughly one round trip regardless of `k`.
 4. **Deduplication** — the union collapses on the stored point id, keeping the best-scoring
    copy. This runs before reranking so the cross-encoder never pays to score a point twice.
 5. **Rerank** — `cross-encoder/ms-marco-MiniLM-L6-v2` scores every (query, document) pair
@@ -721,7 +722,7 @@ Runtime behaviour that is *not* part of the collection contract lives in
 | `llm.*.max_new_tokens` | `2048` | Generation cap. A thinking model spends part of it on reasoning |
 | `llm.*.timeout` | `120` | Seconds to wait on the provider before failing the stream |
 | `retrieval.mode` | `hybrid` | `dense` is vector search alone; `hybrid` also queries the BM25 sparse vector and lets Qdrant fuse the two |
-| `retrieval.k` | `8` | Documents **per phrasing**, and the only control on pool size — 4 searches run, so the pool is at most `4 × k` |
+| `retrieval.k` | `15` | Documents **per phrasing**, and the only control on pool size — 4 concurrent searches run, so the pool is at most `4 × k`. Costs ~43 ms per document of cross-encoder time before the first token |
 | `retrieval.score_threshold` | `null` | Cosine cutoff, **dense only**. Must stay `null` under hybrid; startup refuses otherwise |
 | `rerank.enabled` | `true` | Turning it off skips the torch and sentence-transformers load at startup. Not permitted under hybrid |
 | `rerank.model` | `cross-encoder/ms-marco-MiniLM-L6-v2` | The cross-encoder |

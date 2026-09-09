@@ -54,14 +54,23 @@ rag:
     # Documents per phrasing, and the ONLY control on how large the candidate
     # pool gets. The multi-query step writes 3 phrasings and the original query
     # is searched too, so 4 searches run and the pool is at most 4 x k before
-    # deduplication -- about 30 at this setting.
+    # deduplication -- up to 60 at this setting.
     #
-    # That number is also the cross-encoder's workload, measured at ~61 ms per
-    # document on two CPU threads and paid before the first token reaches the
-    # user. Raising `k` to 20 is 80 documents and roughly 5s of silence, so this
-    # is a recall-against-latency dial and nothing downstream will save you from
-    # setting it carelessly.
-    k: 8
+    # The searches are concurrent (MultiQueryRetriever gathers them), so `k`
+    # costs almost nothing in network time. What it does buy is cross-encoder
+    # work, which is paid in full before the first token reaches the user.
+    # Measured on two CPU threads, which approximates a cpu-basic Space:
+    #
+    #     pool   time
+    #       24   1.01s
+    #       30   1.31s
+    #       45   1.94s
+    #       60   2.62s
+    #
+    # About 43 ms per document, linear. This machine is faster than a Space's
+    # shared vCPUs, so treat those as a floor. Nothing downstream caps the pool,
+    # which is deliberate -- one knob, and it is this one.
+    k: 15
     # Minimum relevance, applied to the normalised cosine score. DENSE ONLY, and
     # it must be null under hybrid: Reciprocal Rank Fusion returns scores around
     # 0.02, so any value that looks reasonable for a cosine similarity would
