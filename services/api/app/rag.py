@@ -53,7 +53,6 @@ import json
 import logging
 import math
 import os
-import time
 from collections.abc import AsyncGenerator, Callable
 
 import yaml
@@ -92,8 +91,8 @@ THINK_END = "</think>"
 #
 # `post_id` groups documents that share a thread, so the repeated post title and
 # body is emitted once rather than per document. `root_comment_score` is the
-# ranking signal and `created_utc` feeds the recency weight.
-REQUIRED_METADATA = ("permalink", "post_id", "created_utc", "root_comment_score")
+# ranking signal.
+REQUIRED_METADATA = ("permalink", "post_id", "root_comment_score")
 
 
 # The two ways the provider refuses us for want of budget rather than for a bad
@@ -259,40 +258,6 @@ def describe_sources(docs: list[Document], snippet_chars: int = 200) -> list[dic
     return out
 
 
-def recency_factor(created_utc: float | None, now: float, grace_days: float, half_life_days: float) -> float:
-    """Score how current a thread is, from 1.0 (fresh) down towards 0.0 (ancient).
-
-    Flat at 1.0 for everything inside the grace period, then halving every
-    ``half_life_days``. The flat region is the part that matters: a grace period
-    changes the *shape* of the curve, whereas a floor -- ``f + (1-f) * decay`` --
-    expands to ``wr*f + wr*(1-f)*decay``, whose constant term cancels in a
-    ranking and so is only a roundabout way of writing a smaller weight.
-
-    ``created_utc`` is the *submission's* timestamp rather than the comment's,
-    which is the right signal anyway: measured across the corpus, 89% of root
-    comments are written within a day of the post and 97% within a week, so the
-    error is far smaller than the grace period absorbs.
-
-    Args:
-        created_utc: POSIX timestamp, or None when the payload did not carry one.
-        now: POSIX timestamp for the current time.
-        grace_days: Age below which nothing is penalised.
-        half_life_days: Days after the grace period to halve the factor.
-
-    Returns:
-        A multiplier in ``(0, 1]``.
-    """
-    # A missing timestamp is an indexing gap, not evidence of staleness, so it
-    # is treated as current rather than punished.
-    if created_utc is None:
-        return 1.0
-    # Clamped because a clock skew or a bad payload could otherwise produce a
-    # negative age, and 0.5 ** negative exceeds 1 -- which would let this boost
-    # a document above its own relevance and break the whole invariant.
-    age_days = max(0.0, (now - float(created_utc)) / 86400.0)
-    return 0.5 ** (max(0.0, age_days - grace_days) / half_life_days)
-
-
 def community_factor(score: float | None, reference_score: float) -> float:
     """Score how strongly the community endorsed a thread, on a 0..1 scale.
 
@@ -319,16 +284,15 @@ def community_factor(score: float | None, reference_score: float) -> float:
     return min(1.0, math.log1p(max(float(score), 0.0)) / math.log1p(reference_score))
 
 
-def blend(docs: list[Document], now: float, ranking_cfg: dict) -> list[Document]:
-    """Reorder documents by relevance tempered with recency and endorsement.
+def blend(docs: list[Document], ranking_cfg: dict) -> list[Document]:
+    """Order documents by relevance tempered with how the community received them.
 
-    The multiplier is ``1 - wr - wc + wr*recency + wc*community``, bounded in
-    ``[1-wr-wc, 1]``. That makes it a pure penalty: a document can lose ranking
-    weight for being stale or unloved, but nothing can ever score above its own
-    relevance. The largest relevance gap it can invert is ``1/(1-wr-wc)`` -- at
-    the shipped weights about 18%, which makes this a tie-breaker rather than a
-    re-ranker. Anyone raising the weights until the ordering visibly changes is
-    breaking retrieval, not tuning it.
+    The multiplier is ``1 - w + w*community``, bounded in ``[1-w, 1]``. That
+    makes it a pure penalty: an unendorsed answer loses ranking weight, but
+    nothing can score above its own relevance. The largest relevance gap it can
+    invert is ``1/(1-w)``, which at the shipped weight is 43% -- deliberately
+    larger than the 0.2-11% the cross-encoder separates the top documents by,
+    because ordering them is this stage's job.
 
     Multiplicative rather than additive because the flip condition then reduces
     to ``relevance_a / relevance_b < multiplier_b / multiplier_a``, which is
@@ -340,41 +304,27 @@ def blend(docs: list[Document], now: float, ranking_cfg: dict) -> list[Document]
     would make the threshold mean "relevant, conditioned on being endorsed",
     which is not a number anyone can reason about.
 
-    The weights are what decide whether this nudges or leads. The cross-encoder
-    separates the documents that reach the prompt by only a few percent, so a
-    weight above roughly that spread makes the corresponding signal the sort
-    order rather than a tie-break. That is intended for endorsement, which
-    discriminates well here, and is exactly why recency is not used: age is not
-    a proxy for usefulness on a corpus whose community redirects questions to
-    older threads.
+    Relevance stays a factor rather than being discarded once a document clears
+    the gate, because the gate is permissive: without it, a barely-relevant
+    answer carrying a heavily-upvoted comment could lead.
 
     Args:
         docs: Documents that already cleared the relevance threshold, each
             carrying ``_score``.
-        now: POSIX timestamp for the current time.
         ranking_cfg: The ``rag.ranking`` block.
 
     Returns:
         The same documents, best first, each annotated with ``_final``.
     """
-    weight_recency = ranking_cfg["recency_weight"]
-    weight_community = ranking_cfg["community_weight"]
-    base = 1.0 - weight_recency - weight_community
+    weight = ranking_cfg["community_weight"]
+    base = 1.0 - weight
 
     for doc in docs:
-        recency = recency_factor(
-            doc.metadata.get("created_utc"),
-            now,
-            ranking_cfg["grace_days"],
-            ranking_cfg["half_life_days"],
-        )
         # The ANSWER's score, not the submission's. The submission's is identical
         # across every document from one thread and so ranks none of them.
         community = community_factor(doc.metadata.get("root_comment_score"), ranking_cfg["reference_score"])
-        multiplier = base + weight_recency * recency + weight_community * community
-        doc.metadata["_recency"] = recency
         doc.metadata["_community"] = community
-        doc.metadata["_final"] = doc.metadata.get("_score", 0.0) * multiplier
+        doc.metadata["_final"] = doc.metadata.get("_score", 0.0) * (base + weight * community)
 
     return sorted(docs, key=lambda d: d.metadata["_final"], reverse=True)
 
@@ -728,7 +678,7 @@ class RetrievalAugmentedGenerator:
         docs = docs[: self.rerank_cfg["max_candidates"]]
 
         docs = await self.rerank(search_query, docs)
-        docs = blend(docs, time.time(), self.ranking_cfg)
+        docs = blend(docs, self.ranking_cfg)
         return search_query, docs[: self.rerank_cfg["top_n"]]
 
     def format_docs(self, docs: list[Document]) -> str:

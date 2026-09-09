@@ -716,12 +716,9 @@ Runtime behaviour that is *not* part of the collection contract lives in
 | `retrieval.score_threshold` | `null` | Cosine cutoff, **dense only**. Must stay `null` under hybrid; startup refuses otherwise |
 | `rerank.enabled` | `true` | Turning it off skips the torch and sentence-transformers load at startup. Not permitted under hybrid |
 | `rerank.model` | `cross-encoder/ms-marco-MiniLM-L6-v2` | The cross-encoder |
-| `rerank.max_candidates` | `50` | Ceiling on pairs scored, which bounds time-to-first-token (~61 ms per pair on two CPU threads) |
+| `rerank.max_candidates` | `30` | Ceiling on pairs scored, which bounds time-to-first-token (~61 ms per pair on two CPU threads) |
 | `rerank.score_threshold` | `0.3` | **The** relevance cutoff, on the cross-encoder's 0–1 sigmoid scale. Deliberately permissive; see below |
 | `rerank.top_n` | `6` | Documents that reach the answer prompt |
-| `ranking.recency_weight` | `0.0` | Off. Age is a poor proxy for staleness here; see below |
-| `ranking.grace_days` | `365` | Age below which nothing is penalised at all |
-| `ranking.half_life_days` | `730` | Days after the grace period to halve the recency factor |
 | `ranking.community_weight` | `0.30` | How much the answer's own score decides the order |
 | `ranking.reference_score` | `25` | Score at which the endorsement term saturates, tuned for comment scores |
 | `prompts.*` | — | System, answer and query-rewrite prompts |
@@ -747,7 +744,7 @@ from `root_comment_score`. The plain `score` is the **submission's** — identic
 document from one thread, so it ranks none of them, and it cannot go negative, so a downvoted
 answer looks like an unrated one.
 
-The multiplier is `1 - Σw + Σ(w·factor)`, bounded in `[1-Σw, 1]`: a pure penalty, so nothing
+The multiplier is `1 - w + w·community`, bounded in `[1-w, 1]`: a pure penalty, so nothing
 scores above its own relevance. At `0.30` it can invert a relevance gap of up to 43% — which is
 intended, since the gaps it must overcome are the 0.2–11% above. Relevance stays a factor rather
 than being discarded once a document clears the gate, because the gate is permissive: without it,
@@ -759,13 +756,11 @@ which is frequently the best result available rather than duplication. The repea
 and body that would make that wasteful is already handled: `format_docs` emits it once per
 thread.
 
-**`ranking.recency_weight` ships at `0.0`, deliberately.** Age is not a proxy for usefulness
-here. r/PESU directs repeated questions to existing threads, so its most-referenced answers are
-old on purpose: one contributor alone wrote **1,776 root comments — 3.8% of every document in
-the collection** — at a median score of 5 against a corpus median of 2. Weighting by recency
-demotes exactly what the community treats as canonical. If it is ever switched on it should be
-gated on the question looking time-sensitive — fees, cutoffs, placement statistics — not applied
-to every query.
+**There is deliberately no recency term.** Age is not a proxy for usefulness here. r/PESU
+directs repeated questions to existing threads, so its most-referenced answers are old on
+purpose: one contributor alone wrote **1,776 root comments — 3.8% of every document in the
+collection** — at a median score of 5 against a corpus median of 2. Weighting by recency demotes
+exactly what the community treats as canonical.
 
 Prompt and model changes go here first — they are configuration, not code. Anything that would
 make already-stored vectors unreadable belongs in `conf/collection.yaml` instead.
@@ -1052,6 +1047,10 @@ Reviewers are assigned by [`.github/CODEOWNERS`](.github/CODEOWNERS). Changes to
 Only work that is actually pending lives here. Deliberate limits are documented where the
 subsystem is explained, rather than collected as though someone intends to fix them.
 
+- **Nothing detects a stale answer.** Ranking has no recency term, deliberately — see
+  [Configuration](#configuration) — so a 2021 thread about fees or cutoffs is cited as
+  confidently as a 2026 one. Handling that properly means judging whether the *question* is
+  time-sensitive, not penalising every old document.
 - **The answer prompt gets no conversation history.** Retrieval resolves a follow-up like "what
   about ECE?" into a standalone query and finds the right threads, but the model writing the
   answer receives the question exactly as typed, with no history to interpret it against. Adding

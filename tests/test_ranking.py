@@ -15,53 +15,15 @@ what makes them worth testing and cheap to test.
 import math
 
 import pytest
-from app.rag import blend, community_factor, deduplicate, describe_sources, recency_factor
+from app.rag import blend, community_factor, deduplicate, describe_sources
 from langchain_core.documents.base import Document
 
-DAY = 86400.0
-NOW = 1_800_000_000.0
-
-RANKING = {
-    "recency_weight": 0.0,
-    "community_weight": 0.30,
-    "grace_days": 365,
-    "half_life_days": 730,
-    "reference_score": 25,
-}
-# Recency is off by default, so the tests that exercise the decay switch it on
-# explicitly rather than depending on the shipped value.
-WITH_RECENCY = {**RANKING, "recency_weight": 0.15, "community_weight": 0.0}
+RANKING = {"community_weight": 0.30, "reference_score": 25}
 
 
 def doc(**metadata: object) -> Document:
     """Build a document carrying only the metadata a test cares about."""
     return Document(page_content=metadata.pop("text", "body"), metadata=dict(metadata))
-
-
-class TestRecencyFactor:
-    """Staleness decay: flat through the grace period, then halving."""
-
-    def test_missing_timestamp_is_treated_as_current(self):
-        # An indexing gap is not evidence of staleness, so it must not penalise.
-        assert recency_factor(None, NOW, 365, 730) == 1.0
-
-    def test_inside_the_grace_period_is_never_penalised(self):
-        for age_days in (0, 1, 100, 364, 365):
-            assert recency_factor(NOW - age_days * DAY, NOW, 365, 730) == 1.0
-
-    def test_halves_one_half_life_after_the_grace_period(self):
-        assert recency_factor(NOW - (365 + 730) * DAY, NOW, 365, 730) == pytest.approx(0.5)
-        assert recency_factor(NOW - (365 + 1460) * DAY, NOW, 365, 730) == pytest.approx(0.25)
-
-    def test_a_future_timestamp_cannot_exceed_one(self):
-        # 0.5 ** negative is greater than 1, which would let the blend push a
-        # document above its own relevance and break the "pure penalty" rule.
-        assert recency_factor(NOW + 30 * DAY, NOW, 365, 730) == 1.0
-
-    def test_decays_monotonically(self):
-        ages = [0, 365, 500, 1000, 2000, 5000]
-        factors = [recency_factor(NOW - a * DAY, NOW, 365, 730) for a in ages]
-        assert factors == sorted(factors, reverse=True)
 
 
 class TestCommunityFactor:
@@ -91,37 +53,27 @@ class TestCommunityFactor:
 
 
 class TestBlend:
-    """The multiplier is a pure penalty and only ever a tie-breaker."""
+    """The multiplier is a pure penalty: it can demote, never promote."""
 
     def test_never_scores_above_the_documents_own_relevance(self):
-        best = doc(_score=0.9, created_utc=NOW, root_comment_score=10_000)
-        (out,) = blend([best], NOW, RANKING)
+        (out,) = blend([doc(_score=0.9, root_comment_score=10_000)], RANKING)
         assert out.metadata["_final"] <= 0.9 + 1e-9
 
-    def test_worst_case_penalty_is_bounded_by_the_weights(self):
-        worst = doc(_score=1.0, created_utc=NOW - 50_000 * DAY, root_comment_score=0)
-        (out,) = blend([worst], NOW, RANKING)
-        floor = 1 - RANKING["recency_weight"] - RANKING["community_weight"]
-        assert out.metadata["_final"] == pytest.approx(floor, abs=1e-6)
+    def test_worst_case_penalty_is_bounded_by_the_weight(self):
+        (out,) = blend([doc(_score=1.0, root_comment_score=0)], RANKING)
+        assert out.metadata["_final"] == pytest.approx(1 - RANKING["community_weight"], abs=1e-6)
 
-    def test_recency_breaks_a_tie(self):
-        old = doc(_score=0.80, created_utc=NOW - 3000 * DAY, root_comment_score=10, post_id="a")
-        new = doc(_score=0.80, created_utc=NOW, root_comment_score=10, post_id="b")
-        assert [d.metadata["post_id"] for d in blend([old, new], NOW, WITH_RECENCY)] == ["b", "a"]
-
-    def test_does_not_invert_a_large_relevance_gap(self):
-        # A clearly better but ancient answer must still win.
-        strong_old = doc(_score=0.85, created_utc=NOW - 3000 * DAY, root_comment_score=0, post_id="strong")
-        weak_new = doc(_score=0.60, created_utc=NOW, root_comment_score=500, post_id="weak")
-        assert blend([weak_new, strong_old], NOW, WITH_RECENCY)[0].metadata["post_id"] == "strong"
+    def test_endorsement_breaks_a_tie(self):
+        loved = doc(_score=0.80, root_comment_score=60, post_id="loved")
+        ignored = doc(_score=0.80, root_comment_score=0, post_id="ignored")
+        assert [d.metadata["post_id"] for d in blend([ignored, loved], RANKING)] == ["loved", "ignored"]
 
     def test_missing_score_metadata_does_not_raise(self):
-        (out,) = blend([doc()], NOW, RANKING)
+        (out,) = blend([doc()], RANKING)
         assert out.metadata["_final"] == 0.0
 
-    def test_zero_weights_preserve_relevance_exactly(self):
-        cfg = {**RANKING, "recency_weight": 0.0, "community_weight": 0.0}
-        (out,) = blend([doc(_score=0.42, created_utc=NOW - 9999 * DAY, root_comment_score=0)], NOW, cfg)
+    def test_zero_weight_preserves_relevance_exactly(self):
+        (out,) = blend([doc(_score=0.42, root_comment_score=0)], {**RANKING, "community_weight": 0.0})
         assert out.metadata["_final"] == pytest.approx(0.42)
 
 
@@ -187,17 +139,17 @@ class TestEndorsementRanks:
         # so a well-endorsed answer has to be able to overcome that.
         endorsed = doc(_score=0.95, root_comment_score=40, post_id="endorsed")
         ignored = doc(_score=0.99, root_comment_score=0, post_id="ignored")
-        assert [d.metadata["post_id"] for d in blend([ignored, endorsed], NOW, RANKING)] == ["endorsed", "ignored"]
+        assert [d.metadata["post_id"] for d in blend([ignored, endorsed], RANKING)] == ["endorsed", "ignored"]
 
     def test_relevance_still_holds_a_weak_document_down(self):
         # The gate is permissive, so endorsement must not be able to promote
         # something that barely answers the question.
         barely = doc(_score=0.35, root_comment_score=200, post_id="barely")
         solid = doc(_score=0.98, root_comment_score=2, post_id="solid")
-        assert [d.metadata["post_id"] for d in blend([barely, solid], NOW, RANKING)] == ["solid", "barely"]
+        assert [d.metadata["post_id"] for d in blend([barely, solid], RANKING)] == ["solid", "barely"]
 
     def test_several_answers_from_one_thread_all_survive(self):
         # Nothing caps per thread: they are different people answering, and
         # keeping them is usually the best available result.
         docs = [doc(_score=0.9, root_comment_score=10 - i, post_id="p") for i in range(6)]
-        assert len(blend(docs, NOW, RANKING)) == 6
+        assert len(blend(docs, RANKING)) == 6

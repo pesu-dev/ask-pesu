@@ -86,12 +86,10 @@ rag:
     # vCPUs are slower than the machine that was measured, so treat those as a
     # floor.
     #
-    # 50 is set so the cap rarely binds: `k` documents per phrasing across the
-    # phrasings the LLM invents, deduplicated, usually lands below it, and a cap
-    # that truncates is silently discarding candidates the ranking never sees.
-    # If time-to-first-token matters more than recall, lower `k` before lowering
-    # this -- fewer, better candidates beats truncating good ones.
-    max_candidates: 50
+    # If recall matters more than latency here, raise `k` and this together --
+    # a cap that truncates is silently discarding candidates the ranking never
+    # sees, and a larger `k` behind a small cap buys nothing.
+    max_candidates: 30
     # THE relevance cutoff, on the cross-encoder's own 0..1 sigmoid scale, and
     # deliberately permissive. Applied BEFORE the ranking weights below, so a
     # document is admitted on relevance alone and only then reordered.
@@ -120,32 +118,15 @@ rag:
   # Applied AFTER the relevance cutoff, so this reorders documents that already
   # answer the question and can never promote one that does not.
   #
-  # The multiplier is `1 - wr - wc + wr*recency + wc*community`, bounded in
-  # [1-wr-wc, 1] -- a pure penalty that cannot boost anything above its own
-  # relevance.
+  # The multiplier is `1 - w + w*community`, bounded in [1-w, 1] -- a pure
+  # penalty that cannot lift anything above its own relevance.
   #
-  # Read this before raising `recency_weight` above zero.
-  #
-  # The bound above is real but misleading. It says a weight of 0.15 can only
-  # invert a relevance gap up to ~18%, which sounds like a tie-breaker. Measured
-  # on 2026-09-09 across eight representative questions, the cross-encoder
-  # scores of the top six documents -- the ones that actually reach the prompt --
-  # span between 0.2% and 11%, and in 8 of 8 queries the whole set fitted inside
-  # a 15% swing. So a weight of 0.15 does not break ties: it becomes the primary
-  # sort, and relevance only chooses which documents are in the running.
-  #
-  # That matters because on this corpus, ordering by recency is close to
-  # backwards. r/PESU's best answers are old: it directs repeated questions to
-  # existing threads, and one contributor alone wrote 1,776 root comments --
-  # 3.8% of every document in the collection -- at a median score of 5 against a
-  # corpus median of 2. Demoting that content by age loses the answers the
-  # community itself treats as canonical.
-  #
-  # The signal actually wanted here is endorsement and authorship, not age, and
-  # both are measured on the wrong object today: `score` and `author` are the
-  # SUBMISSION's, so they are identical for every document from one post and say
-  # nothing about who wrote the answer or how it was received. Fixing that needs
-  # a conf/collection.yaml key and a payload-only backfill.
+  # There is deliberately no recency term. Ordering this corpus by age is close
+  # to backwards: r/PESU directs repeated questions to existing threads, so its
+  # most-referenced answers are old on purpose -- one contributor alone wrote
+  # 1,776 root comments, 3.8% of every document in the collection, at a median
+  # score of 5 against a corpus median of 2. Demoting that by age loses exactly
+  # what the community treats as canonical.
   ranking:
     # How much the ANSWER's own score decides the order. This is the primary
     # ranking signal, and it is meant to lead rather than nudge: the
@@ -165,24 +146,6 @@ rag:
     # scores, so a value picked for those would leave almost every answer
     # indistinguishable near zero.
     reference_score: 25
-
-    # Staleness. OFF. Answers about fees, faculty and cutoffs do expire, but
-    # answers about how SGPA is computed do not, and one global weight cannot
-    # tell those apart -- it just demotes everything old, including the threads
-    # the subreddit itself points people at. If this is ever switched on it
-    # should be gated on the question looking time-sensitive, not applied to
-    # every query.
-    recency_weight: 0.0
-    # Age below which a document is treated as current, with no penalty at all.
-    # Post creation time tracks thread age closely -- 89% of root comments are
-    # written within a day of the post -- so this is measuring the right thing.
-    # A grace period is a genuine change of shape, unlike a floor, which is
-    # algebraically just a smaller `recency_weight`.
-    grace_days: 365
-    # After the grace period, the age at which a document keeps half its
-    # recency. Against the measured age distribution (median 458 days, p90 1086)
-    # this leaves the typical document at 0.92 and halves the four-year tail.
-    half_life_days: 730
 
   # The three prompts the pipeline uses. `{question}`, `{context}`, `{input}` and
   # `{chat_history}` are filled in by app/rag.py; renaming one breaks the chain.
