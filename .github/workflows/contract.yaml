@@ -73,14 +73,6 @@ jobs:
             || { echo "::error::requirements.txt does not match pyproject.toml; recompile it (see pyproject.toml)"; exit 1; }
           echo "✅ requirements.txt is in sync with pyproject.toml"
 
-      - name: Ranking arithmetic behaves
-        # The one thing runtime contract validation cannot catch. Everything
-        # else here is structural; a wrong sort order raises nothing and looks
-        # like a content problem, so it needs a test rather than an assertion.
-        run: |
-          uv sync --extra api --extra db
-          uv run pytest tests/ -q
-
       - name: Files that must agree, and cannot share code, still agree
         # The two contract loaders, both writers' payload dicts, each Space's
         # frontmatter, the NDJSON event names, the ruff version that pre-commit

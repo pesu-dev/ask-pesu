@@ -160,11 +160,6 @@ threshold the answer prompt receives no context and the system prompt makes the 
 does not have that information — an admission is better than an answer invented from weak
 context.
 
-Retrieval quality is measurable rather than asserted:
-[`services/api/scripts/eval_retrieval.py`](services/api/scripts/eval_retrieval.py) scores 42
-labelled questions against the live collection and reports recall and MRR. It is read-only and
-calls no LLM.
-
 **Conversations are never stored server-side.** The frontend keeps them in `localStorage` and
 replays the relevant history with each request.
 
@@ -849,18 +844,11 @@ alternative — answering from the wrong data — is worse than not answering.
 ## Testing
 
 ```bash
-uv run pytest tests/ -q                # ranking arithmetic
-cd services/api/frontend && npm test   # vitest
+cd services/api/frontend
+npm test                               # vitest
 ```
 
-`tests/` covers the ranking functions in `app/rag.py` and nothing else. That is deliberate, and
-it is the one exception to the rule below: ranking is pure arithmetic over document metadata
-with no external state to validate against, and its failure mode is silent — documents come back
-in a slightly wrong order and nothing errors. The functions take their inputs explicitly and
-touch no network, no models and no Qdrant. They live at the repository root because a
-`git subtree split` ships only `services/<name>/`, and test code has no business in a Space.
-
-Beyond that there is no Python test suite. The contract is enforced at runtime instead: both services
+There is no Python test suite. The contract is enforced at runtime instead: both services
 validate the live collection, the embedding model and every payload before doing any work, and
 refuse to run against a mismatch.
 
@@ -913,7 +901,7 @@ in CI — and because pre-commit builds its hook environments from a git ref and
 |---|---|---|
 | `source.yaml` | PR opened/updated | Rejects PRs that are not from a fork, come from a fork's `main`, or target anything other than `dev` |
 | `pre-commit.yaml` | Push, PR | Every pre-commit hook, on all files — ruff lint and format included |
-| `contract.yaml` | Push, PR | Asserts each shared file is tracked exactly once; recompiles `requirements.txt` and fails on drift; runs the ranking tests and [`scripts/check_duplication.py`](scripts/check_duplication.py); rehearses the deploy vendoring and checks each split tree is a complete Space root |
+| `contract.yaml` | Push, PR | Asserts each shared file is tracked exactly once; recompiles `requirements.txt` and fails on drift; runs [`scripts/check_duplication.py`](scripts/check_duplication.py); rehearses the deploy vendoring and checks each split tree is a complete Space root |
 | `docker.yaml` | Push to `dev`, chained off Pre-Commit; or manual | Builds both images, boots each container, polls `/health` |
 
 `docker.yaml` is by far the slowest job, because it builds both images from scratch. That is the

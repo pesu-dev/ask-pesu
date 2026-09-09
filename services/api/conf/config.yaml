@@ -46,8 +46,7 @@ rag:
     # Hybrid is the default because a lexical index reaches what paraphrase
     # cannot: the words the corpus itself uses -- CSE, PESSAT, T1, SGPA. On
     # plain-English questions the two modes perform about the same; on questions
-    # written in that vocabulary hybrid is clearly ahead. Re-check with
-    # scripts/eval_retrieval.py rather than trusting a number recorded here.
+    # written in that vocabulary hybrid is clearly ahead.
     mode: hybrid
     # Documents fetched per phrasing. With `query_expansions` this sets the
     # candidate pool, since the original query is searched alongside each
@@ -93,7 +92,7 @@ rag:
     # right and wrong answers too similarly for a higher gate to separate them,
     # so it discards correct answers about as fast as irrelevant ones. Its job
     # is to drop the obviously off-topic tail; upvotes decide the order of what
-    # survives. Re-derive with scripts/eval_retrieval.py before changing it.
+    # survives. Check the effect on real questions before changing it.
     score_threshold: 0.3
     # Documents that actually reach the answer prompt.
     #

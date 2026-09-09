@@ -615,9 +615,8 @@ class RetrievalAugmentedGenerator:
         skipped and the question is searched verbatim. The prompt's other job,
         expanding PESU abbreviations, is deliberately not worth a round trip
         here: the rewrite expands *alongside* the original rather than replacing
-        it, so the abbreviation still reaches BM25 either way, and measurement
-        shows lexical matching on those tokens is where hybrid retrieval earns
-        its keep (see ``scripts/eval_retrieval.py``).
+        it, so the abbreviation still reaches BM25 either way, and lexical
+        matching on those tokens is where hybrid retrieval earns its keep.
 
         Args:
             question: The user's question, as asked.
