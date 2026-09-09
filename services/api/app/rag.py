@@ -563,22 +563,19 @@ class RetrievalAugmentedGenerator:
         """
         rag_cfg = self.config["rag"]
 
-        # The old shape. search_kwargs gets its own message because one of the
-        # keys it carried was not merely renamed -- it never did anything.
-        if "search_kwargs" in rag_cfg:
-            raise ValueError(
-                "conf/config.yaml: rag.search_kwargs was replaced by rag.retrieval. Its `k` is now "
-                "rag.retrieval.k, and its `score_threshold` is now rag.rerank.score_threshold. Note that "
-                "the old retrieval threshold never filtered anything: langchain_core pops score_threshold "
-                "and applies it to the NORMALISED score (cosine + 1) / 2, so the configured 0.3 only "
-                "excluded documents below a cosine similarity of -0.4. The cross-encoder cutoff was "
-                "always the only real filter, which is why it is the only threshold left."
-            )
-        if "reranker" in rag_cfg:
-            raise ValueError(
-                "conf/config.yaml: rag.reranker was renamed to rag.rerank, which also now carries the "
-                "relevance cutoff (score_threshold) and how many documents reach the prompt (top_n)."
-            )
+        # Blocks that this file no longer reads. Each is refused rather than
+        # ignored, because a stale block is set by somebody who expects it to do
+        # something, and silently doing nothing is the worst answer available.
+        for stale, guidance in (
+            (
+                "search_kwargs",
+                "its `k` is now rag.retrieval.k and its `score_threshold` is now rag.rerank.score_threshold",
+            ),
+            ("reranker", "it is now rag.rerank, which also carries score_threshold and top_n"),
+            ("ranking", "ranking is a sort on the answer's upvotes and takes no weights; remove the block"),
+        ):
+            if stale in rag_cfg:
+                raise ValueError(f"conf/config.yaml: rag.{stale} is not read -- {guidance}.")
 
         mode = self.retrieval_cfg["mode"]
         if mode not in ("dense", "hybrid"):
@@ -588,9 +585,10 @@ class RetrievalAugmentedGenerator:
             if self.retrieval_cfg["score_threshold"] is not None:
                 raise ValueError(
                     "conf/config.yaml: rag.retrieval.score_threshold must be null when mode is hybrid. "
-                    "Qdrant applies it to the Reciprocal Rank Fusion score, which is around 0.02, so any "
-                    "value chosen for a cosine similarity discards every document and every answer becomes "
-                    "'I don't have that information'. Filter with rag.rerank.score_threshold instead."
+                    "Qdrant applies it to the fused score, which is derived from rank position rather "
+                    "than similarity and lives on a far smaller scale, so a value chosen for a cosine "
+                    "similarity discards every document and every answer becomes 'I don't have that "
+                    "information'. Filter with rag.rerank.score_threshold instead."
                 )
             if not self.contract.sparse_vector_name:
                 raise ValueError(
