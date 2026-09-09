@@ -10,10 +10,10 @@
 #         --python-platform linux --python-version 3.12 -o requirements.txt
 #
 # `--group cpu` is not optional. It is what puts torch in the file at all, and
-# therefore what selects the +cpu build. Compiling without it was measured: torch
-# resolves transitively from PyPI as the CUDA build and drags in 15 `nvidia-*`
-# packages, roughly 4 GB, into both images. CI recompiles with exactly this
-# command and fails on any difference.
+# therefore what selects the +cpu build. Without it torch resolves transitively
+# from PyPI as the CUDA build, pulling a long tail of `nvidia-*` packages into
+# both images and inflating them by an order of magnitude. CI recompiles with
+# exactly this command and fails on any difference.
 #
 # Both extras go into that single file, so each image installs the union and
 # carries a little it does not import. That is deliberate: it resolves the
@@ -128,9 +128,10 @@ default-groups = [
     "cpu",
 ]
 
-# torch resolves from PyTorch's CPU index. Both Spaces run on CPU, and the CUDA
-# wheels were ~4 GB of image for libraries that are never loaded. `explicit`
-# keeps this index used ONLY for torch, so nothing else resolves against it.
+# torch resolves from PyTorch's CPU index. Both Spaces run on CPU, so the CUDA
+# wheels are a large amount of image for libraries that are never loaded.
+# `explicit` keeps this index used ONLY for torch, so nothing else resolves
+# against it.
 [[tool.uv.index]]
 name = "pytorch-cpu"
 url = "https://download.pytorch.org/whl/cpu"

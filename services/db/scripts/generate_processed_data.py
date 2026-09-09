@@ -364,8 +364,8 @@ def main() -> int:
     print(f"Posts: {total} | Comments: {comment_count} | Workers: {workers} ({mp.cpu_count()} cores)", flush=True)
 
     jobs = [build_job(chunk, comments_by_post, roots, posts, args.output_dir) for chunk in chunkify(post_ids, workers)]
-    # The parent's copies are no longer needed; every job carries its own slice.
-    # On a full dump this is the difference between holding one copy and two.
+    # Every job carries its own slice, so the parent's copies can go. On a full
+    # dump this is the difference between holding one copy in memory and two.
     del posts, comments_by_post, roots
 
     failures = run_workers(jobs, total)

@@ -16,8 +16,8 @@ on:
     workflows: [ "Pre-Commit Checks" ]
     types:
       - completed
-  # The usable trigger. Two ~3 GB images take roughly twenty minutes to build
-  # and boot, which is why this is on request rather than on every push.
+  # The usable trigger. Building and booting both images is slow, which is why
+  # this runs on request rather than on every push.
   workflow_dispatch:
 
 jobs:

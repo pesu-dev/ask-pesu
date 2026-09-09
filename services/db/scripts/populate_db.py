@@ -98,12 +98,11 @@ def build_vector_store(
     contract_mod.validate_embedding(contract, embeddings)
 
     # Say which device this is about to use, because the difference is not
-    # marginal: measured on this corpus, the contracted model runs at roughly
-    # 0.5 documents per second on CPU and 137 on a consumer GPU. A full backfill
-    # is therefore either five minutes or the better part of a day, and nothing
-    # else in the output distinguishes the two until the ETA has been wrong for
-    # an hour. sentence-transformers picks the device itself; this only reports
-    # what it chose.
+    # marginal -- a GPU is orders of magnitude faster here, so the same backfill
+    # is minutes or most of a day. Nothing else in the output distinguishes the
+    # two until the ETA has been wrong for a long time.
+    # sentence-transformers picks the device itself; this only reports what it
+    # chose.
     device = str(getattr(getattr(embeddings, "_client", None), "device", "unknown"))
     print(f"Embedding on {device}.")
     if device.startswith("cpu"):
@@ -178,11 +177,10 @@ def main() -> int:
         "--batch-size", type=int, default=128, help="Documents per upsert. Filled across files, not per file."
     )
     # sentence-transformers sorts by length before batching, so the longest
-    # threads in the corpus arrive in one batch together. At 8k tokens each that
-    # is enough to exhaust a 6 GB card partway through a run: measured here, the
-    # default of 32 asked for 1.11 GiB with 869 MiB free and killed the run at
-    # file 4,322. Only peak memory depends on this, not the vectors, so the
-    # default is set to survive a laptop GPU rather than to saturate a large one.
+    # threads arrive in one batch together -- enough to exhaust a modest card
+    # partway through a run, long after it looked like it was working. Only peak
+    # memory depends on this, not the vectors it produces, so the default is set
+    # to survive a laptop GPU rather than to saturate a large one.
     parser.add_argument(
         "--encode-batch-size", type=int, default=8, help="Documents the embedding model encodes at once."
     )

@@ -253,7 +253,7 @@ def check_ruff_pin() -> list[str]:
         None,
     )
     if hooked is None:
-        return ["no ruff-pre-commit repo in .pre-commit-config.yaml; this check can no longer see the hook version"]
+        return ["no ruff-pre-commit repo in .pre-commit-config.yaml; this check cannot see the hook version"]
 
     group = tomllib.loads((ROOT / "pyproject.toml").read_text()).get("dependency-groups", {}).get("dev")
     if group is None:

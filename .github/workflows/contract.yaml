@@ -62,8 +62,8 @@ jobs:
         #
         # `--group cpu` must match pyproject.toml's documented command exactly:
         # it is what puts torch in the file, and therefore what selects the +cpu
-        # build. Without it torch resolves from PyPI and brings 15 `nvidia-*`
-        # packages, about 4 GB, into both images.
+        # build. Without it torch resolves from PyPI and brings the CUDA
+        # runtime into both images, inflating them by an order of magnitude.
         run: |
           pipx install uv || pip install uv
           cp requirements.txt /tmp/requirements.check

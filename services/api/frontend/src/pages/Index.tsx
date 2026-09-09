@@ -366,9 +366,8 @@ export default function Index() {
         onEvent: (evt) => {
           if (streamClosed) return; // ignore anything arriving after fail/done
           if (evt.type === "step") {
-            // Reasoning text from the thinking model. Dropping these was
-            // especially wrong here: this handler exists to run that model, so
-            // it was the one path guaranteed to produce steps.
+            // Reasoning text from the thinking model. This handler exists to
+            // run that model, so it is the one path certain to produce steps.
             updateAssistantMessage(convId, thinkingResponseId, (m) => ({
               ...m,
               status: evt.content,

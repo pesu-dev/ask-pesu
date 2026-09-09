@@ -457,7 +457,7 @@ exactly one place, the [GPU backfill](#backfilling-history), and is spelled out 
 which have neither uv nor a lockfile, and it carries no `dev` group. Installing it by hand also
 has to reproduce the torch index redirection that `uv sync` applies on its own — `pip` needs
 `--extra-index-url`, uv additionally needs `--index-strategy unsafe-best-match`, and getting
-either wrong yields a 4 GB CUDA torch or a resolution failure.
+either wrong yields the CUDA torch or a resolution failure.
 
 There is **one** `pyproject.toml` and **one** `requirements.txt`, both at the root. What the two
 services share is the base `dependencies`; what only one needs is an extra (`api` / `db`):
@@ -468,7 +468,7 @@ uv pip compile pyproject.toml --extra api --extra db --group cpu \
 ```
 
 This compiles the **union**, so each image installs a little it does not import — the api
-carries `fastembed`/`onnxruntime` (~190 MB), the db carries `langchain-classic` and friends.
+carries `fastembed`/`onnxruntime`, the db carries `langchain-classic` and friends.
 That is the price of one file, and it buys something worth having: the embedding stack is
 resolved exactly **once**, so the writer and the reader cannot end up on different versions of
 the library that produces the vectors. `--python-platform` and `--python-version` are pinned so
@@ -476,7 +476,7 @@ the file generated on a laptop is the file the linux/amd64 Space installs.
 
 `--group cpu` is load-bearing, not decoration. `torch` lives in a dependency group rather than in
 `dependencies`, so compiling without it leaves torch to resolve transitively from PyPI as the CUDA
-build — roughly 4 GB of image for libraries that are never loaded. Naming it directly is also what
+build — a great deal of image for libraries that are never loaded. Naming it directly is also what
 makes the redirection work at all: uv's `[tool.uv.sources]` applies to direct dependencies only,
 and only `sentence-transformers` actually imports torch.
 
@@ -619,7 +619,7 @@ docker run --rm -p 7860:7860 --env-file .env ask-pesu
 ```
 
 Substitute `db` for `api` for the listener. Both images install the **CPU build of torch** from
-PyTorch's own index, which is what keeps them near 3 GB instead of ~16 GB. Both run as uid 1000,
+PyTorch's own index, which is what keeps them from ballooning. Both run as uid 1000,
 matching how Hugging Face Spaces run containers.
 
 ## Backfilling history
@@ -658,9 +658,9 @@ uv run python scripts/populate_db.py --data-dir processed_data
 the contract, without building the embedding model or writing anything — everything that can go
 wrong cheaply, before the expensive part.
 
-**Use a GPU if the machine has one.** The default `cpu` dependency group pins `torch==2.14.0+cpu`,
-which is right for the Spaces — they are CPU-only, and the CUDA wheels are 15 extra `nvidia-*`
-packages, about 4 GB of image — but it also means `torch.cuda.is_available()` is False locally and
+**Use a GPU if the machine has one.** The default `cpu` dependency group pins the CPU build of
+torch, which is right for the Spaces — they are CPU-only, and the CUDA wheels pull in a long tail
+of `nvidia-*` packages — but it also means `torch.cuda.is_available()` is False locally and
 sentence-transformers quietly selects the CPU. Measured on this corpus, the contracted model runs
 at **0.5 documents per second on CPU and 137 on an RTX 3060**: the same backfill is either most of
 a day or about five minutes.
@@ -916,7 +916,7 @@ in CI — and because pre-commit builds its hook environments from a git ref and
 | `contract.yaml` | Push, PR | Asserts each shared file is tracked exactly once; recompiles `requirements.txt` and fails on drift; runs the ranking tests and [`scripts/check_duplication.py`](scripts/check_duplication.py); rehearses the deploy vendoring and checks each split tree is a complete Space root |
 | `docker.yaml` | Push to `dev`, chained off Pre-Commit; or manual | Builds both images, boots each container, polls `/health` |
 
-`docker.yaml` costs roughly twenty minutes per merge, building two ~3 GB images. That is the
+`docker.yaml` is by far the slowest job, because it builds both images from scratch. That is the
 price of the only check that exercises a Dockerfile at all — nothing else in CI builds one.
 | `deploy-dev-api.yaml` | Push to `dev` | Deploys the api to `askpesu-dev`. The db is not deployed from `dev` |
 | `deploy-prod.yaml` | Manual | Fast-forwards `dev` → `main`, then deploys **both** services to `askpesu` and `askpesu-db` |

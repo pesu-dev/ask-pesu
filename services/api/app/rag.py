@@ -887,10 +887,10 @@ class RetrievalAugmentedGenerator:
         token_count = 0
 
         try:
-            # Retrieval runs to completion before the answer starts streaming.
-            # It always did -- the chain could not stream a token before it had
-            # its context either -- but now the documents are in hand here,
-            # which is what lets the stream report its own sources.
+            # Retrieval runs to completion before the answer starts
+            # streaming, which is unavoidable -- nothing can be generated
+            # without context. Holding the documents here rather than inside a
+            # chain is what lets the stream report its own sources.
             search_query, docs = await self.retrieve(query, chat_history)
             logging.info(f"Retrieved {len(docs)} documents for {search_query!r}")
 

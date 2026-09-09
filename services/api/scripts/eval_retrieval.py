@@ -28,27 +28,19 @@ what makes the dense/hybrid comparison meaningful:
   ``SGPA``, ``CGPA``, ``capstone``. These are exact tokens that appear in the
   corpus and cannot be reached by paraphrase.
 
-Measured on 2026-09-08 against 43,370 points, k=10:
-
-    set      mode     recall@1   recall@3   MRR
-    natural  dense      11/26      11/26    0.472
-    natural  hybrid     11/26      14/26    0.497
-    jargon   dense       3/16       8/16    0.353
-    jargon   hybrid      6/16      10/16    0.507
-
-Hybrid is a wash on NATURAL and decisively better on JARGON. That difference is
-the entire case for hybrid retrieval, and it is also why the query rewriter must
-expand abbreviations *alongside* the original rather than replacing it:
-rewriting ``CSE`` into ``Computer Science Engineering`` turns a JARGON query into
-a NATURAL one and hands the gain straight back.
+Run both sets against both modes and the split does the arguing. Hybrid tends to
+be a wash on NATURAL and clearly ahead on JARGON, which is the case for hybrid
+retrieval and also why the query rewriter expands abbreviations *alongside* the
+original rather than replacing it: rewriting ``CSE`` into ``Computer Science
+Engineering`` turns a JARGON query into a NATURAL one and hands that gain back.
 
 Two things to keep in mind before reading much into a small delta:
 
 - **The collection is live.** ``services/db`` indexes new threads continuously,
   so the corpus grows underneath consecutive runs and a question can change rank
-  with nothing else changed. One question is worth ~6% on the jargon set. Only
-  compare runs taken close together, and only believe differences of several
-  questions.
+  with nothing else changed. The sets are small enough that one question moves
+  the percentages noticeably, so compare runs taken close together and believe
+  only differences of several questions.
 - A question can legitimately be answered by more than one thread, so a miss is
   not necessarily a failure. These are numbers to beat, not to reach 100%.
 """

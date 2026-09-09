@@ -214,9 +214,9 @@ def listen_comments() -> None:
     """Consume new r/PESU comments forever, indexing the thread each belongs to.
 
     Runs the catch-up first, then streams. ``skip_existing=True`` means the
-    stream only yields comments posted after it opens; the catch-up is what
-    covers the window before that, so a restart no longer loses the comments
-    posted while this service was down.
+    stream only yields comments posted after it opens, so the catch-up is what
+    covers the window before that -- without it a restart would silently lose
+    every comment posted while this service was down.
 
     Two failure modes, deliberately treated differently. Network and Reddit errors
     are transient, so the stream is simply re-entered. A contract violation is a
