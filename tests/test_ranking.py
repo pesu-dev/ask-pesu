@@ -12,69 +12,13 @@ their inputs explicitly and touch no network, no models and no Qdrant, which is
 what makes them worth testing and cheap to test.
 """
 
-import math
-
-import pytest
-from app.rag import blend, community_factor, deduplicate, describe_sources
+from app.rag import deduplicate, describe_sources, rank
 from langchain_core.documents.base import Document
-
-RANKING = {"community_weight": 0.30, "reference_score": 25}
 
 
 def doc(**metadata: object) -> Document:
     """Build a document carrying only the metadata a test cares about."""
     return Document(page_content=metadata.pop("text", "body"), metadata=dict(metadata))
-
-
-class TestCommunityFactor:
-    """Endorsement, log-scaled because Reddit scores are heavy-tailed."""
-
-    def test_missing_score_is_neutral_but_zero_is_not(self):
-        # The distinction is the whole point: 0 is an observed value and real
-        # information, None means nobody recorded one.
-        assert community_factor(None, 100) == 0.5
-        assert community_factor(0, 100) == 0.0
-
-    def test_negative_scores_clamp_to_zero(self):
-        assert community_factor(-91, 100) == 0.0
-
-    def test_saturates_at_the_reference_and_never_exceeds_one(self):
-        assert community_factor(100, 100) == pytest.approx(1.0)
-        assert community_factor(697, 100) == 1.0
-
-    def test_is_logarithmic(self):
-        assert community_factor(8, 100) == pytest.approx(math.log1p(8) / math.log1p(100))
-        # Concave, which is what compresses the heavy tail: the midpoint scores
-        # far above the average of the endpoints, so a handful of viral threads
-        # cannot run away with every ranking they appear in.
-        assert community_factor(50, 100) > (community_factor(0, 100) + community_factor(100, 100)) / 2
-        # Sub-linear: ten times the score is nowhere near ten times the factor.
-        assert community_factor(80, 100) < 10 * community_factor(8, 100)
-
-
-class TestBlend:
-    """The multiplier is a pure penalty: it can demote, never promote."""
-
-    def test_never_scores_above_the_documents_own_relevance(self):
-        (out,) = blend([doc(_score=0.9, root_comment_score=10_000)], RANKING)
-        assert out.metadata["_final"] <= 0.9 + 1e-9
-
-    def test_worst_case_penalty_is_bounded_by_the_weight(self):
-        (out,) = blend([doc(_score=1.0, root_comment_score=0)], RANKING)
-        assert out.metadata["_final"] == pytest.approx(1 - RANKING["community_weight"], abs=1e-6)
-
-    def test_endorsement_breaks_a_tie(self):
-        loved = doc(_score=0.80, root_comment_score=60, post_id="loved")
-        ignored = doc(_score=0.80, root_comment_score=0, post_id="ignored")
-        assert [d.metadata["post_id"] for d in blend([ignored, loved], RANKING)] == ["loved", "ignored"]
-
-    def test_missing_score_metadata_does_not_raise(self):
-        (out,) = blend([doc()], RANKING)
-        assert out.metadata["_final"] == 0.0
-
-    def test_zero_weight_preserves_relevance_exactly(self):
-        (out,) = blend([doc(_score=0.42, root_comment_score=0)], {**RANKING, "community_weight": 0.0})
-        assert out.metadata["_final"] == pytest.approx(0.42)
 
 
 class TestDeduplicate:
@@ -131,25 +75,36 @@ class TestDescribeSources:
         assert describe_sources([]) == []
 
 
-class TestEndorsementRanks:
-    """Endorsement, not relevance, orders the documents that clear the gate."""
+class TestRank:
+    """Upvotes on the answer order the documents; ties keep relevance order."""
 
-    def test_endorsement_outranks_a_small_relevance_gap(self):
-        # The cross-encoder separates the top documents by only a few percent,
-        # so a well-endorsed answer has to be able to overcome that.
-        endorsed = doc(_score=0.95, root_comment_score=40, post_id="endorsed")
-        ignored = doc(_score=0.99, root_comment_score=0, post_id="ignored")
-        assert [d.metadata["post_id"] for d in blend([ignored, endorsed], RANKING)] == ["endorsed", "ignored"]
+    def test_orders_by_upvotes(self):
+        docs = [doc(post_id="low", root_comment_score=2), doc(post_id="high", root_comment_score=40)]
+        assert [d.metadata["post_id"] for d in rank(docs)] == ["high", "low"]
 
-    def test_relevance_still_holds_a_weak_document_down(self):
-        # The gate is permissive, so endorsement must not be able to promote
-        # something that barely answers the question.
-        barely = doc(_score=0.35, root_comment_score=200, post_id="barely")
-        solid = doc(_score=0.98, root_comment_score=2, post_id="solid")
-        assert [d.metadata["post_id"] for d in blend([barely, solid], RANKING)] == ["solid", "barely"]
+    def test_a_downvoted_answer_sinks(self):
+        # The post's score cannot go negative, which is why the comment's is used.
+        docs = [doc(post_id="rejected", root_comment_score=-20), doc(post_id="unrated", root_comment_score=0)]
+        assert [d.metadata["post_id"] for d in rank(docs)] == ["unrated", "rejected"]
 
-    def test_several_answers_from_one_thread_all_survive(self):
-        # Nothing caps per thread: they are different people answering, and
-        # keeping them is usually the best available result.
-        docs = [doc(_score=0.9, root_comment_score=10 - i, post_id="p") for i in range(6)]
-        assert len(blend(docs, RANKING)) == 6
+    def test_ties_keep_the_relevance_order_they_arrived_in(self):
+        # Two thirds of the corpus sits at three upvotes or fewer, so this is
+        # the common case, and it is the whole reason the sort must be stable.
+        docs = [doc(post_id=str(i), root_comment_score=1) for i in range(5)]
+        assert [d.metadata["post_id"] for d in rank(docs)] == ["0", "1", "2", "3", "4"]
+
+    def test_a_missing_score_is_neither_endorsed_nor_rejected(self):
+        docs = [
+            doc(post_id="unknown"),
+            doc(post_id="down", root_comment_score=-5),
+            doc(post_id="up", root_comment_score=5),
+        ]
+        assert [d.metadata["post_id"] for d in rank(docs)] == ["up", "unknown", "down"]
+
+    def test_a_boolean_is_not_a_score(self):
+        # metadata is JSON round-tripped, so guard against True sorting as 1.
+        (out,) = rank([doc(post_id="x", root_comment_score=True)])
+        assert out.metadata["post_id"] == "x"
+
+    def test_no_documents(self):
+        assert rank([]) == []

@@ -139,9 +139,9 @@ Anything older than that window comes from [the backfill scripts](#backfilling-h
    both texts together, which a vector search structurally cannot. It scores the query
    retrieval actually used, so a follow-up is judged on its resolved form rather than on "is
    it hard?".
-6. **Ranking** — endorsement decides the order of what survived, using the answer's own score.
-   Strictly after the cutoff, so it only reorders documents that already answer the question.
-   The best `top_n` go on.
+6. **Ranking** — upvotes on the answer decide the order of what survived. Strictly after the
+   cutoff, so it only reorders documents that already answer the question. The sort is stable, so
+   documents with equal upvotes keep the relevance order they arrived in. The best `top_n` go on.
 7. **Generate** — `Qwen/Qwen3-4B-Instruct-2507` via Hugging Face Inference (`nscale` provider),
    streamed token by token, after the retrieved threads have been reported as a `sources` event.
 
@@ -730,8 +730,6 @@ Runtime behaviour that is *not* part of the collection contract lives in
 | `rerank.score_threshold` | `0.3` | **The** relevance cutoff, and the only place a document is dropped for being a poor answer. Deliberately permissive; see below |
 | `rerank.top_n` | `6` | Documents that reach the answer prompt. **Not measured** — see below |
 | `rerank.concurrency` | `1` | Cross-encoder passes at once; serialised because two vCPUs thrash |
-| `ranking.community_weight` | `0.30` | How much the answer's own score decides the order |
-| `ranking.reference_score` | `25` | Upvotes at which endorsement saturates; between the p90 (12) and p99 (45) of comment scores |
 | `sources.snippet_chars` | `200` | Preview length in the `sources` event; presentation only |
 | `prompts.*` | — | System, answer and query-rewrite prompts |
 
@@ -751,16 +749,20 @@ of everything else overlap heavily (medians 0.97 and 0.76), so raising the gate 
 answers about as fast as wrong ones. Its job is to drop the obviously irrelevant tail, and
 something else has to choose between the survivors.
 
-That something is **endorsement**: `ranking.community_weight` on the answer's own score, read
-from `root_comment_score`. The plain `score` is the **submission's** — identical across every
-document from one post, so it ranks none of them, and it cannot go negative, so a downvoted
-answer looks like an unrated one.
+That something is **upvotes on the answer**, read from `root_comment_score`. The plain `score` is
+the **submission's** — identical across every document from one post, so it ranks none of them,
+and it cannot go negative, so a downvoted answer looks like an unrated one.
 
-The multiplier is `1 - w + w·community`, bounded in `[1-w, 1]`: a pure penalty, so nothing
-scores above its own relevance. At `0.30` it can invert a relevance gap of up to 43% — which is
-intended, since the gaps it must overcome are the 0.2–11% above. Relevance stays a factor rather
-than being discarded once a document clears the gate, because the gate is permissive: without it,
-a barely-relevant answer with a heavily-upvoted comment could lead.
+Documents are sorted on the raw count, with no normalisation and no scale constant. Ordering
+needs neither: sorting is invariant to monotonic transforms, so ranking by `log(score)/log(C)` is
+exactly ranking by `score`. A bounded 0–1 factor would only be required to *multiply* upvotes
+with relevance, and dropping that multiplication removed the last configuration value derived
+from a snapshot of the corpus — the kind that silently drifts as the collection grows.
+
+**The sort is stable, and that is load-bearing.** Documents arrive in cross-encoder order, and
+two-thirds of the corpus sits at three upvotes or fewer, so ties are common — and a tie keeps the
+relevance order it came in with. The behaviour is *upvotes where they differ, relevance where
+they do not*, with neither expressed as a weight.
 
 **Nothing caps how many answers one thread contributes.** A document is one comment tree, so
 several documents from one post are several *different people answering the same question*,
@@ -768,12 +770,9 @@ which is frequently the best result available rather than duplication. The repea
 and body that would make that wasteful is already handled: `format_docs` emits it once per
 thread.
 
-**Two of these numbers are guesses, and are labelled as such in the config.** `rerank.top_n` was
-never measured — six is "enough perspectives, not a wall of text", and nobody has checked whether
-four answers as well. `ranking.reference_score` is derived from the measured distribution of
-comment scores (median 2, p90 12, p99 45, max 195) rather than tuned against retrieval quality;
-25 sits between the p90 and p99, so a strongly-upvoted answer saturates while ordinary ones stay
-spread out. Everything else in these tables has a measurement behind it.
+**`rerank.top_n` is a guess and is labelled as one in the config** — six is "enough perspectives,
+not a wall of text", and nobody has checked whether four answers as well. It is not a filter:
+everything it drops has already cleared the cutoff.
 
 **There is deliberately no recency term.** Age is not a proxy for usefulness here. r/PESU
 directs repeated questions to existing threads, so its most-referenced answers are old on

@@ -23,10 +23,10 @@ A question travels through seven stages:
    and drops anything below the configured threshold. This is the only stage
    that filters, and it filters rather than orders: its scores separate the
    surviving documents by only a few percent.
-6. **Rank.** Endorsement decides the order of what survived, using the answer's
-   own score. Strictly after the cutoff, so it reorders only documents that
-   already answer the question and can never promote one that does not. The
-   best ``top_n`` go on.
+6. **Rank.** Upvotes on the answer decide the order of what survived. Strictly
+   after the cutoff, so it reorders only documents that already answer the
+   question. The sort is stable, so documents with equal upvotes keep the
+   relevance order they arrived in. The best ``top_n`` go on.
 7. **Generate.** The surviving documents are formatted into the answer prompt and
    streamed from the LLM token by token, after the threads they came from have
    been reported as a ``sources`` event.
@@ -51,7 +51,6 @@ import asyncio
 import datetime
 import json
 import logging
-import math
 import os
 from collections.abc import AsyncGenerator, Callable
 
@@ -258,75 +257,44 @@ def describe_sources(docs: list[Document], snippet_chars: int = 200) -> list[dic
     return out
 
 
-def community_factor(score: float | None, reference_score: float) -> float:
-    """Score how strongly the community endorsed an answer, on a 0..1 scale.
+def rank(docs: list[Document]) -> list[Document]:
+    """Order documents by how the community received the answer.
 
-    Logarithmic because Reddit scores are heavy-tailed -- the corpus median is 8
-    and the maximum 697 -- so a linear scale would let a handful of viral
-    answers dominate every ranking they appear in.
+    Upvotes on the ROOT COMMENT, not on the post. The post's score is identical
+    across every document from one post and so ranks none of them, and it cannot
+    go negative, which makes a rejected answer indistinguishable from an unrated
+    one. The comment's score does both.
 
-    Note ``0`` and ``None`` are deliberately different. Zero is a real observed
-    value and a genuine signal, so it maps to 0.0; a missing value is an
-    indexing gap and maps to the corpus median instead, so an unknown document
-    is neither rewarded nor punished. This is why ``metadata.get("score", 0)``
-    and ``score or 0`` would both be wrong.
+    Sorted directly on the raw count, with no normalisation and no scale
+    constant. A bounded 0..1 factor would only be needed to *multiply*
+    endorsement with relevance; ordering needs no such thing, because sorting is
+    invariant to monotonic transforms -- ranking by ``log(score)/log(25)`` gives
+    exactly the ranking of ``score``. Removing the multiplication removes the
+    constant, and with it the only value in the configuration that was derived
+    from a snapshot of the corpus and would drift as it grew.
 
-    Args:
-        score: The stored score, or None when the payload did not carry one.
-        reference_score: The score at which the factor saturates.
+    **The sort is stable, and that is load-bearing.** Documents arrive in
+    cross-encoder order, and two-thirds of the corpus sits at three upvotes or
+    fewer, so ties are common -- and a tie keeps the relevance order it came in
+    with. The effect is "upvotes where they differ, relevance where they do
+    not", without either being expressed as a weight.
 
-    Returns:
-        A multiplier in ``[0, 1]``.
-    """
-    if score is None:
-        # log1p(8) / log1p(100), the corpus median expressed on this scale.
-        return 0.5
-    return min(1.0, math.log1p(max(float(score), 0.0)) / math.log1p(reference_score))
-
-
-def blend(docs: list[Document], ranking_cfg: dict) -> list[Document]:
-    """Order documents by relevance tempered with how the community received them.
-
-    The multiplier is ``1 - w + w*community``, bounded in ``[1-w, 1]``. That
-    makes it a pure penalty: an unendorsed answer loses ranking weight, but
-    nothing can score above its own relevance. The largest relevance gap it can
-    invert is ``1/(1-w)``, which at the shipped weight is 43% -- deliberately
-    larger than the 0.2-11% the cross-encoder separates the top documents by,
-    because ordering them is this stage's job.
-
-    Multiplicative rather than additive because the flip condition then reduces
-    to ``relevance_a / relevance_b < multiplier_b / multiplier_a``, which is
-    scale-invariant: it behaves the same among documents scoring 0.9 as among
-    documents scoring 0.35. An additive form would reorder far more aggressively
-    at the low end, which is exactly where the scores mean least.
-
-    This must run *after* the relevance cutoff. Filtering on the blended score
-    would make the threshold mean "relevant, conditioned on being endorsed",
-    which is not a number anyone can reason about.
-
-    Relevance stays a factor rather than being discarded once a document clears
-    the gate, because the gate is permissive: without it, a barely-relevant
-    answer carrying a heavily-upvoted comment could lead.
+    A missing score sorts as zero: neither endorsed nor rejected, so it sits
+    above genuinely downvoted answers and below genuinely upvoted ones.
 
     Args:
-        docs: Documents that already cleared the relevance threshold, each
-            carrying ``_score``.
-        ranking_cfg: The ``rag.ranking`` block.
+        docs: Documents that already cleared the relevance cutoff, in
+            cross-encoder order.
 
     Returns:
-        The same documents, best first, each annotated with ``_final``.
+        The same documents, best first.
     """
-    weight = ranking_cfg["community_weight"]
-    base = 1.0 - weight
 
-    for doc in docs:
-        # The ANSWER's score, not the submission's. The submission's is identical
-        # across every document from one post and so ranks none of them.
-        community = community_factor(doc.metadata.get("root_comment_score"), ranking_cfg["reference_score"])
-        doc.metadata["_community"] = community
-        doc.metadata["_final"] = doc.metadata.get("_score", 0.0) * (base + weight * community)
+    def upvotes(doc: Document) -> float:
+        score = doc.metadata.get("root_comment_score")
+        return float(score) if isinstance(score, int | float) and not isinstance(score, bool) else 0.0
 
-    return sorted(docs, key=lambda d: d.metadata["_final"], reverse=True)
+    return sorted(docs, key=upvotes, reverse=True)
 
 
 class ScoredRetriever(BaseRetriever):
@@ -417,7 +385,6 @@ class RetrievalAugmentedGenerator:
             self.config = yaml.safe_load(file)
         self.retrieval_cfg = self.config["rag"]["retrieval"]
         self.rerank_cfg = self.config["rag"]["rerank"]
-        self.ranking_cfg = self.config["rag"]["ranking"]
         self.sources_cfg = self.config["rag"]["sources"]
 
         # The collection name, embedding model and vector geometry are contracted
@@ -677,8 +644,8 @@ class RetrievalAugmentedGenerator:
            hard?" against a comment tree produces noise. This is also where the
            relevance cutoff is applied, and it is the only place anything is
            discarded for being a poor answer.
-        5. **Rank** by endorsement. Strictly after the cutoff, so this only
-           reorders documents that already answer the question.
+        5. **Rank** by upvotes on the answer. Strictly after the cutoff, so
+           this only reorders documents that already answer the question.
 
         Args:
             question: The user's question, as asked.
@@ -692,7 +659,7 @@ class RetrievalAugmentedGenerator:
         docs = deduplicate(await self.multiquery.ainvoke(search_query))
 
         docs = await self.rerank(search_query, docs)
-        docs = blend(docs, self.ranking_cfg)
+        docs = rank(docs)
         return search_query, docs[: self.rerank_cfg["top_n"]]
 
     def format_docs(self, docs: list[Document]) -> str:

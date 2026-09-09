@@ -36,40 +36,30 @@ rag:
       temperature: 0.3
       max_new_tokens: 2048
       timeout: 120
-  # Retrieval is a RECALL stage: its job is to put the right document somewhere
-  # in the candidate pool, not to rank it. Relevance is decided by the reranker
-  # below, which is the only thing that filters.
+  # Retrieval finds candidates. It does not decide relevance -- the reranker
+  # below is the only thing that filters.
   retrieval:
     # dense  -- vector search alone.
-    # hybrid -- vector search AND the BM25 sparse vector every point already
-    #           carries, fused by Qdrant with Reciprocal Rank Fusion.
+    # hybrid -- vector search AND the BM25 sparse vector every point carries,
+    #           fused by Qdrant with Reciprocal Rank Fusion.
     #
-    # Measured on 2026-09-08 over 43,370 points (scripts/eval_retrieval.py):
-    # the two are a wash on plain-English questions (MRR 0.472 dense, 0.497
-    # hybrid) and hybrid is clearly ahead when the question uses the words the
-    # corpus uses -- CSE, PESSAT, T1, SGPA, capstone -- where MRR goes 0.353 to
-    # 0.507. Those literal tokens are unreachable by paraphrase, which is
-    # exactly what a lexical index is for.
+    # Hybrid is the default because a lexical index reaches what paraphrase
+    # cannot: the words the corpus itself uses -- CSE, PESSAT, T1, SGPA. On
+    # plain-English questions the two modes perform about the same; on questions
+    # written in that vocabulary hybrid is clearly ahead. Re-check with
+    # scripts/eval_retrieval.py rather than trusting a number recorded here.
     mode: hybrid
     # Documents per phrasing, and the ONLY control on how large the candidate
     # pool gets. The multi-query step writes 3 phrasings and the original query
     # is searched too, so 4 searches run and the pool is at most 4 x k before
     # deduplication -- up to 60 at this setting.
     #
-    # The searches are concurrent (MultiQueryRetriever gathers them), so `k`
-    # costs almost nothing in network time. What it does buy is cross-encoder
-    # work, which is paid in full before the first token reaches the user.
-    # Measured on two CPU threads, which approximates a cpu-basic Space:
-    #
-    #     pool   time
-    #       24   1.01s
-    #       30   1.31s
-    #       45   1.94s
-    #       60   2.62s
-    #
-    # About 43 ms per document, linear. This machine is faster than a Space's
-    # shared vCPUs, so treat those as a floor. Nothing downstream caps the pool,
-    # which is deliberate -- one knob, and it is this one.
+    # The searches are concurrent, so `k` costs almost nothing in network time.
+    # What it buys is cross-encoder work, paid in full before the first token
+    # reaches the user: roughly 43 ms per document on two CPU threads, linear,
+    # so a pool of 60 is about 2.6s of silence. A Space's shared vCPUs are
+    # slower than that. Nothing downstream caps the pool, which is deliberate --
+    # one knob, and it is this one.
     k: 15
     # Alternative phrasings the LLM writes for each question. The original query
     # is searched as well, so the number of searches is this plus one, and the
@@ -107,33 +97,18 @@ rag:
     # BEFORE the ranking weights below, so a document is admitted on relevance
     # alone and only then reordered.
     #
-    # Deliberately permissive. Raising it looks tempting and does not pay.
-    #
-    # Measured against the labelled questions in scripts/eval_retrieval.py, the score distributions of known-
-    # correct documents and of everything else retrieved overlap heavily
-    # (medians 0.97 and 0.76), so a higher gate discards right answers about as
-    # fast as wrong ones:
-    #
-    #     threshold   correct kept   others kept
-    #          0.30            92%           70%
-    #          0.70            85%           53%
-    #          0.90            73%           40%
-    #          0.98            37%           25%
-    #
-    # And "others" overstates the error, because several threads legitimately
-    # answer the same question and only one of them is labelled. So this model
-    # discriminates too weakly on this corpus to be a sharp filter: its job is
-    # to drop the obviously irrelevant tail, and `ranking` below decides the
-    # order of what survives.
+    # Deliberately permissive, and raising it does not pay: this model scores
+    # right and wrong answers too similarly for a higher gate to separate them,
+    # so it discards correct answers about as fast as irrelevant ones. Its job
+    # is to drop the obviously off-topic tail; upvotes decide the order of what
+    # survives. Re-derive with scripts/eval_retrieval.py before changing it.
     score_threshold: 0.3
     # Documents that actually reach the answer prompt.
     #
     # NOT MEASURED. Six is a guess -- enough threads to answer from several
-    # perspectives, few enough that the model is not asked to read a wall of
-    # text. Nobody has checked whether four would answer as well or nine would
-    # answer better, and this is not a filter: everything it drops has already
-    # cleared the relevance cutoff, so raising it costs context and lowers no
-    # quality bar.
+    # perspectives, few enough that the model is not reading a wall of text.
+    # Not a filter: everything it drops has already cleared the cutoff, so
+    # raising it costs context and lowers no quality bar.
     top_n: 6
     # Cross-encoder passes allowed at once. One, because a cpu-basic Space has
     # two vCPUs and concurrent torch inferences thrash rather than overlap --
@@ -141,50 +116,10 @@ rag:
     # with cores to spare.
     concurrency: 1
 
-  # Applied AFTER the relevance cutoff, so this reorders documents that already
-  # answer the question and can never promote one that does not.
-  #
-  # The multiplier is `1 - w + w*community`, bounded in [1-w, 1] -- a pure
-  # penalty that cannot lift anything above its own relevance.
-  #
-  # There is deliberately no recency term. Ordering this corpus by age is close
-  # to backwards: r/PESU directs repeated questions to existing threads, so its
-  # most-referenced answers are old on purpose -- one contributor alone wrote
-  # 1,776 root comments, 3.8% of every document in the collection, at a median
-  # score of 5 against a corpus median of 2. Demoting that by age loses exactly
-  # what the community treats as canonical.
-  ranking:
-    # How much the ANSWER's own score decides the order. This is the primary
-    # ranking signal, and it is meant to lead rather than nudge: the
-    # cross-encoder separates the documents reaching the prompt by only a few
-    # percent, so it filters well and ranks poorly, and something else has to
-    # choose between the survivors. Community endorsement is what "verified"
-    # means on a subreddit that redirects repeated questions to existing
-    # threads.
-    #
-    # Read from `root_comment_score`, not `score`. The latter is the
-    # SUBMISSION's, identical across every document from one post, so it
-    # cannot rank one reply above another.
-    community_weight: 0.30
-
-    # Upvotes at which an answer counts as fully endorsed. Above this the term
-    # is clipped, so 25 and 195 upvotes rank identically.
-    #
-    # Derived from the measured distribution of ROOT COMMENT scores, not tuned
-    # against retrieval quality: median 2, p90 12, p99 45, max 195. That puts 25
-    # between the 90th and 99th percentile, so a strongly-upvoted answer
-    # saturates while ordinary ones stay spread out -- score 2 scores 0.34, 12
-    # scores 0.79, 25 and above score 1.0.
-    #
-    # Post scores are an order of magnitude larger (median 8, p90 63), so a
-    # value chosen for those would leave almost every answer near zero and
-    # separating nothing.
-    reference_score: 25
-
   # How the retrieved threads are described in the `sources` stream event.
   sources:
-    # Characters of the discussion shown as a preview under each title. Presentation
-    # only -- it does not affect what the model reads or how anything ranks.
+    # Characters of the discussion shown as a preview under each title.
+    # Presentation only -- it changes nothing the model reads and nothing ranks.
     snippet_chars: 200
 
   # The three prompts the pipeline uses. `{question}`, `{context}`, `{input}` and
@@ -204,7 +139,7 @@ rag:
     multi_query_prompt: |
       You are helping search an index of r/PESU discussions.
 
-      Write {count} alternative phrasings of the question below. Vary the wording and the angle,
+      Write {count} alternative phrasings of the question below. Vary the wording and the phrasing,
       so that between them they match discussions a single phrasing would miss.
 
       Keep any abbreviation the question uses -- CSE, ECE, PESSAT, SGPA, CGPA -- exactly as
