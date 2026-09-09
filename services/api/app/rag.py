@@ -4,37 +4,46 @@ One :class:`RetrievalAugmentedGenerator` is built during the FastAPI lifespan an
 reused for every request; construction loads an embedding model and optionally a
 cross-encoder, so it is far too expensive to do per request.
 
-A question travels through five stages, all wired together with LangChain
-Expression Language (LCEL) in :meth:`RetrievalAugmentedGenerator._build_chain`:
+A question travels through six stages:
 
-1. **Rewrite.** The question plus chat history becomes one standalone,
-   retrieval-friendly query. This is what resolves "is it hard?" into "is the
-   Data Structures course at PES University hard?", and expands PESU
-   abbreviations (RR, EC, CSE, SGPA...) using the prompt in ``conf/config.yaml``.
+1. **Rewrite.** With chat history, the question plus that history becomes one
+   standalone query -- this is what resolves "is it hard?" into something
+   retrievable. With no history there is nothing to resolve against and the
+   step is skipped, saving a round trip on every first question.
 2. **Multi-query expansion.** ``MultiQueryRetriever`` asks the LLM for several
-   phrasings of that query and unions the documents each one retrieves, which
-   recovers passages a single phrasing would miss.
-3. **Dense retrieval.** Each phrasing runs a vector search against Qdrant
-   through :class:`ScoredRetriever`.
-4. **Rerank.** A cross-encoder scores every (query, document) pair properly --
+   phrasings and unions the documents each one retrieves, which recovers
+   passages a single phrasing would miss.
+3. **Retrieval.** Each phrasing runs a search against Qdrant through
+   :class:`ScoredRetriever`.
+4. **Deduplication.** The union is collapsed on the stored point id. This has to
+   happen before reranking, or the cross-encoder pays to score the same
+   document more than once.
+5. **Rerank.** A cross-encoder scores every (query, document) pair properly --
    attending to both texts at once, which a bi-encoder vector search cannot do --
    and drops anything below the configured threshold.
-5. **Generate.** The surviving documents are formatted into the answer prompt and
+6. **Generate.** The surviving documents are formatted into the answer prompt and
    streamed from the LLM token by token.
 
 Stages 1 and 2 always use the *primary* model even in thinking mode, so thinking
 tokens are never spent on query rewriting.
+
+Only the last stage is a LangChain Expression Language (LCEL) chain. Retrieval
+used to be one too, which meant the documents it found were consumed inside the
+chain and never surfaced -- so the backend could not tell a client which threads
+an answer was drawn from, and had to ask the model to reprint the links instead.
+Running the retrieval stages explicitly is what makes the documents available to
+:meth:`RetrievalAugmentedGenerator.generate`.
 
 The collection name, embedding model and vector geometry are not configured here.
 They are contracted with ``services/db`` in ``conf/collection.yaml`` and verified
 at startup; see :mod:`app.contract`.
 """
 
+import asyncio
 import json
 import logging
 import os
 from collections.abc import AsyncGenerator, Callable
-from operator import itemgetter
 
 import yaml
 from dotenv import load_dotenv
@@ -42,12 +51,10 @@ from huggingface_hub import InferenceClient
 from langchain_classic.retrievers import MultiQueryRetriever
 from langchain_core.callbacks import CallbackManagerForRetrieverRun
 from langchain_core.documents.base import Document
-from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.retrievers import BaseRetriever
-from langchain_core.runnables import RunnableLambda, RunnablePassthrough, RunnableSerializable
 from langchain_huggingface import ChatHuggingFace, HuggingFaceEndpoint
 from langchain_huggingface.embeddings import HuggingFaceEmbeddings
 from langchain_qdrant import QdrantVectorStore
@@ -301,60 +308,84 @@ class RetrievalAugmentedGenerator:
         else:
             self.cross_encoder = None
 
-        # Two chains differing only in which model writes the final answer; both
-        # retrieve with the primary model.
-        self.rag_chain_primary = self._build_chain(self.llm_primary)
-        self.rag_chain_thinking = self._build_chain(self.llm_thinking)
-
-    def _build_chain(self, llm: BaseChatModel) -> RunnableSerializable[str, str]:
-        """Compose the LCEL chain that turns a question into a stream of answer text.
-
-        Args:
-            llm: The model that writes the final answer. Retrieval always uses
-                the primary model regardless of this argument.
-
-        Returns:
-            A runnable taking ``{"input", "question", "chat_history"}`` and
-            streaming answer strings.
-        """
-        # Always use llm_primary for retrieval steps — never burn thinking-model
-        # tokens on question rewriting or multi-query expansion.
+        # Retrieval is not a chain. It used to be, and the documents it found
+        # were consumed inside the chain and never surfaced -- which is why the
+        # backend could not tell the client which threads an answer came from,
+        # and had to ask the model to reprint the links instead.
         #
-        # `include_original` defaults to False, which means the rewritten query
-        # -- the one carefully built to be self-contained and retrieval-friendly
-        # -- never itself reaches the index. Only the LLM's paraphrases of it do.
-        multiquery_retriever = MultiQueryRetriever.from_llm(
+        # Both retrieval-side steps always use the primary model, so thinking
+        # tokens are never spent on reformulating a question.
+        self._rewrite_chain = self.frame_qn_prompt | self.llm_primary | StrOutputParser()
+        self.multiquery = MultiQueryRetriever.from_llm(
             retriever=self.retriever,
             llm=self.llm_primary,
+            # Defaults to False, which would keep the rewritten query -- the one
+            # built to be self-contained and retrieval-friendly -- from ever
+            # reaching the index. Only the LLM's paraphrases of it would.
             include_original=True,
         )
 
-        # Rewrite, then retrieve: the dict pulls the two fields the rewrite prompt
-        # needs, the LLM rewrites, StrOutputParser unwraps the message into a
-        # plain string, and that string is what the retriever searches with.
-        history_aware_retriever = (
-            {"input": itemgetter("input"), "chat_history": itemgetter("chat_history")}
-            | self.frame_qn_prompt
-            | self.llm_primary
-            | StrOutputParser()
-            | multiquery_retriever
-            | RunnableLambda(deduplicate)
-        )
+        # One cross-encoder pass at a time. The Spaces run on two vCPUs, and
+        # without this every concurrent request starts its own torch inference
+        # and they thrash each other; serialising makes p95 better, not worse.
+        self._rerank_gate = asyncio.Semaphore(1)
 
-        # `assign` runs the retriever and adds its output under "docs" while
-        # keeping the original input keys, so "input" survives for the reranker
-        # (which needs the query) and for the answer prompt further down.
-        return (
-            RunnablePassthrough.assign(docs=history_aware_retriever)
-            | RunnableLambda(self._rerank)
-            | {
-                "context": itemgetter("docs") | RunnableLambda(self.format_docs),
-                "question": itemgetter("input"),
-            }
-            | self.prompt
-            | llm
-            | StrOutputParser()
-        )
+        # Two answer chains differing only in which model writes the answer.
+        # This is the only LCEL left, and streaming is the reason it stays.
+        self._answer_primary = self.prompt | self.llm_primary | StrOutputParser()
+        self._answer_thinking = self.prompt | self.llm_thinking | StrOutputParser()
+
+    async def search_query_for(self, question: str, chat_history: list) -> str:
+        """Decide what string retrieval should actually search for.
+
+        With chat history, the question may be elliptical -- "is it hard?" means
+        nothing on its own -- so it is rewritten into a standalone query against
+        the history. That rewrite is an LLM round trip.
+
+        With no history there is nothing to resolve against, so the rewrite is
+        skipped and the question is searched verbatim. The prompt's other job,
+        expanding PESU abbreviations, is deliberately not worth a round trip
+        here: the rewrite expands *alongside* the original rather than replacing
+        it, so the abbreviation still reaches BM25 either way, and measurement
+        shows lexical matching on those tokens is where hybrid retrieval earns
+        its keep (see ``scripts/eval_retrieval.py``).
+
+        Args:
+            question: The user's question, as asked.
+            chat_history: Prior turns, already alternating human/AI.
+
+        Returns:
+            The query to retrieve with.
+        """
+        if not chat_history:
+            return question
+        return await self._rewrite_chain.ainvoke({"input": question, "chat_history": chat_history})
+
+    async def retrieve(self, question: str, chat_history: list) -> tuple[str, list[Document]]:
+        """Find the documents that should answer a question.
+
+        The stages are separate and ordered deliberately:
+
+        1. **Rewrite** into a standalone query, when there is history to resolve.
+        2. **Expand** into several phrasings and union what each retrieves.
+        3. **Deduplicate** on the stored point id. This must come before
+           reranking, or the cross-encoder pays to score the same point twice.
+        4. **Rerank** against the search query -- not the original question. For
+           a follow-up the original may be contentless, and scoring "is it
+           hard?" against a comment tree produces noise.
+
+        Args:
+            question: The user's question, as asked.
+            chat_history: Prior turns, already alternating human/AI.
+
+        Returns:
+            ``(search_query, documents)``. The query is returned because the
+            caller needs to know what was actually searched for.
+        """
+        search_query = await self.search_query_for(question, chat_history)
+        docs = deduplicate(await self.multiquery.ainvoke(search_query))
+        docs = await self.rerank(search_query, docs)
+        return search_query, docs
 
     def format_docs(self, docs: list[Document]) -> str:
         """Flatten retrieved documents into the ``{context}`` block of the answer prompt.
@@ -381,7 +412,7 @@ class RetrievalAugmentedGenerator:
             docs = sorted(docs, key=lambda d: d.metadata.get("_score", 0.0), reverse=True)
         return "\n\n".join(f"{doc.metadata['permalink']}\n{doc.page_content}" for doc in docs)
 
-    def _rerank(self, inputs: dict) -> dict:
+    async def rerank(self, query: str, docs: list[Document]) -> list[Document]:
         """Re-score documents against the query and drop the weak ones.
 
         Vector search compares two embeddings computed independently, so it can
@@ -396,25 +427,29 @@ class RetrievalAugmentedGenerator:
         have that information. That is the intended behaviour -- an admission
         beats an answer invented from weak context.
 
+        The model call is a synchronous, CPU-bound torch inference. It runs in a
+        worker thread rather than inline, because inline it would block the
+        event loop for every other request streaming at the same time, and
+        behind a semaphore, because two vCPUs cannot usefully run several torch
+        inferences at once.
+
         Args:
-            inputs: Chain state carrying at least ``"input"`` and ``"docs"``.
+            query: What retrieval actually searched for -- the rewritten query
+                when there was history, not necessarily the user's wording.
+            docs: Documents to score.
 
         Returns:
-            The same dict with ``"docs"`` filtered and sorted best-first.
+            The documents that cleared the threshold, best first.
         """
-        if self.cross_encoder is None:
-            return inputs
-
-        query = inputs["input"]
-        docs = inputs["docs"]
-        if not docs:
-            return inputs
+        if self.cross_encoder is None or not docs:
+            return docs
 
         # Reuses the vector-search threshold deliberately: one number to tune,
         # and the sigmoid puts cross-encoder scores on a comparable 0..1 scale.
         threshold = self.config["rag"]["search_kwargs"]["score_threshold"]
         pairs = [[query, doc.page_content] for doc in docs]
-        scores = self.cross_encoder.predict(pairs)
+        async with self._rerank_gate:
+            scores = await asyncio.to_thread(self.cross_encoder.predict, pairs)
 
         reranked = []
         for doc, score in zip(docs, scores):
@@ -424,8 +459,7 @@ class RetrievalAugmentedGenerator:
 
         reranked.sort(key=lambda d: d.metadata["_score"], reverse=True)
         logging.debug(f"Reranker: {len(docs)} → {len(reranked)} docs above threshold {threshold}")
-        inputs["docs"] = reranked
-        return inputs
+        return reranked
 
     def _process_thinking_chunk(self, chunk: str, pending: str, thinking_done: bool) -> tuple[str, bool, list[dict]]:
         """Split one streamed chunk into reasoning (``step``) and answer (``token``) events.
@@ -541,7 +575,7 @@ class RetrievalAugmentedGenerator:
                 chat_history.append(HumanMessage(convo.query))
                 chat_history.append(AIMessage(convo.answer))
 
-        rag_chain = self.rag_chain_thinking if thinking else self.rag_chain_primary
+        answer_chain = self._answer_thinking if thinking else self._answer_primary
 
         logging.info(f"Using {'thinking' if thinking else 'primary'} LLM for query: {query}")
 
@@ -552,11 +586,17 @@ class RetrievalAugmentedGenerator:
         token_count = 0
 
         try:
-            async for chunk in rag_chain.astream(
+            # Retrieval runs to completion before the answer starts streaming.
+            # It always did -- the chain could not stream a token before it had
+            # its context either -- but now the documents are in hand here,
+            # which is what lets the stream report its own sources.
+            search_query, docs = await self.retrieve(query, chat_history)
+            logging.info(f"Retrieved {len(docs)} documents for {search_query!r}")
+
+            async for chunk in answer_chain.astream(
                 {
-                    "input": query,
                     "question": query,
-                    "chat_history": chat_history,
+                    "context": self.format_docs(docs),
                 }
             ):
                 token_count += 1
