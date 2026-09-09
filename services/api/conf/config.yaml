@@ -36,29 +36,99 @@ rag:
       temperature: 0.3
       max_new_tokens: 2048
       timeout: 120
-  # Passed straight through to the Qdrant similarity search, once per phrasing
-  # the multi-query step generates -- so the documents reaching the reranker are
-  # the union across phrasings, and there are usually more than `k` of them.
-  search_kwargs:
-    # Documents per phrasing. Raising it widens recall and gives the cross-encoder
-    # more to work with, at the cost of more pairs to score.
-    k: 5
-    # Minimum relevance for a document to be considered at all. The reranker
-    # reuses this same number as its own cutoff, so it is one knob, not two:
-    # raise it for stricter answers and more "I don't have that information",
-    # lower it to answer more often from weaker context.
-    score_threshold: 0.3
+  # Retrieval is a RECALL stage: its job is to put the right document somewhere
+  # in the candidate pool, not to rank it. Relevance is decided by the reranker
+  # below, which is the only thing that filters.
+  retrieval:
+    # dense  -- vector search alone.
+    # hybrid -- vector search AND the BM25 sparse vector every point already
+    #           carries, fused by Qdrant with Reciprocal Rank Fusion.
+    #
+    # Measured on 2026-09-08 over 43,370 points (scripts/eval_retrieval.py):
+    # the two are a wash on plain-English questions (MRR 0.472 dense, 0.497
+    # hybrid) and hybrid is clearly ahead when the question uses the words the
+    # corpus uses -- CSE, PESSAT, T1, SGPA, capstone -- where MRR goes 0.353 to
+    # 0.507. Those literal tokens are unreachable by paraphrase, which is
+    # exactly what a lexical index is for.
+    mode: hybrid
+    # Documents per phrasing. The multi-query step generates several phrasings
+    # and the union is deduplicated, so the candidate pool is larger than this.
+    k: 12
+    # Minimum relevance, applied to the normalised cosine score. DENSE ONLY, and
+    # it must be null under hybrid: Reciprocal Rank Fusion returns scores around
+    # 0.02, so any value that looks reasonable for a cosine similarity would
+    # discard every document. Startup refuses the combination rather than
+    # letting it silently return nothing.
+    #
+    # NOTE this replaces `search_kwargs.score_threshold`, which never filtered
+    # anything -- see the migration error in app/rag.py.
+    score_threshold: null
 
-  reranker:
+  rerank:
     # A cross-encoder re-scores the shortlist by reading query and document
     # together, which a vector search cannot do. Disabling it removes the
     # sentence-transformers and torch load at startup and falls back to ranking
-    # by vector score alone -- faster to boot, noticeably worse ordering.
+    # by retrieval score alone -- faster to boot, noticeably worse ordering, and
+    # not allowed under hybrid, where the retrieval score is an RRF rank
+    # artefact and nothing would be filtering relevance at all.
     enabled: true
     # The canonical repo id. `ms-marco-MiniLM-L-6-v2`, with the hyphen before the
     # 6, is a legacy alias that Hugging Face answers with a 307 to this one -- it
     # works, but every file lookup at startup pays a redirect.
     model: "cross-encoder/ms-marco-MiniLM-L6-v2"
+    # Ceiling on how many (query, document) pairs reach the cross-encoder. Every
+    # pair is CPU-bound torch inference on a two-vCPU Space, paid before the
+    # first token reaches the user, so this bounds time-to-first-token no matter
+    # how many phrasings the multi-query step invented.
+    max_candidates: 30
+    # THE relevance cutoff, on the cross-encoder's own 0..1 sigmoid scale. Raise
+    # it for stricter answers and more "I don't have that information"; lower it
+    # to answer more often from weaker context. Applied BEFORE the ranking
+    # weights below, so a document is admitted on relevance alone and only then
+    # reordered.
+    score_threshold: 0.3
+    # Documents that actually reach the answer prompt.
+    top_n: 6
+    # At most this many documents from any one post. A third of the corpus sits
+    # on a post that has more than one document and one post has twelve, so
+    # without a cap a single thread can crowd out every other source.
+    max_per_post: 3
+
+  # Preferences applied AFTER the relevance cutoff, so they reorder documents
+  # that already answer the question and can never promote one that does not.
+  #
+  # The multiplier is `1 - wr - wc + wr*recency + wc*community`, bounded in
+  # [1-wr-wc, 1] -- a pure penalty that cannot boost anything above its own
+  # relevance. At the weights below the largest relevance gap it can invert is
+  # about 18%, which makes this a tie-breaker, NOT a re-ranker. Raising the
+  # weights until it visibly reorders results is how you break retrieval.
+  ranking:
+    # Community endorsement. OFF, and wired only so it can be switched on: the
+    # stored `score` is the SUBMISSION's, so it is identical for every document
+    # from the same post -- no discriminating power exactly where the ranking
+    # has to choose -- and it cannot go negative, so a downvoted answer is
+    # indistinguishable from an unrated one. The root comment's score is the
+    # signal worth having and is not in the collection yet.
+    community_weight: 0.0
+    # Scale for the community term when it is switched on: the post score at
+    # which it saturates. Would want to be ~25 for root-comment scores, whose
+    # median is 2 against the post median of 8.
+    reference_score: 100
+
+    # Staleness. r/PESU answers about fees, faculty and cutoffs expire; answers
+    # about how SGPA is computed do not. One weight serves both, which is the
+    # reason it is small.
+    recency_weight: 0.15
+    # Age below which a document is treated as current, with no penalty at all.
+    # Post creation time tracks thread age closely -- 89% of root comments are
+    # written within a day of the post -- so this is measuring the right thing.
+    # A grace period is a genuine change of shape, unlike a floor, which is
+    # algebraically just a smaller `recency_weight`.
+    grace_days: 365
+    # After the grace period, the age at which a document keeps half its
+    # recency. Against the measured age distribution (median 458 days, p90 1086)
+    # this leaves the typical document at 0.92 and halves the four-year tail.
+    half_life_days: 730
 
   # The three prompts the pipeline uses. `{question}`, `{context}`, `{input}` and
   # `{chat_history}` are filled in by app/rag.py; renaming one breaks the chain.

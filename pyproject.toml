@@ -80,6 +80,7 @@ db = [
 dev = [
     "pre-commit>=4.3.0",
     "ruff==0.12.12",
+    "pytest>=8.4.2",
 ]
 
 # torch, declared twice, resolved from two different indexes. Neither service
@@ -173,6 +174,18 @@ select = [
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
+
+# The only exemption, and it is not a per-service one: `tests/` is not shipped
+# to either Space. Requiring a Google-style docstring and an explicit `-> None`
+# on every test would add a line of restatement per test -- a test named
+# `test_a_future_timestamp_cannot_exceed_one` does not need a docstring saying
+# a future timestamp cannot exceed one. The module and class docstrings carry
+# the reasoning that is actually worth reading.
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = [
+    "ANN", # annotations: a test takes no arguments and returns nothing
+    "D1", # missing docstrings; D2/D4 formatting rules still apply to the ones present
+]
 
 [tool.ruff]
 line-length = 120
