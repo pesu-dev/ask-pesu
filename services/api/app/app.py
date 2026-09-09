@@ -171,19 +171,9 @@ async def test_stream() -> AsyncIterator[str]:
     It must emit the same event types in the same order as the real pipeline,
     or the mode stops exercising the surface it exists to exercise.
     """
-    # Step 1
-    yield json.dumps({"type": "step", "content": "Searching documents...\n"}) + "\n"
-    await asyncio.sleep(0.02)
-
-    # Step 2
-    yield json.dumps({"type": "step", "content": "Ranking sources...\n"}) + "\n"
-
-    await asyncio.sleep(0.02)
-    # Step 3
-    yield json.dumps({"type": "step", "content": "Generating answer...\n"}) + "\n"
-    await asyncio.sleep(0.02)
-
-    # Citations arrive before the first token, exactly as in the real stream.
+    # First, exactly as in the real stream: retrieval finishes before generation
+    # begins, so the citations are known before there is any answer to attach
+    # them to.
     yield (
         json.dumps(
             {
@@ -205,6 +195,11 @@ async def test_stream() -> AsyncIterator[str]:
         + "\n"
     )
     await asyncio.sleep(0.02)
+
+    # Then the reasoning the thinking model would emit, then the answer.
+    for step in ("Searching documents...\n", "Ranking sources...\n", "Generating answer...\n"):
+        yield json.dumps({"type": "step", "content": step}) + "\n"
+        await asyncio.sleep(0.02)
 
     tokens = [
         "### How SGPA is Calculated\n\n",

@@ -2,10 +2,21 @@
 
 The 200 response is a newline-delimited JSON stream, not a JSON document, so the
 example below is a literal transcript of the wire format rather than an object.
+
+FastAPI cannot infer a schema for that body, so the shape of ONE LINE is
+attached explicitly, generated from :class:`AskStreamEventModel`. Without this
+the models describing the stream are referenced by nothing and never reach the
+published schema at all -- documented only in the source of the module that
+defines them, which is the one place a client integrator does not look.
 """
 
 from app.docs.base import ApiDocs
-from app.models import AskErrorResponseModel
+from app.models import AskErrorResponseModel, AskStreamEventModel
+
+# Self-contained: `$defs` carries AskSourceModel along, so this can be inlined
+# as the media type's schema without registering a component. OpenAPI 3.1 is
+# JSON Schema, so the internal refs resolve where they sit.
+STREAM_LINE_SCHEMA = AskStreamEventModel.model_json_schema()
 
 ask_docs = ApiDocs(
     request_examples={
@@ -29,14 +40,19 @@ ask_docs = ApiDocs(
     response_examples={
         200: {
             "description": (
-                "Newline-delimited JSON. One object per line, streamed as generation proceeds. "
-                "`step` events appear only in thinking mode. `done` is always last, including after `error`."
+                "Newline-delimited JSON, one object per line, streamed as generation proceeds; the "
+                "schema below describes a single line. `sources` carries the threads retrieval "
+                "selected and is sent once, before the first token, so a client can render citations "
+                "while the answer is still being written -- it is sent even when empty. `step` events "
+                "appear only in thinking mode. `done` is always last, including after `error`."
             ),
             "content": {
                 "text/plain": {
-                    "schema": {"type": "string", "format": "ndjson"},
+                    "schema": STREAM_LINE_SCHEMA,
                     "example": (
-                        '{"type": "step", "content": "Searching documents..."}\n'
+                        '{"type": "sources", "sources": [{"permalink": '
+                        '"https://reddit.com/r/PESU/comments/1kq6d08/", "title": "Bootstrap 2024 megathread", '
+                        '"snippet": "bootstrap is a week of intro sessions before classes start..."}]}\n'
                         '{"type": "token", "content": "Bootstrap at PES University is "}\n'
                         '{"type": "token", "content": "a week-long series of activities for freshers."}\n'
                         '{"type": "done"}\n'
