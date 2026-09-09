@@ -459,28 +459,36 @@ def blend(docs: list[Document], now: float, ranking_cfg: dict, authority: dict |
     return sorted(docs, key=lambda d: d.metadata["_final"], reverse=True)
 
 
-def diversify(docs: list[Document], top_n: int, max_per_post: int) -> list[Document]:
-    """Take the best ``top_n`` documents without letting one thread dominate.
+def diversify(docs: list[Document], top_n: int, max_per_post: int | None) -> list[Document]:
+    """Take the best ``top_n`` documents, optionally capping any one thread.
 
-    A document is one comment tree, and a busy post can contribute a dozen of
-    them -- a third of the corpus sits on a post with more than one. Several
-    answers to the same question are genuinely worth having, so the cap is not
-    one; what it prevents is a single thread filling the entire context window
-    and making the sources list repeat itself.
+    **The cap is off by default and should usually stay off.** A document is one
+    comment tree, so several documents from one post are several *different
+    people answering the same question* -- often the best possible result.
+    Capping them evicts good answers and pulls in lower-ranked documents from
+    other threads to replace them, which is a bad trade. The repeated post body
+    that would otherwise make this wasteful is already handled: ``format_docs``
+    emits it once per thread, not once per document.
 
-    When the cap leaves fewer than ``top_n`` documents, it is *relaxed* and the
-    selection retried rather than topped up with leftovers, which keeps the
-    invariant "no post contributes more than the cap" true of whatever comes
-    back instead of quietly violating it.
+    It exists for one failure mode: a post whose many mediocre answers all score
+    well enough to crowd out a better thread. That is a ranking problem, and
+    capping is a blunt way to contain it while the ranking is being fixed.
+
+    When a cap is set and leaves fewer than ``top_n`` documents, it is *relaxed*
+    and the selection retried rather than topped up with leftovers, which keeps
+    "no post contributes more than the cap" true of whatever comes back instead
+    of quietly violating it.
 
     Args:
         docs: Documents, already ordered best first.
         top_n: How many to return.
-        max_per_post: Starting cap on documents from any one post.
+        max_per_post: Cap on documents from any one post, or None for no cap.
 
     Returns:
         At most ``top_n`` documents, order preserved.
     """
+    if max_per_post is None:
+        return docs[:top_n]
     cap = max_per_post
     while cap <= top_n:
         counts: dict[str, int] = {}

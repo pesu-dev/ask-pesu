@@ -134,7 +134,7 @@ Anything older than that window comes from [the backfill scripts](#backfilling-h
 6. **Ranking** — endorsement decides the order of what survived: the answer's own score, and
    its author's track record for answers too few people saw to have a meaningful score. Strictly
    after the cutoff, so it only reorders documents that already answer the question.
-7. **Diversify** — at most `max_per_post` documents from any one thread, then `top_n` overall.
+7. **Select** — the top `top_n`, optionally capped per thread (off by default).
 8. **Generate** — `Qwen/Qwen3-4B-Instruct-2507` via Hugging Face Inference (`nscale` provider),
    streamed token by token, after the retrieved threads have been reported as a `sources` event.
 
@@ -717,10 +717,10 @@ Runtime behaviour that is *not* part of the collection contract lives in
 | `retrieval.score_threshold` | `null` | Cosine cutoff, **dense only**. Must stay `null` under hybrid; startup refuses otherwise |
 | `rerank.enabled` | `true` | Turning it off skips the torch and sentence-transformers load at startup. Not permitted under hybrid |
 | `rerank.model` | `cross-encoder/ms-marco-MiniLM-L6-v2` | The cross-encoder |
-| `rerank.max_candidates` | `30` | Ceiling on pairs scored, which bounds time-to-first-token |
+| `rerank.max_candidates` | `50` | Ceiling on pairs scored, which bounds time-to-first-token (~61 ms per pair on two CPU threads) |
 | `rerank.score_threshold` | `0.3` | **The** relevance cutoff, on the cross-encoder's 0–1 sigmoid scale. Deliberately permissive; see below |
 | `rerank.top_n` | `6` | Documents that reach the answer prompt |
-| `rerank.max_per_post` | `3` | Cap per thread, so one discussion cannot fill the context |
+| `rerank.max_per_post` | `null` | No cap. Several answers from one thread are usually the best result; see below |
 | `ranking.recency_weight` | `0.0` | Off. Age is a poor proxy for staleness here; see below |
 | `ranking.grace_days` | `365` | Age below which nothing is penalised at all |
 | `ranking.half_life_days` | `730` | Days after the grace period to halve the recency factor |
@@ -756,6 +756,15 @@ looks like an unrated one.
 The multiplier is `1 - Σw + Σ(w·factor)`, bounded in `[1-Σw, 1]`: a pure penalty, so nothing
 scores above its own relevance. With `Σw = 0.40` it can invert a relevance gap of up to 67% —
 which is intended, since the gaps it must overcome are the 0.2–11% above.
+
+**`rerank.max_per_post` ships at `null` — no cap — deliberately.** A document is one comment
+tree, so several documents from one post are several *different people answering the same
+question*, which is frequently the best result available rather than duplication. Capping evicts
+those and pulls in lower-ranked documents from unrelated threads to replace them. The repeated
+post title and body that would otherwise make this wasteful is already handled: `format_docs`
+emits it once per thread. Set a cap only to contain a specific failure — a post whose many
+mediocre answers all score well enough to crowd out a better thread — and treat that as a
+ranking problem to fix rather than a cap to keep.
 
 **`ranking.recency_weight` ships at `0.0`, deliberately.** Age is not a proxy for usefulness
 here. r/PESU directs repeated questions to existing threads, so its most-referenced answers are

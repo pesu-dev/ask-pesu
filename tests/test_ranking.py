@@ -168,6 +168,18 @@ class TestDiversify:
     def test_no_documents_at_all(self):
         assert diversify([], top_n=6, max_per_post=3) == []
 
+    def test_no_cap_keeps_every_answer_from_one_thread(self):
+        # The shipped default. Several documents from one post are several
+        # different people answering the question, which is usually the best
+        # result available -- capping evicts them for lower-ranked documents
+        # from unrelated threads.
+        docs = [doc(post_id="p", _final=1.0 - i / 100) for i in range(8)]
+        assert len(diversify(docs, top_n=6, max_per_post=None)) == 6
+
+    def test_no_cap_still_respects_top_n(self):
+        docs = [doc(post_id=str(i), _final=1.0 - i) for i in range(9)]
+        assert len(diversify(docs, top_n=4, max_per_post=None)) == 4
+
 
 class TestDeduplicate:
     """The library's dedup is disabled by our own per-query annotation."""

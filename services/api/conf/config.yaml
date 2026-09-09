@@ -77,10 +77,21 @@ rag:
     # works, but every file lookup at startup pays a redirect.
     model: "cross-encoder/ms-marco-MiniLM-L6-v2"
     # Ceiling on how many (query, document) pairs reach the cross-encoder. Every
-    # pair is CPU-bound torch inference on a two-vCPU Space, paid before the
-    # first token reaches the user, so this bounds time-to-first-token no matter
-    # how many phrasings the multi-query step invented.
-    max_candidates: 30
+    # pair is CPU-bound torch inference paid before the first token reaches the
+    # user, so this bounds time-to-first-token no matter how many phrasings the
+    # multi-query step invented.
+    #
+    # Measured on two CPU threads, which approximates a cpu-basic Space: about
+    # 61 ms per pair, linear -- 1.85s at 30 pairs, 3.03s at 50. A Space's shared
+    # vCPUs are slower than the machine that was measured, so treat those as a
+    # floor.
+    #
+    # 50 is set so the cap rarely binds: `k` documents per phrasing across the
+    # phrasings the LLM invents, deduplicated, usually lands below it, and a cap
+    # that truncates is silently discarding candidates the ranking never sees.
+    # If time-to-first-token matters more than recall, lower `k` before lowering
+    # this -- fewer, better candidates beats truncating good ones.
+    max_candidates: 50
     # THE relevance cutoff, on the cross-encoder's own 0..1 sigmoid scale, and
     # deliberately permissive. Applied BEFORE the ranking weights below, so a
     # document is admitted on relevance alone and only then reordered.
@@ -105,10 +116,20 @@ rag:
     score_threshold: 0.3
     # Documents that actually reach the answer prompt.
     top_n: 6
-    # At most this many documents from any one post. A third of the corpus sits
-    # on a post that has more than one document and one post has twelve, so
-    # without a cap a single thread can crowd out every other source.
-    max_per_post: 3
+    # Cap on documents from any one thread, or null for no cap. NULL is right
+    # here and the cap is the exception.
+    #
+    # A document is one comment tree, so several documents from one post are
+    # several different people answering the same question -- frequently the
+    # best result available, not duplication. Capping evicts those good answers
+    # and pulls in lower-ranked documents from unrelated threads to replace
+    # them. The repeated post title and body that would make this wasteful is
+    # already handled: format_docs emits it once per thread.
+    #
+    # Set it only to contain a specific failure -- a post whose many mediocre
+    # answers all score well enough to crowd out a better thread -- and treat
+    # that as a ranking problem to fix rather than a cap to keep.
+    max_per_post: null
 
   # Preferences applied AFTER the relevance cutoff, so they reorder documents
   # that already answer the question and can never promote one that does not.
