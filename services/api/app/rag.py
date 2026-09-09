@@ -40,6 +40,7 @@ at startup; see :mod:`app.contract`.
 """
 
 import asyncio
+import datetime
 import json
 import logging
 import math
@@ -49,7 +50,7 @@ from collections.abc import AsyncGenerator, Callable
 
 import yaml
 from dotenv import load_dotenv
-from huggingface_hub import InferenceClient
+from huggingface_hub import InferenceClient, whoami
 from langchain_classic.retrievers import MultiQueryRetriever
 from langchain_core.callbacks import CallbackManagerForRetrieverRun
 from langchain_core.documents.base import Document
@@ -87,19 +88,73 @@ THINK_END = "</think>"
 REQUIRED_METADATA = ("permalink", "post_id", "created_utc", "score")
 
 
-def _is_quota_error(error: BaseException) -> bool:
-    """Guess whether a failure was the provider refusing us on quota or rate limit.
+# The two ways the provider refuses us for want of budget rather than for a bad
+# request. 429 is a rate limit and clears on its own; 402 means the account's
+# included inference credits are spent and clears when they renew, which is a
+# very different wait -- see :func:`credits_reset_at`.
+_REFUSAL_STATUSES = (402, 429)
 
-    The Hugging Face Inference client surfaces these as an HTTP error, so prefer
-    the status code and fall back to the message. It is a heuristic: guessing
-    wrong only costs an unnecessary cooldown, whereas not detecting a real 429
-    means hammering a provider that is already refusing us.
+
+def _quota_refusal(error: BaseException) -> int | None:
+    """Classify a failure as the provider refusing us on budget, or not.
+
+    ``huggingface_hub`` raises ``HfHubHTTPError`` with the response attached, so
+    the status code is available and exact; the string matching is only a
+    fallback for anything that loses it. Getting this wrong in one direction
+    costs an unnecessary cooldown, and in the other means hammering a provider
+    that is already refusing us -- and, worse, showing the user a raw HTTP error
+    with a billing URL in it.
+
+    A 402 was previously invisible here: the message reads "You have depleted
+    your monthly included credits", which contains none of the words matched
+    below, so no cooldown ever started.
+
+    Args:
+        error: The exception raised during generation.
+
+    Returns:
+        The refusing status code, or None if this was some other failure.
     """
     status = getattr(getattr(error, "response", None), "status_code", None)
-    if status == 429:
-        return True
+    if status in _REFUSAL_STATUSES:
+        return status
     text = str(error).lower()
-    return any(marker in text for marker in ("429", "too many requests", "quota", "rate limit"))
+    for marker, code in (
+        ("too many requests", 429),
+        ("rate limit", 429),
+        ("429", 429),
+        ("payment required", 402),
+        ("credits", 402),
+        ("402", 402),
+        ("quota", 429),
+    ):
+        if marker in text:
+            return code
+    return None
+
+
+def credits_reset_at() -> datetime.datetime | None:
+    """Ask Hugging Face when this account's included credits renew.
+
+    ``whoami`` reports ``periodEnd``, a POSIX timestamp, which is the only
+    authoritative answer to "when will this work again" after a 402. There is no
+    endpoint that reports a remaining balance, and inference responses carry no
+    quota headers at all, so this cannot be checked in advance -- only after
+    being refused.
+
+    Returns:
+        When the credits renew, or None if the lookup fails for any reason. The
+        caller then falls back to its default cooldown; this runs inside error
+        handling and must not raise.
+    """
+    try:
+        period_end = whoami(token=os.getenv("HF_TOKEN")).get("periodEnd")
+        if period_end is None:
+            return None
+        return datetime.datetime.fromtimestamp(float(period_end), datetime.UTC)
+    except Exception as error:
+        logging.warning(f"Could not read the credit reset time from Hugging Face: {error}")
+        return None
 
 
 def deduplicate(docs: list[Document]) -> list[Document]:
@@ -878,7 +933,7 @@ class RetrievalAugmentedGenerator:
         query: str,
         thinking: bool,
         history: list,
-        on_quota_exceeded: Callable[[], None] | None = None,
+        on_quota_exceeded: Callable[[datetime.datetime | None], None] | None = None,
     ) -> AsyncGenerator[str, None]:
         """Run the pipeline and yield newline-delimited JSON events.
 
@@ -899,9 +954,10 @@ class RetrievalAugmentedGenerator:
             query: The user's question.
             thinking: Use the thinking model for the answer.
             history: Prior ``{query, answer}`` turns from the client.
-            on_quota_exceeded: Called if the failure looks like a provider quota
-                or rate-limit refusal. Lets the caller start a cooldown without
-                this module knowing about quota state.
+            on_quota_exceeded: Called if the provider refused us on budget,
+                with the time the refusal is expected to lift (or None to let
+                the caller pick). Lets the caller start a cooldown without this
+                module knowing about quota state.
 
         Yields:
             NDJSON lines, each terminated by a newline.
@@ -964,10 +1020,13 @@ class RetrievalAugmentedGenerator:
             logging.info(f"Stream complete. Total chunks: {token_count}")
         except Exception as e:
             logging.error(f"Error in generate(): {str(e)}", exc_info=True)
-            if on_quota_exceeded is not None and _is_quota_error(e):
+            refusal = _quota_refusal(e)
+            if on_quota_exceeded is not None and refusal is not None:
                 # Tell the caller to start a cooldown so subsequent requests are
-                # rejected up front instead of failing mid-stream.
-                on_quota_exceeded()
+                # rejected up front instead of failing mid-stream. A 402 waits
+                # for the billing period to roll over, which is knowable exactly
+                # and is usually much longer than a rate-limit cooldown.
+                on_quota_exceeded(credits_reset_at() if refusal == 402 else None)
             yield json.dumps({"type": "error", "content": str(e)}) + "\n"
 
         # Emitted on every path, success or failure, so the client always has a

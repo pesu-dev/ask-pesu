@@ -58,16 +58,27 @@ class QuotaState:
             self.enabled, self.disabled_until = True, None
             logging.info(f"{self.name} cooldown expired, re-enabled for use.")
 
-    def disable(self) -> None:
+    def disable(self, until: datetime.datetime | None = None) -> None:
         """Start a cooldown after the provider refused a request.
 
         Passed as the ``on_quota_exceeded`` callback into the RAG pipeline, which
         is the only way this can fire: a quota failure happens *during* streaming,
         long after the route handler has returned.
+
+        Args:
+            until: When the refusal is expected to lift, if that is known. A 402
+                means the account's included credits are spent, and Hugging Face
+                reports exactly when they renew -- which can be weeks away, so
+                guessing 24 hours would have ``/quota`` promise a recovery that
+                does not come, over and over. Anything else falls back to
+                :attr:`cooldown_hours`.
         """
         now = datetime.datetime.now(IST)
         self.enabled = False
-        self.disabled_until = now + datetime.timedelta(hours=self.cooldown_hours)
+        if until is not None:
+            self.disabled_until = max(until.astimezone(IST), now + datetime.timedelta(minutes=1))
+        else:
+            self.disabled_until = now + datetime.timedelta(hours=self.cooldown_hours)
         logging.warning(f"Quota exceeded on llm:{self.name}. Disabled until {self.disabled_until}")
 
     def status(self) -> dict:
