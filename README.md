@@ -104,28 +104,50 @@ Anything older than that window comes from [the backfill scripts](#backfilling-h
 
 ### The reader — `services/api`
 
-`POST /ask` streams newline-delimited JSON. The pipeline, wired with LangChain Expression
-Language in `app/rag.py`:
+`POST /ask` streams newline-delimited JSON. The pipeline lives in `app/rag.py`:
 
-1. **Rewrite** — the question plus chat history becomes one standalone, retrieval-friendly
-   query. This resolves "is it hard?" into "is the Data Structures course at PES University
-   hard?" and expands PESU abbreviations (RR, EC, CSE, SGPA…).
+1. **Rewrite** — with chat history, the question plus that history becomes one standalone
+   query, resolving "is it hard?" into something retrievable. **Skipped when there is no
+   history**, since there is nothing to resolve against and it saves a round trip on every
+   first question. The prompt expands PESU abbreviations *alongside* the original —
+   `CSE (Computer Science Engineering)`, never replacing it — because the threads themselves
+   say `CSE`, and replacing it deletes the token the lexical index matches on.
 2. **Multi-query expansion** — `MultiQueryRetriever` asks the LLM for several phrasings and
-   unions what each retrieves, recovering passages a single phrasing would miss.
-3. **Dense retrieval** — `k=5` per phrasing against the Qdrant collection, through
-   `ScoredRetriever`, which keeps each document's similarity score rather than discarding it.
-4. **Rerank** — `cross-encoder/ms-marco-MiniLM-L6-v2` scores every (query, document) pair
-   through a sigmoid and drops anything below `score_threshold`. A cross-encoder reads both
-   texts together, which a vector search structurally cannot.
-5. **Generate** — `Qwen/Qwen3-4B-Instruct-2507` via Hugging Face Inference (`nscale` provider),
-   streamed token by token.
+   unions what each retrieves, recovering passages a single phrasing would miss. The rewritten
+   query is included in that set (`include_original=True`), which it was not before.
+3. **Retrieval** — `k=12` per phrasing through `ScoredRetriever`, which keeps each document's
+   score and records which *scale* it is on. Hybrid by default: Qdrant fuses the dense vector
+   with the BM25 sparse vector using Reciprocal Rank Fusion.
+4. **Deduplication** — the union collapses on the stored point id, keeping the best-scoring
+   copy. This runs before reranking so the cross-encoder never pays to score a point twice.
+5. **Rerank** — `cross-encoder/ms-marco-MiniLM-L6-v2` scores every (query, document) pair
+   through a sigmoid and drops anything below `rerank.score_threshold`. A cross-encoder reads
+   both texts together, which a vector search structurally cannot. It scores the query
+   retrieval actually used, so a follow-up is judged on its resolved form rather than on "is
+   it hard?".
+6. **Ranking** — recency and community weights reorder what survived. Strictly after the
+   cutoff, so they can only reorder documents that already answer the question.
+7. **Diversify** — at most `max_per_post` documents from any one thread, then `top_n` overall.
+8. **Generate** — `Qwen/Qwen3-4B-Instruct-2507` via Hugging Face Inference (`nscale` provider),
+   streamed token by token, after the retrieved threads have been reported as a `sources` event.
 
 Both retrieval-side LLM calls always use the **primary** model, even in thinking mode, so
 thinking tokens are never spent reformulating a question.
 
-Step 4 is a filter, not just a sort. If nothing clears the threshold the answer prompt receives
-no context and the system prompt makes the model say it does not have that information — an
-admission is better than an answer invented from weak context.
+Only step 8 is a LangChain Expression Language chain. Retrieval used to be one too, which meant
+the documents it found were consumed inside the chain and never surfaced — so the backend could
+not tell a client which threads an answer came from, and asked the model to reprint the links
+instead.
+
+Step 5 is a filter, not just a sort, and it is the **only** filter. If nothing clears the
+threshold the answer prompt receives no context and the system prompt makes the model say it
+does not have that information — an admission is better than an answer invented from weak
+context.
+
+Retrieval quality is measurable rather than asserted:
+[`services/api/scripts/eval_retrieval.py`](services/api/scripts/eval_retrieval.py) scores 42
+labelled questions against the live collection and reports recall and MRR. It is read-only and
+calls no LLM.
 
 **Conversations are never stored server-side.** The frontend keeps them in `localStorage` and
 replays the relevant history with each request.
@@ -138,6 +160,7 @@ without buffering the whole response:
 | `type` | Meaning |
 |---|---|
 | `step` | Reasoning text, thinking mode only (the content between `<think>` and `</think>`) |
+| `sources` | The threads the answer draws on. Sent **once, before the first token**, carrying `permalink`, `title` and `snippet` per thread. May be empty |
 | `token` | A chunk of the answer |
 | `error` | Generation failed; `content` carries the message |
 | `done` | Always last, on success and on failure alike |
@@ -152,9 +175,15 @@ Two properties worth knowing:
   characters — the longest fragment that could still complete the tag — and emits everything
   before it.
 
+- **Citations are exact.** `sources` carries the documents retrieval actually selected. The
+  system prompt explicitly tells the model *not* to print a source list, so a citation no longer
+  depends on the model formatting one correctly and cannot name a link it was never shown. The
+  frontend keeps a fallback parser only for conversations saved before this event existed.
+
 The event shape is duplicated between the backend that emits it and the client that parses it.
-Any change must be made in **both** `services/api/app/rag.py` and
-`services/api/frontend/src/lib/api.ts`; nothing enforces that they agree.
+Any change must be made in **both** `services/api/app/models/response/ask.py` and
+`services/api/frontend/src/lib/api.ts` — and unlike before, `scripts/check_duplication.py`
+enforces that they agree.
 
 ## HTTP API
 
@@ -676,11 +705,40 @@ Runtime behaviour that is *not* part of the collection contract lives in
 | `llm.*.temperature` | `0.3` | Sampling temperature; low, to stay close to retrieved threads |
 | `llm.*.max_new_tokens` | `2048` | Generation cap. A thinking model spends part of it on reasoning |
 | `llm.*.timeout` | `120` | Seconds to wait on the provider before failing the stream |
-| `search_kwargs.k` | `5` | Documents retrieved **per generated phrasing**, so the reranker usually sees more than this |
-| `search_kwargs.score_threshold` | `0.3` | Minimum relevance, reused as the reranker's cutoff — one knob, not two |
-| `reranker.enabled` | `true` | Turning it off skips the torch and sentence-transformers load at startup, and falls back to ranking by vector score |
-| `reranker.model` | `cross-encoder/ms-marco-MiniLM-L6-v2` | The cross-encoder |
+| `retrieval.mode` | `hybrid` | `dense` is vector search alone; `hybrid` also queries the BM25 sparse vector and lets Qdrant fuse the two |
+| `retrieval.k` | `12` | Documents retrieved **per generated phrasing**, so the candidate pool is larger than this |
+| `retrieval.score_threshold` | `null` | Cosine cutoff, **dense only**. Must stay `null` under hybrid; startup refuses otherwise |
+| `rerank.enabled` | `true` | Turning it off skips the torch and sentence-transformers load at startup. Not permitted under hybrid |
+| `rerank.model` | `cross-encoder/ms-marco-MiniLM-L6-v2` | The cross-encoder |
+| `rerank.max_candidates` | `30` | Ceiling on pairs scored, which bounds time-to-first-token |
+| `rerank.score_threshold` | `0.3` | **The** relevance cutoff, on the cross-encoder's 0–1 sigmoid scale |
+| `rerank.top_n` | `6` | Documents that reach the answer prompt |
+| `rerank.max_per_post` | `3` | Cap per thread, so one discussion cannot fill the context |
+| `ranking.recency_weight` | `0.15` | How much staleness may reorder results |
+| `ranking.grace_days` | `365` | Age below which nothing is penalised at all |
+| `ranking.half_life_days` | `730` | Days after the grace period to halve the recency factor |
+| `ranking.community_weight` | `0.0` | Off; see below |
+| `ranking.reference_score` | `100` | Score at which the community factor saturates |
 | `prompts.*` | — | System, answer and query-rewrite prompts |
+
+**On the two thresholds.** They used to be one number reused in two places, on two different
+scales. Worse, the retrieval half never did anything: `langchain_core` pops `score_threshold`
+and applies it client-side to a *normalised* score, `(cosine + 1) / 2`, so the configured `0.3`
+only excluded documents below a cosine similarity of **−0.4**. The cross-encoder cutoff was
+always the only real filter, and it is now the only one. Startup refuses the stale key with an
+error explaining this.
+
+**On the ranking weights.** The multiplier is `1 - wr - wc + wr·recency + wc·community`, bounded
+in `[1-wr-wc, 1]` — a pure penalty, so nothing can score above its own relevance. At the shipped
+weights the largest relevance gap it can invert is about **18%**, which makes it a tie-breaker,
+not a re-ranker. Raising the weights until the ordering visibly changes is how you break
+retrieval, not how you tune it.
+
+`community_weight` ships at `0.0` and is wired only so it can be switched on. The stored `score`
+is the **submission's**, so it is identical across every document from one post — no
+discriminating power exactly where the ranking has to choose — and it cannot go negative, so a
+downvoted answer looks like an unrated one. The root comment's score is the signal worth having
+and is not in the collection yet.
 
 Prompt and model changes go here first — they are configuration, not code. Anything that would
 make already-stored vectors unreadable belongs in `conf/collection.yaml` instead.
@@ -754,11 +812,18 @@ alternative — answering from the wrong data — is worse than not answering.
 ## Testing
 
 ```bash
-cd services/api/frontend
-npm test                               # vitest
+uv run pytest tests/ -q                # ranking arithmetic
+cd services/api/frontend && npm test   # vitest
 ```
 
-There is no Python test suite. The contract is enforced at runtime instead: both services
+`tests/` covers the ranking functions in `app/rag.py` and nothing else. That is deliberate, and
+it is the one exception to the rule below: ranking is pure arithmetic over document metadata
+with no external state to validate against, and its failure mode is silent — documents come back
+in a slightly wrong order and nothing errors. The functions take their inputs explicitly and
+touch no network, no models and no Qdrant. They live at the repository root because a
+`git subtree split` ships only `services/<name>/`, and test code has no business in a Space.
+
+Beyond that there is no Python test suite. The contract is enforced at runtime instead: both services
 validate the live collection, the embedding model and every payload before doing any work, and
 refuse to run against a mismatch.
 
@@ -770,7 +835,7 @@ receives is complete. It also runs the one check that behaves like a test:
 uv run python scripts/check_duplication.py
 ```
 
-Five pairs of files must agree and cannot share code, because each side ships somewhere the other
+Six pairs of files must agree and cannot share code, because each side ships somewhere the other
 never reaches — a `git subtree split` sends only `services/<name>/`, the frontend is TypeScript,
 Space frontmatter is read before any code runs, and pre-commit builds its hook environments from a
 git ref rather than from `uv.lock`. The script asserts each pair:
@@ -782,6 +847,7 @@ git ref rather than from `uv.lock`. The script asserts each pair:
 | each Space README's `models:`/`preload_from_hub:` | must list the contracted embedding model |
 | the NDJSON event names | pydantic `Literal` compared to the frontend's `StreamEvent` union |
 | the ruff version | `.pre-commit-config.yaml`'s `rev` compared to the `ruff==` pin in the `dev` group |
+| the `rag.*` config keys | every key `app/rag.py` subscripts must exist in `conf/config.yaml` |
 
 The loaders have drifted once already, which is what the first of those exists to prevent.
 
@@ -810,7 +876,7 @@ in CI — and because pre-commit builds its hook environments from a git ref and
 |---|---|---|
 | `source.yaml` | PR opened/updated | Rejects PRs that are not from a fork, come from a fork's `main`, or target anything other than `dev` |
 | `pre-commit.yaml` | Push, PR | Every pre-commit hook, on all files — ruff lint and format included |
-| `contract.yaml` | Push, PR | Asserts each shared file is tracked exactly once; recompiles `requirements.txt` and fails on drift; runs [`scripts/check_duplication.py`](scripts/check_duplication.py); rehearses the deploy vendoring and checks each split tree is a complete Space root |
+| `contract.yaml` | Push, PR | Asserts each shared file is tracked exactly once; recompiles `requirements.txt` and fails on drift; runs the ranking tests and [`scripts/check_duplication.py`](scripts/check_duplication.py); rehearses the deploy vendoring and checks each split tree is a complete Space root |
 | `docker.yaml` | Push to `dev`, chained off Pre-Commit; or manual | Builds both images, boots each container, polls `/health` |
 
 `docker.yaml` costs roughly twenty minutes per merge, building two ~3 GB images. That is the
@@ -959,12 +1025,18 @@ Reviewers are assigned by [`.github/CODEOWNERS`](.github/CODEOWNERS). Changes to
 Only work that is actually pending lives here. Deliberate limits are documented where the
 subsystem is explained, rather than collected as though someone intends to fix them.
 
-- **Retrieval is dense-only while writes are hybrid.** Every point carries a BM25 sparse vector
-  that nothing queries. Switching the reader to `RetrievalMode.HYBRID` is a change to one
-  constructor rather than a re-index, but it is not free: Qdrant fuses the two rankings with
-  Reciprocal Rank Fusion, whose output is a rank-derived score on a different scale from cosine
-  similarity, so `score_threshold` would stop meaning anything and the reranker cutoff would need
-  re-deriving against real queries. Planned as its own change.
+- **Community endorsement is measured on the wrong thing.** `ranking.community_weight` is wired
+  but ships at `0.0`, because the stored `score` is the submission's rather than the answering
+  comment's: identical across every document from one post, and unable to go negative. Measured
+  over all 47,011 root comments, the comment's own score is weakly correlated with the post's
+  (Spearman +0.235), differs by 5 or more points between the best and worst answer on 48.6% of
+  multi-comment posts, and goes as low as −91. Fixing it needs a `conf/collection.yaml` key and
+  both writers, but no re-index — point ids derive from the root comment, so it is a payload-only
+  backfill with `set_payload`.
+- **The reranker reads at most ~512 tokens.** Documents are stored title-and-body first, so what
+  gets truncated on a long thread is the comment tree — the part that answers the question. The
+  real fix is chunking at write time in `services/db` so documents are answer-sized, which needs
+  a re-index.
 
 ## License
 

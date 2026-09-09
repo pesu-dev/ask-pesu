@@ -1,13 +1,14 @@
 """Assert the things this repository must keep in step but cannot share.
 
-Five pairs of files have to agree and are written separately, because each side
+Six pairs of files have to agree and are written separately, because each side
 is shipped somewhere the other never reaches. A `git subtree split` sends only
 ``services/<name>/``, so the two services cannot import a common module; the
 frontend is TypeScript; a Space's README frontmatter is read by the platform
-before any code runs; and pre-commit resolves its own hook environments from a
-git ref, never from this project's lockfile. That leaves agreement by hand,
-which is the kind that drifts silently -- the contract loaders already did
-once.
+before any code runs; pre-commit resolves its own hook environments from a
+git ref, never from this project's lockfile; and a YAML file cannot be checked
+against the code that subscripts it without running that code. That leaves
+agreement by hand, which is the kind that drifts silently -- the contract
+loaders already did once.
 
 So each pair is checked here instead, and CI runs this on every push and pull
 request. Run it directly to check a working tree:
@@ -187,6 +188,55 @@ def check_stream_events() -> list[str]:
     ]
 
 
+def check_config_keys() -> list[str]:
+    """Every `rag.*` key that app/rag.py subscripts must exist in conf/config.yaml.
+
+    The service reads its configuration with plain subscripts, so a key renamed
+    in one file and not the other is a KeyError -- raised at startup, which
+    means the Space builds for twenty minutes and then fails to boot. Comparing
+    the two statically turns that into a failed check on the pull request.
+
+    Only the three blocks reached through a ``self.<name>_cfg`` alias are
+    covered, which is where the volume of keys is. The aliases are discovered
+    from the assignments themselves rather than hardcoded, so adding a fourth
+    block does not silently escape the check.
+    """
+    source = (ROOT / "services" / "api" / "app" / "rag.py").read_text()
+    tree = ast.parse(source)
+    config = yaml.safe_load((ROOT / "services" / "api" / "conf" / "config.yaml").read_text())["rag"]
+
+    # self.retrieval_cfg = self.config["rag"]["retrieval"]  ->  {"retrieval_cfg": "retrieval"}
+    aliases: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+            continue
+        target, value = node.targets[0], node.value
+        if not isinstance(target, ast.Attribute) or not target.attr.endswith("_cfg"):
+            continue
+        # Unwrap ...["rag"]["<block>"] and keep the last subscript.
+        if isinstance(value, ast.Subscript) and isinstance(value.slice, ast.Constant):
+            aliases[target.attr] = value.slice.value
+    if not aliases:
+        return ["no `self.*_cfg` config aliases found in app/rag.py; this check can no longer see them"]
+
+    problems = []
+    for node in ast.walk(tree):
+        # self.<alias>["key"]
+        if not isinstance(node, ast.Subscript) or not isinstance(node.slice, ast.Constant):
+            continue
+        owner = node.value
+        if not isinstance(owner, ast.Attribute) or owner.attr not in aliases:
+            continue
+        block = aliases[owner.attr]
+        key = node.slice.value
+        if key not in (config.get(block) or {}):
+            problems.append(
+                f"app/rag.py reads rag.{block}.{key}, which conf/config.yaml does not define "
+                f"(it has {sorted(config.get(block) or {})})"
+            )
+    return sorted(set(problems))
+
+
 def check_ruff_pin() -> list[str]:
     """The ruff a contributor runs must be the ruff CI enforces.
 
@@ -232,6 +282,7 @@ def main() -> int:
         ("Space frontmatter", check_space_frontmatter),
         ("stream events", check_stream_events),
         ("ruff pin", check_ruff_pin),
+        ("config keys", check_config_keys),
     )
     failed = 0
     for label, check in checks:
