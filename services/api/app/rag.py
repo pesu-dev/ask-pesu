@@ -89,6 +89,55 @@ def _is_quota_error(error: BaseException) -> bool:
     return any(marker in text for marker in ("429", "too many requests", "quota", "rate limit"))
 
 
+def deduplicate(docs: list[Document]) -> list[Document]:
+    """Collapse documents that are the same stored point, keeping the best score.
+
+    ``MultiQueryRetriever`` unions the results of several phrasings and dedupes
+    them with ``[doc for i, doc in enumerate(docs) if doc not in docs[:i]]``,
+    which compares whole ``Document`` objects -- **including metadata**. That
+    works until something writes per-query state into metadata, which
+    :class:`ScoredRetriever` does: it stashes the similarity score under
+    ``_score`` before the union happens. Two phrasings that both find the same
+    point produce two objects whose scores differ, so they compare unequal and
+    both survive. The library's dedup is silently disabled by our own
+    annotation.
+
+    ``metadata["_id"]`` is the stored point id, written by ``langchain_qdrant``
+    on every document it builds, and is the identity that actually matters.
+    Deduping on it also has to decide which copy to keep: the highest ``_score``
+    wins, because a document retrieved by several phrasings should be
+    represented by its best match, not by whichever phrasing happened to run
+    last.
+
+    Documents without an ``_id`` are passed through untouched rather than
+    collapsed together -- they have no identity to compare, and treating them as
+    one document would be a worse error than keeping a duplicate.
+
+    Args:
+        docs: Documents from one or more retrieval calls, in any order.
+
+    Returns:
+        The documents, first occurrence order preserved, one per point id.
+    """
+    best: dict[str, Document] = {}
+    out: list[Document] = []
+    for doc in docs:
+        point_id = doc.metadata.get("_id")
+        if point_id is None:
+            out.append(doc)
+            continue
+        seen = best.get(point_id)
+        if seen is None:
+            best[point_id] = doc
+            out.append(doc)
+        elif doc.metadata.get("_score", 0.0) > seen.metadata.get("_score", 0.0):
+            # Same point, better score: keep this copy in the position the first
+            # one already holds, so ordering stays stable.
+            out[out.index(seen)] = doc
+            best[point_id] = doc
+    return out
+
+
 class ScoredRetriever(BaseRetriever):
     """A retriever that keeps the similarity score alongside each document.
 
@@ -270,9 +319,14 @@ class RetrievalAugmentedGenerator:
         """
         # Always use llm_primary for retrieval steps — never burn thinking-model
         # tokens on question rewriting or multi-query expansion.
+        #
+        # `include_original` defaults to False, which means the rewritten query
+        # -- the one carefully built to be self-contained and retrieval-friendly
+        # -- never itself reaches the index. Only the LLM's paraphrases of it do.
         multiquery_retriever = MultiQueryRetriever.from_llm(
             retriever=self.retriever,
             llm=self.llm_primary,
+            include_original=True,
         )
 
         # Rewrite, then retrieve: the dict pulls the two fields the rewrite prompt
@@ -284,6 +338,7 @@ class RetrievalAugmentedGenerator:
             | self.llm_primary
             | StrOutputParser()
             | multiquery_retriever
+            | RunnableLambda(deduplicate)
         )
 
         # `assign` runs the retriever and adds its output under "docs" while
