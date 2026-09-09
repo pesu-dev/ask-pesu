@@ -89,7 +89,7 @@ THINK_END = "</think>"
 # itself. Answers are synthesised from the comment thread, so citing `url` there
 # would send the reader to a page that does not contain what was cited.
 #
-# `post_id` groups documents that share a thread, so the repeated post title and
+# `post_id` groups documents that share a post, so the repeated post title and
 # body is emitted once rather than per document. `root_comment_score` is the
 # ranking signal.
 REQUIRED_METADATA = ("permalink", "post_id", "root_comment_score")
@@ -230,7 +230,7 @@ def describe_sources(docs: list[Document], snippet_chars: int = 200) -> list[dic
     -- a citation is not worth failing a request over.
 
     Several documents can share a post and therefore a permalink, so the list is
-    collapsed to one entry per thread, keeping the first (best-ranked).
+    collapsed to one entry per post, keeping the first (best-ranked).
 
     Args:
         docs: Documents in final rank order.
@@ -259,11 +259,11 @@ def describe_sources(docs: list[Document], snippet_chars: int = 200) -> list[dic
 
 
 def community_factor(score: float | None, reference_score: float) -> float:
-    """Score how strongly the community endorsed a thread, on a 0..1 scale.
+    """Score how strongly the community endorsed an answer, on a 0..1 scale.
 
     Logarithmic because Reddit scores are heavy-tailed -- the corpus median is 8
     and the maximum 697 -- so a linear scale would let a handful of viral
-    threads dominate every ranking they appear in.
+    answers dominate every ranking they appear in.
 
     Note ``0`` and ``None`` are deliberately different. Zero is a real observed
     value and a genuine signal, so it maps to 0.0; a missing value is an
@@ -321,7 +321,7 @@ def blend(docs: list[Document], ranking_cfg: dict) -> list[Document]:
 
     for doc in docs:
         # The ANSWER's score, not the submission's. The submission's is identical
-        # across every document from one thread and so ranks none of them.
+        # across every document from one post and so ranks none of them.
         community = community_factor(doc.metadata.get("root_comment_score"), ranking_cfg["reference_score"])
         doc.metadata["_community"] = community
         doc.metadata["_final"] = doc.metadata.get("_score", 0.0) * (base + weight * community)
@@ -690,7 +690,7 @@ class RetrievalAugmentedGenerator:
         tree on that post. Corpus-wide that prefix is 54% of a median document,
         so repeating it per document is pure waste.
 
-        Nothing caps how many documents one thread contributes, so this is what
+        Nothing caps how many documents one post contributes, so this is what
         keeps several answers from the same post affordable: they share one
         heading and the post body is written once rather than per answer.
 

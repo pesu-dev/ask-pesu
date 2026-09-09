@@ -137,7 +137,7 @@ rag:
     # threads.
     #
     # Read from `root_comment_score`, not `score`. The latter is the
-    # SUBMISSION's, identical across every document from one thread, so it
+    # SUBMISSION's, identical across every document from one post, so it
     # cannot rank one reply above another.
     community_weight: 0.30
 

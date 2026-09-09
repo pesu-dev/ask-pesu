@@ -72,8 +72,14 @@ A daemon thread consumes `subreddit.stream.comments(skip_existing=True)`. For ea
 it walks up to the thread's root comment, renders the whole thread as indented text with
 `anytree`, prefixes the submission title and body, and upserts a single point per root comment.
 
-**The unit of indexing is a thread, not a comment.** A reply like "yes, around 8.5" is
-meaningless alone; embedded with its question and the post it hangs off, it is answerable. The
+**The unit of indexing is a thread, not a comment.** Three words are used precisely throughout:
+a **post** (or submission) is a Reddit post; a **thread** is one root comment together with all
+its replies; a **document** is exactly one thread. A post therefore contains several threads, and
+retrieval is free to surface more than one of them for the same question — they are different
+people answering, not duplicates.
+
+A reply like "yes, around 8.5" is meaningless alone; embedded with its question and the post it
+hangs off, it is answerable. The
 point id is a UUIDv5 of the root comment's Reddit id, so a busy thread is repeatedly
 overwritten rather than accumulating near-duplicate points. AutoModerator comments are skipped —
 its boilerplate appears on many threads and would otherwise be retrieved for unrelated
@@ -85,7 +91,7 @@ re-embedding the collection precisely because the sparse vector was written from
 
 The payload records the **answer** as well as the submission it sits under. `root_comment_score`
 and `root_comment_author` are the reply's own, and are what ranking uses; the plain `score` and
-`author` belong to the post and are identical across every document from one thread, so they
+`author` belong to the post and are identical across every document from one post, so they
 cannot distinguish one reply from another.
 
 A stream only yields comments posted after it opens, so a restart would otherwise leave a
@@ -166,7 +172,7 @@ without buffering the whole response:
 | `type` | Meaning |
 |---|---|
 | `step` | Reasoning text, thinking mode only (the content between `<think>` and `</think>`) |
-| `sources` | The threads the answer draws on. Sent **once, before the first token**, carrying `permalink`, `title` and `snippet` per thread. May be empty |
+| `sources` | The posts the answer draws on. Sent **once, before the first token**, carrying `permalink`, `title` and `snippet`, one entry per post. May be empty |
 | `token` | A chunk of the answer |
 | `error` | Generation failed; `content` carries the message |
 | `done` | Always last, on success and on failure alike |
@@ -741,7 +747,7 @@ something else has to choose between the survivors.
 
 That something is **endorsement**: `ranking.community_weight` on the answer's own score, read
 from `root_comment_score`. The plain `score` is the **submission's** — identical across every
-document from one thread, so it ranks none of them, and it cannot go negative, so a downvoted
+document from one post, so it ranks none of them, and it cannot go negative, so a downvoted
 answer looks like an unrated one.
 
 The multiplier is `1 - w + w·community`, bounded in `[1-w, 1]`: a pure penalty, so nothing
@@ -1047,17 +1053,19 @@ Reviewers are assigned by [`.github/CODEOWNERS`](.github/CODEOWNERS). Changes to
 Only work that is actually pending lives here. Deliberate limits are documented where the
 subsystem is explained, rather than collected as though someone intends to fix them.
 
-- **Nothing detects a stale answer.** Ranking has no recency term, deliberately — see
-  [Configuration](#configuration) — so a 2021 thread about fees or cutoffs is cited as
-  confidently as a 2026 one. Handling that properly means judging whether the *question* is
-  time-sensitive, not penalising every old document.
-- **The answer prompt gets no conversation history.** Retrieval resolves a follow-up like "what
+- **Nothing detects a stale answer** ([#77](https://github.com/pesu-dev/ask-pesu/issues/77)).
+  Ranking has no recency term, deliberately — see [Configuration](#configuration) — so a 2021
+  thread about fees or cutoffs is cited as confidently as a 2026 one. Handling that properly
+  means judging whether the *question* is time-sensitive, not penalising every old document.
+- **The answer prompt gets no conversation history**
+  ([#78](https://github.com/pesu-dev/ask-pesu/issues/78)). Retrieval resolves a follow-up like "what
   about ECE?" into a standalone query and finds the right threads, but the model writing the
   answer receives the question exactly as typed, with no history to interpret it against. Adding
   a `MessagesPlaceholder` is a small change; the reason it is not made here is that it needs a
   matching system-prompt rule forbidding the model to answer *from* the history rather than from
   the retrieved context, and that pairing cannot be verified without spending inference quota.
-- **The reranker reads at most ~512 tokens.** Documents are stored title-and-body first, so what
+- **The reranker reads at most ~512 tokens**
+  ([#80](https://github.com/pesu-dev/ask-pesu/issues/80)). Documents are stored title-and-body first, so what
   gets truncated on a long thread is the comment tree — the part that answers the question. The
   real fix is chunking at write time in `services/db` so documents are answer-sized, which needs
   a re-index.
