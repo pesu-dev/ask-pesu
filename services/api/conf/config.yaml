@@ -49,44 +49,36 @@ rag:
     # written in that vocabulary hybrid is clearly ahead. Re-check with
     # scripts/eval_retrieval.py rather than trusting a number recorded here.
     mode: hybrid
-    # Documents per phrasing, and the ONLY control on how large the candidate
-    # pool gets. The multi-query step writes 3 phrasings and the original query
-    # is searched too, so 4 searches run and the pool is at most 4 x k before
-    # deduplication -- up to 60 at this setting.
+    # Documents per phrasing. Together with `query_expansions` this is the only
+    # control on the candidate pool: the original query is searched alongside
+    # each phrasing, so the pool is at most (query_expansions + 1) * k before
+    # deduplication -- 60 at these settings.
     #
     # The searches are concurrent, so `k` costs almost nothing in network time.
     # What it buys is cross-encoder work, paid in full before the first token
     # reaches the user: roughly 43 ms per document on two CPU threads, linear,
-    # so a pool of 60 is about 2.6s of silence. A Space's shared vCPUs are
-    # slower than that. Nothing downstream caps the pool, which is deliberate --
-    # one knob, and it is this one.
+    # so a pool of 60 is about 2.6s of silence, and a Space's shared vCPUs are
+    # slower again. Nothing downstream caps the pool, which is deliberate.
     k: 15
-    # Alternative phrasings the LLM writes for each question. The original query
-    # is searched as well, so the number of searches is this plus one, and the
-    # candidate pool is (query_expansions + 1) * k.
-    #
-    # Both halves of that cost something: each phrasing is part of one LLM
-    # response, and each search adds k documents for the cross-encoder to score.
-    # Raising it widens recall for questions whose wording misses the corpus's,
-    # which is what it is for.
+    # Alternative phrasings the LLM writes for each question, to reach
+    # discussions whose wording the question misses. Each one costs a search and
+    # its `k` documents of cross-encoder time; they are written in a single LLM
+    # response, so the LLM cost does not scale with this.
     query_expansions: 3
     # Minimum relevance, applied to the normalised cosine score. DENSE ONLY, and
     # it must be null under hybrid: Reciprocal Rank Fusion returns scores around
     # 0.02, so any value that looks reasonable for a cosine similarity would
     # discard every document. Startup refuses the combination rather than
     # letting it silently return nothing.
-    #
-    # NOTE this replaces `search_kwargs.score_threshold`, which never filtered
-    # anything -- see the migration error in app/rag.py.
     score_threshold: null
 
   rerank:
     # A cross-encoder re-scores the shortlist by reading query and document
     # together, which a vector search cannot do. Disabling it removes the
     # sentence-transformers and torch load at startup and falls back to ranking
-    # by retrieval score alone -- faster to boot, noticeably worse ordering, and
-    # not allowed under hybrid, where the retrieval score is an RRF rank
-    # artefact and nothing would be filtering relevance at all.
+    # by retrieval score alone -- faster to boot, and not allowed under hybrid,
+    # where the retrieval score is a rank artefact rather than a similarity, so
+    # nothing would be judging relevance at all.
     enabled: true
     # The canonical repo id. `ms-marco-MiniLM-L-6-v2`, with the hyphen before the
     # 6, is a legacy alias that Hugging Face answers with a 307 to this one -- it
@@ -94,8 +86,8 @@ rag:
     model: "cross-encoder/ms-marco-MiniLM-L6-v2"
     # THE relevance cutoff, on the cross-encoder's own 0..1 sigmoid scale, and
     # the only place anything is discarded for being a poor answer. Applied
-    # BEFORE the ranking weights below, so a document is admitted on relevance
-    # alone and only then reordered.
+    # before the sort, so a document is admitted on relevance alone and only
+    # then ordered by upvotes.
     #
     # Deliberately permissive, and raising it does not pay: this model scores
     # right and wrong answers too similarly for a higher gate to separate them,
