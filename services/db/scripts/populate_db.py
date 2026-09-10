@@ -33,13 +33,13 @@ import json
 import os
 import shutil
 import sys
-import time
 from pathlib import Path
 
 from dotenv import load_dotenv
 from langchain_huggingface.embeddings import HuggingFaceEmbeddings
 from langchain_qdrant import FastEmbedSparse, QdrantVectorStore, RetrievalMode
 from qdrant_client import QdrantClient
+from tqdm.auto import tqdm
 
 # The scripts run from services/db, where `app` is importable.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -64,17 +64,6 @@ def flush_batch(vector_store: QdrantVectorStore, batch: list[tuple], written: li
     count = len(ids)
     batch.clear()
     return count
-
-
-def print_progress(done: int, total: int, started: float) -> None:
-    """Draw a single-line progress bar with an ETA."""
-    elapsed = time.time() - started
-    rate = done / elapsed if elapsed else 0
-    eta = (total - done) / rate if rate else 0
-    filled = int(30 * done / total) if total else 0
-    bar = "#" * filled + "-" * (30 - filled)
-    sys.stdout.write(f"\r[{bar}] {done / total * 100 if total else 0:5.1f}% | {done}/{total} | ETA {eta:5.0f}s")
-    sys.stdout.flush()
 
 
 def build_vector_store(
@@ -168,35 +157,60 @@ def documents_in(path: Path) -> list[tuple[str, dict, str]]:
     return rows
 
 
-def main() -> int:
-    """Backfill the contracted collection from a directory of processed posts."""
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--data-dir", type=Path, default=Path("processed_data"), help="Processed post JSON files.")
-    parser.add_argument("--completed-dir", type=Path, default=Path("completed"), help="Where finished files move to.")
-    parser.add_argument(
-        "--batch-size", type=int, default=128, help="Documents per upsert. Filled across files, not per file."
-    )
-    # sentence-transformers sorts by length before batching, so the longest
-    # threads arrive in one batch together -- enough to exhaust a modest card
-    # partway through a run, long after it looked like it was working. Only peak
-    # memory depends on this, not the vectors it produces, so the default is set
-    # to survive a laptop GPU rather than to saturate a large one.
-    parser.add_argument(
-        "--encode-batch-size", type=int, default=8, help="Documents the embedding model encodes at once."
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Check the collection and the input files, report the document count, and write nothing.",
-    )
-    args = parser.parse_args()
+# Documents per upsert, filled across files rather than per file.
+DEFAULT_BATCH_SIZE = 128
 
-    load_dotenv()
+# Documents the embedding model encodes at once. sentence-transformers sorts by
+# length before batching, so the longest threads arrive in one batch together --
+# enough to exhaust a modest card partway through a run, long after it looked
+# like it was working. Only peak memory depends on this, not the vectors it
+# produces, so the default is set to survive a laptop GPU rather than to
+# saturate a large one.
+DEFAULT_ENCODE_BATCH_SIZE = 8
+
+
+def backfill(
+    data_dir: Path,
+    completed_dir: Path,
+    *,
+    encode_batch_size: int = DEFAULT_ENCODE_BATCH_SIZE,
+    batch_size: int = DEFAULT_BATCH_SIZE,
+    dry_run: bool = False,
+) -> int:
+    """Backfill the contracted collection from a directory of processed posts.
+
+    The whole write path, callable. :func:`main` is argument parsing around this
+    and nothing else, so a notebook or another script runs exactly what the
+    command line runs rather than reassembling the batching, the file retiring
+    and the read-back check. A second copy of those would be free to drift from
+    the one the collection is actually built by, which is the failure this
+    project spends a CI check preventing elsewhere.
+
+    Credentials and the collection name are read from the environment
+    (``QDRANT_URL``, ``QDRANT_API_KEY``, ``QDRANT_COLLECTION``). Deliberately no
+    ``load_dotenv`` here -- that belongs to the command line, so a caller that
+    has already set them cannot have them silently replaced by a file.
+
+    Args:
+        data_dir: Directory of processed post JSON files.
+        completed_dir: Where each file moves once the batch containing it is
+            stored. Created if absent.
+        encode_batch_size: Documents the embedding model encodes at once.
+            Bounds peak GPU memory and nothing else.
+        batch_size: Documents per upsert, filled across files rather than per
+            file.
+        dry_run: Validate the collection and every payload, then stop without
+            building the model or writing anything.
+
+    Returns:
+        0 on success; 1 if there was nothing to read, or a written point could
+        not be read back afterwards.
+    """
     contract = contract_mod.load()
 
-    files = sorted(p for p in args.data_dir.iterdir() if p.suffix == ".json")
+    files = sorted(p for p in data_dir.iterdir() if p.suffix == ".json")
     if not files:
-        print(f"No .json files in {args.data_dir}", file=sys.stderr)
+        print(f"No .json files in {data_dir}", file=sys.stderr)
         return 1
 
     client = QdrantClient(url=os.getenv("QDRANT_URL"), api_key=os.getenv("QDRANT_API_KEY"), timeout=120.0)
@@ -205,7 +219,7 @@ def main() -> int:
     contract_mod.validate_collection(contract, client)
     print(f"Collection {contract.name!r} matches the contract.")
 
-    if args.dry_run:
+    if dry_run:
         # Everything that can go wrong cheaply, before the expensive part: the
         # collection is already validated above, and this parses every input
         # file and checks each payload against the contract. It deliberately
@@ -220,8 +234,8 @@ def main() -> int:
         print("Every payload matches the contract. Nothing was written.")
         return 0
 
-    vector_store = build_vector_store(contract, client, args.encode_batch_size)
-    args.completed_dir.mkdir(parents=True, exist_ok=True)
+    vector_store = build_vector_store(contract, client, encode_batch_size)
+    completed_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"Writing {contract.name!r} from the dump; anything already stored is replaced.")
 
@@ -232,32 +246,41 @@ def main() -> int:
     # completed/ only once that batch is written, which is what makes an
     # interrupted run safe to resume: a file is there only if it is fully stored.
     staged: list[Path] = []
-    started = time.time()
-    print_progress(0, len(files), started)
 
-    for index, path in enumerate(files, start=1):
-        for text, payload, point_id in documents_in(path):
-            # Reject a drifting payload before it reaches Qdrant, the same way
-            # the listener does on every write.
-            contract_mod.validate_payload(contract, payload)
-            batch.append((text, payload, point_id))
-        staged.append(path)
-        # The batch fills across files rather than draining after each one. A
-        # post averages about three root comments, so draining per file would
-        # embed and upsert in threes however large --batch-size is -- roughly
-        # forty times the round trips, and the dominant cost of a full backfill.
-        # Whole files only: a file is added complete, so every file in `staged`
-        # is fully covered by the batch about to be written.
-        if len(batch) >= args.batch_size:
-            inserted += flush_batch(vector_store, batch, written)
-            staged = _retire(staged, args.completed_dir)
-        print_progress(index, len(files), started)
+    # tqdm.auto picks a widget in a notebook and a text bar in a terminal. A
+    # carriage-return bar writes one output line per redraw in a notebook.
+    #
+    # Driven by hand rather than by iterating the bar: tqdm closes itself when
+    # the iterator it wraps runs out, and the last partial batch is written
+    # after that, so an iterated bar finishes showing the second-to-last count.
+    with tqdm(total=len(files), unit="file", desc=f"Backfilling {contract.name}") as progress:
+        for path in files:
+            for text, payload, point_id in documents_in(path):
+                # Reject a drifting payload before it reaches Qdrant, the same
+                # way the listener does on every write.
+                contract_mod.validate_payload(contract, payload)
+                batch.append((text, payload, point_id))
+            staged.append(path)
+            # The batch fills across files rather than draining after each one. A
+            # post averages about three root comments, so draining per file would
+            # embed and upsert in threes however large --batch-size is -- roughly
+            # forty times the round trips, and the dominant cost of a full backfill.
+            # Whole files only: a file is added complete, so every file in `staged`
+            # is fully covered by the batch about to be written.
+            if len(batch) >= batch_size:
+                inserted += flush_batch(vector_store, batch, written)
+                staged = _retire(staged, completed_dir)
+                # The bar counts files; one post holds several threads, so show
+                # the document count too.
+                progress.set_postfix(documents=inserted)
+            progress.update(1)
 
-    # Whatever the last full batch left behind.
-    inserted += flush_batch(vector_store, batch, written)
-    staged = _retire(staged, args.completed_dir)
+        # Whatever the last full batch left behind.
+        inserted += flush_batch(vector_store, batch, written)
+        staged = _retire(staged, completed_dir)
+        progress.set_postfix(documents=inserted)
 
-    print(f"\nFiles: {len(files)} | Documents written: {inserted}")
+    print(f"Files: {len(files)} | Documents written: {inserted}")
 
     missing = []
     for start in range(0, len(written), 100):
@@ -271,6 +294,42 @@ def main() -> int:
         return 1
     print("All inserted points verified present.")
     return 0
+
+
+def main() -> int:
+    """Parse the command line and run :func:`backfill`."""
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--data-dir", type=Path, default=Path("processed_data"), help="Processed post JSON files.")
+    parser.add_argument("--completed-dir", type=Path, default=Path("completed"), help="Where finished files move to.")
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=DEFAULT_BATCH_SIZE,
+        help="Documents per upsert. Filled across files, not per file.",
+    )
+    parser.add_argument(
+        "--encode-batch-size",
+        type=int,
+        default=DEFAULT_ENCODE_BATCH_SIZE,
+        help="Documents the embedding model encodes at once.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Check the collection and the input files, report the document count, and write nothing.",
+    )
+    args = parser.parse_args()
+
+    # Only the command line reads a .env; backfill() takes the environment as
+    # it finds it.
+    load_dotenv()
+    return backfill(
+        args.data_dir,
+        args.completed_dir,
+        encode_batch_size=args.encode_batch_size,
+        batch_size=args.batch_size,
+        dry_run=args.dry_run,
+    )
 
 
 if __name__ == "__main__":
