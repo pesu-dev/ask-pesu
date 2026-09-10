@@ -33,30 +33,19 @@ import json
 import os
 import shutil
 import sys
-import time
 from pathlib import Path
 
 from dotenv import load_dotenv
 from langchain_huggingface.embeddings import HuggingFaceEmbeddings
 from langchain_qdrant import FastEmbedSparse, QdrantVectorStore, RetrievalMode
 from qdrant_client import QdrantClient
+from tqdm.auto import tqdm
 
 # The scripts run from services/db, where `app` is importable.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app import contract as contract_mod  # noqa: E402
 from app.utils import convert_to_uuid  # noqa: E402
-
-
-def print_progress(done: int, total: int, started: float) -> None:
-    """Draw a single-line progress bar with an ETA."""
-    elapsed = time.time() - started
-    rate = done / elapsed if elapsed else 0
-    eta = (total - done) / rate if rate else 0
-    filled = int(30 * done / total) if total else 0
-    bar = "#" * filled + "-" * (30 - filled)
-    sys.stdout.write(f"\r[{bar}] {done / total * 100 if total else 0:5.1f}% | {done}/{total} | ETA {eta:5.0f}s")
-    sys.stdout.flush()
 
 
 def flush_batch(vector_store: QdrantVectorStore, batch: list[tuple], written: list[str]) -> int:
@@ -257,32 +246,41 @@ def backfill(
     # completed/ only once that batch is written, which is what makes an
     # interrupted run safe to resume: a file is there only if it is fully stored.
     staged: list[Path] = []
-    started = time.time()
-    print_progress(0, len(files), started)
 
-    for index, path in enumerate(files, start=1):
-        for text, payload, point_id in documents_in(path):
-            # Reject a drifting payload before it reaches Qdrant, the same way
-            # the listener does on every write.
-            contract_mod.validate_payload(contract, payload)
-            batch.append((text, payload, point_id))
-        staged.append(path)
-        # The batch fills across files rather than draining after each one. A
-        # post averages about three root comments, so draining per file would
-        # embed and upsert in threes however large --batch-size is -- roughly
-        # forty times the round trips, and the dominant cost of a full backfill.
-        # Whole files only: a file is added complete, so every file in `staged`
-        # is fully covered by the batch about to be written.
-        if len(batch) >= batch_size:
-            inserted += flush_batch(vector_store, batch, written)
-            staged = _retire(staged, completed_dir)
-        print_progress(index, len(files), started)
+    # tqdm.auto picks a widget in a notebook and a text bar in a terminal. A
+    # carriage-return bar writes one output line per redraw in a notebook.
+    #
+    # Driven by hand rather than by iterating the bar: tqdm closes itself when
+    # the iterator it wraps runs out, and the last partial batch is written
+    # after that, so an iterated bar finishes showing the second-to-last count.
+    with tqdm(total=len(files), unit="file", desc=f"Backfilling {contract.name}") as progress:
+        for path in files:
+            for text, payload, point_id in documents_in(path):
+                # Reject a drifting payload before it reaches Qdrant, the same
+                # way the listener does on every write.
+                contract_mod.validate_payload(contract, payload)
+                batch.append((text, payload, point_id))
+            staged.append(path)
+            # The batch fills across files rather than draining after each one. A
+            # post averages about three root comments, so draining per file would
+            # embed and upsert in threes however large --batch-size is -- roughly
+            # forty times the round trips, and the dominant cost of a full backfill.
+            # Whole files only: a file is added complete, so every file in `staged`
+            # is fully covered by the batch about to be written.
+            if len(batch) >= batch_size:
+                inserted += flush_batch(vector_store, batch, written)
+                staged = _retire(staged, completed_dir)
+                # The bar counts files; one post holds several threads, so show
+                # the document count too.
+                progress.set_postfix(documents=inserted)
+            progress.update(1)
 
-    # Whatever the last full batch left behind.
-    inserted += flush_batch(vector_store, batch, written)
-    staged = _retire(staged, completed_dir)
+        # Whatever the last full batch left behind.
+        inserted += flush_batch(vector_store, batch, written)
+        staged = _retire(staged, completed_dir)
+        progress.set_postfix(documents=inserted)
 
-    print(f"\nFiles: {len(files)} | Documents written: {inserted}")
+    print(f"Files: {len(files)} | Documents written: {inserted}")
 
     missing = []
     for start in range(0, len(written), 100):
