@@ -1,13 +1,14 @@
 """Assert the things this repository must keep in step but cannot share.
 
-Five pairs of files have to agree and are written separately, because each side
+Six pairs of files have to agree and are written separately, because each side
 is shipped somewhere the other never reaches. A `git subtree split` sends only
 ``services/<name>/``, so the two services cannot import a common module; the
 frontend is TypeScript; a Space's README frontmatter is read by the platform
-before any code runs; and pre-commit resolves its own hook environments from a
-git ref, never from this project's lockfile. That leaves agreement by hand,
-which is the kind that drifts silently -- the contract loaders already did
-once.
+before any code runs; pre-commit resolves its own hook environments from a
+git ref, never from this project's lockfile; and a YAML file cannot be checked
+against the code that subscripts it without running that code. That leaves
+agreement by hand, which is the kind that drifts silently -- the contract
+loaders already did once.
 
 So each pair is checked here instead, and CI runs this on every push and pull
 request. Run it directly to check a working tree:
@@ -187,6 +188,84 @@ def check_stream_events() -> list[str]:
     ]
 
 
+def _config_aliases(tree: ast.Module) -> dict[str, str]:
+    """Find the `self.<name>_cfg = self.config["rag"]["<block>"]` assignments.
+
+    Discovered rather than hardcoded, so a block added to app/rag.py is covered
+    the moment it is aliased, without anyone remembering to list it here.
+
+    Returns:
+        Attribute name to the config block it aliases, e.g.
+        ``{"retrieval_cfg": "retrieval"}``.
+    """
+    aliases: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+            continue
+        target, value = node.targets[0], node.value
+        if not isinstance(target, ast.Attribute) or not target.attr.endswith("_cfg"):
+            continue
+        # Unwrap ...["rag"]["<block>"] and keep the last subscript.
+        if isinstance(value, ast.Subscript) and isinstance(value.slice, ast.Constant):
+            aliases[target.attr] = value.slice.value
+    return aliases
+
+
+def _keys_read(tree: ast.Module, aliases: dict[str, str]) -> dict[str, set[str]]:
+    """Collect every ``self.<alias>["key"]`` subscript, grouped by config block."""
+    read: dict[str, set[str]] = {block: set() for block in aliases.values()}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Subscript) or not isinstance(node.slice, ast.Constant):
+            continue
+        owner = node.value
+        if not isinstance(owner, ast.Attribute) or owner.attr not in aliases:
+            continue
+        read[aliases[owner.attr]].add(node.slice.value)
+    return read
+
+
+def check_config_keys() -> list[str]:
+    """The `rag.*` keys app/rag.py subscripts and the ones conf/config.yaml defines must match.
+
+    Checked in both directions, because the two failures are different and both
+    are silent in their own way.
+
+    A key the code reads and the file does not define is a KeyError at startup,
+    after the Space has spent a full build getting there. A key the file defines
+    and the code never reads is worse in a quieter way: it is set by somebody who
+    expects it to do something, and it does nothing, which is exactly what
+    ``_validate_config`` refuses whole stale *blocks* for. This is that same rule
+    one level down, at the key.
+
+    Only the blocks reached through a ``self.<name>_cfg`` alias are covered,
+    which is where the volume of keys is; ``llm`` and ``prompts`` are read
+    through their full paths and are not seen here. The aliases are discovered
+    from the assignments themselves rather than hardcoded, so adding a block
+    does not silently escape the check.
+    """
+    source = (ROOT / "services" / "api" / "app" / "rag.py").read_text()
+    tree = ast.parse(source)
+    config = yaml.safe_load((ROOT / "services" / "api" / "conf" / "config.yaml").read_text())["rag"]
+
+    aliases = _config_aliases(tree)
+    if not aliases:
+        return ["no `self.*_cfg` config aliases found in app/rag.py; this check cannot see the keys it compares"]
+
+    problems = []
+    for block, keys in _keys_read(tree, aliases).items():
+        defined = set(config.get(block) or {})
+        for key in sorted(keys - defined):
+            problems.append(
+                f"app/rag.py reads rag.{block}.{key}, which conf/config.yaml does not define (it has {sorted(defined)})"
+            )
+        for key in sorted(defined - keys):
+            problems.append(
+                f"conf/config.yaml defines rag.{block}.{key}, which app/rag.py never reads -- "
+                f"remove it, or read it where it is meant to take effect"
+            )
+    return sorted(set(problems))
+
+
 def check_ruff_pin() -> list[str]:
     """The ruff a contributor runs must be the ruff CI enforces.
 
@@ -203,7 +282,7 @@ def check_ruff_pin() -> list[str]:
         None,
     )
     if hooked is None:
-        return ["no ruff-pre-commit repo in .pre-commit-config.yaml; this check can no longer see the hook version"]
+        return ["no ruff-pre-commit repo in .pre-commit-config.yaml; this check cannot see the hook version"]
 
     group = tomllib.loads((ROOT / "pyproject.toml").read_text()).get("dependency-groups", {}).get("dev")
     if group is None:
@@ -232,6 +311,7 @@ def main() -> int:
         ("Space frontmatter", check_space_frontmatter),
         ("stream events", check_stream_events),
         ("ruff pin", check_ruff_pin),
+        ("config keys", check_config_keys),
     )
     failed = 0
     for label, check in checks:

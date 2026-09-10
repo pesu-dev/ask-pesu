@@ -147,6 +147,12 @@ def index_comment(comment: Comment, root_comment: Comment | None = None) -> bool
 
     metadata = {
         "root_comment_id": root_comment.id,
+        # The answer's own score and author, as opposed to the submission's
+        # below. A thread's documents all share a post but each is a different
+        # reply by a different person, so these are the only fields that can
+        # tell them apart.
+        "root_comment_score": root_comment.score,
+        "root_comment_author": str(root_comment.author) if root_comment.author else None,
         "post_id": submission.id,
         "author": str(submission.author) if submission.author else None,
         "url": submission.url,
@@ -208,9 +214,9 @@ def listen_comments() -> None:
     """Consume new r/PESU comments forever, indexing the thread each belongs to.
 
     Runs the catch-up first, then streams. ``skip_existing=True`` means the
-    stream only yields comments posted after it opens; the catch-up is what
-    covers the window before that, so a restart no longer loses the comments
-    posted while this service was down.
+    stream only yields comments posted after it opens, so the catch-up is what
+    covers the window before that -- without it a restart would silently lose
+    every comment posted while this service was down.
 
     Two failure modes, deliberately treated differently. Network and Reddit errors
     are transient, so the stream is simply re-entered. A contract violation is a

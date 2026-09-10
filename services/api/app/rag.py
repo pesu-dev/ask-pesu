@@ -4,50 +4,66 @@ One :class:`RetrievalAugmentedGenerator` is built during the FastAPI lifespan an
 reused for every request; construction loads an embedding model and optionally a
 cross-encoder, so it is far too expensive to do per request.
 
-A question travels through five stages, all wired together with LangChain
-Expression Language (LCEL) in :meth:`RetrievalAugmentedGenerator._build_chain`:
+A question travels through seven stages:
 
-1. **Rewrite.** The question plus chat history becomes one standalone,
-   retrieval-friendly query. This is what resolves "is it hard?" into "is the
-   Data Structures course at PES University hard?", and expands PESU
-   abbreviations (RR, EC, CSE, SGPA...) using the prompt in ``conf/config.yaml``.
+1. **Rewrite.** With chat history, the question plus that history becomes one
+   standalone query -- this is what resolves "is it hard?" into something
+   retrievable. With no history there is nothing to resolve against and the
+   step is skipped, saving a round trip on every first question.
 2. **Multi-query expansion.** ``MultiQueryRetriever`` asks the LLM for several
-   phrasings of that query and unions the documents each one retrieves, which
-   recovers passages a single phrasing would miss.
-3. **Dense retrieval.** Each phrasing runs a vector search against Qdrant
-   through :class:`ScoredRetriever`.
-4. **Rerank.** A cross-encoder scores every (query, document) pair properly --
+   phrasings and unions the documents each one retrieves, which recovers
+   passages a single phrasing would miss.
+3. **Retrieval.** Each phrasing runs a search against Qdrant through
+   :class:`ScoredRetriever`.
+4. **Deduplication.** The union is collapsed on the stored point id. This has to
+   happen before reranking, or the cross-encoder pays to score the same
+   document more than once.
+5. **Rerank.** A cross-encoder scores every (query, document) pair properly --
    attending to both texts at once, which a bi-encoder vector search cannot do --
-   and drops anything below the configured threshold.
-5. **Generate.** The surviving documents are formatted into the answer prompt and
-   streamed from the LLM token by token.
+   and drops anything below the configured threshold. This is the only stage
+   that filters, and it filters rather than orders: its scores separate the
+   surviving documents by only a few percent.
+6. **Rank.** Upvotes on the answer decide the order of what survived. Strictly
+   after the cutoff, so it reorders only documents that already answer the
+   question. The sort is stable, so documents with equal upvotes keep the
+   relevance order they arrived in. The best ``top_n`` go on.
+7. **Generate.** The surviving documents are formatted into the answer prompt and
+   streamed from the LLM token by token, after the threads they came from have
+   been reported as a ``sources`` event.
 
 Stages 1 and 2 always use the *primary* model even in thinking mode, so thinking
 tokens are never spent on query rewriting.
+
+Only the last stage is a LangChain Expression Language (LCEL) chain, because
+streaming is what LCEL is for here. The retrieval stages run explicitly instead:
+expressed as a chain they emit only the answer text, and the documents they
+found stay inside it, which leaves the backend unable to tell a client which
+threads an answer was drawn from except by asking the model to reprint the
+links. Running them explicitly is what makes the documents available to
+:meth:`RetrievalAugmentedGenerator.generate`.
 
 The collection name, embedding model and vector geometry are not configured here.
 They are contracted with ``services/db`` in ``conf/collection.yaml`` and verified
 at startup; see :mod:`app.contract`.
 """
 
+import asyncio
+import datetime
 import json
 import logging
 import os
 from collections.abc import AsyncGenerator, Callable
-from operator import itemgetter
 
 import yaml
 from dotenv import load_dotenv
-from huggingface_hub import InferenceClient
+from huggingface_hub import InferenceClient, whoami
 from langchain_classic.retrievers import MultiQueryRetriever
 from langchain_core.callbacks import CallbackManagerForRetrieverRun
 from langchain_core.documents.base import Document
-from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.output_parsers import StrOutputParser
-from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
 from langchain_core.retrievers import BaseRetriever
-from langchain_core.runnables import RunnableLambda, RunnablePassthrough, RunnableSerializable
 from langchain_huggingface import ChatHuggingFace, HuggingFaceEndpoint
 from langchain_huggingface.embeddings import HuggingFaceEmbeddings
 from langchain_qdrant import QdrantVectorStore
@@ -71,59 +87,272 @@ THINK_END = "</think>"
 # `url` is the external article being discussed rather than the discussion
 # itself. Answers are synthesised from the comment thread, so citing `url` there
 # would send the reader to a page that does not contain what was cited.
-REQUIRED_METADATA = ("permalink",)
+#
+# `post_id` groups documents that share a post, so the repeated post title and
+# body is emitted once rather than per document. `root_comment_score` is the
+# ranking signal.
+REQUIRED_METADATA = ("permalink", "post_id", "root_comment_score")
 
 
-def _is_quota_error(error: BaseException) -> bool:
-    """Guess whether a failure was the provider refusing us on quota or rate limit.
+# The two ways the provider refuses us for want of budget rather than for a bad
+# request. 429 is a rate limit and clears on its own; 402 means the account's
+# included inference credits are spent and clears when they renew, which is a
+# very different wait -- see :func:`credits_reset_at`.
+_REFUSAL_STATUSES = (402, 429)
 
-    The Hugging Face Inference client surfaces these as an HTTP error, so prefer
-    the status code and fall back to the message. It is a heuristic: guessing
-    wrong only costs an unnecessary cooldown, whereas not detecting a real 429
-    means hammering a provider that is already refusing us.
+
+def _quota_refusal(error: BaseException) -> int | None:
+    """Classify a failure as the provider refusing us on budget, or not.
+
+    ``huggingface_hub`` raises ``HfHubHTTPError`` with the response attached, so
+    the status code is available and exact; the string matching is only a
+    fallback for anything that loses it. Getting this wrong in one direction
+    costs an unnecessary cooldown, and in the other means hammering a provider
+    that is already refusing us -- and, worse, showing the user a raw HTTP error
+    with a billing URL in it.
+
+    A 402 is why the status code is checked first rather than the message: it
+    reads "You have depleted your monthly included credits", which contains none
+    of the words matched below.
+
+    Args:
+        error: The exception raised during generation.
+
+    Returns:
+        The refusing status code, or None if this was some other failure.
     """
     status = getattr(getattr(error, "response", None), "status_code", None)
-    if status == 429:
-        return True
+    if status in _REFUSAL_STATUSES:
+        return status
     text = str(error).lower()
-    return any(marker in text for marker in ("429", "too many requests", "quota", "rate limit"))
+    for marker, code in (
+        ("too many requests", 429),
+        ("rate limit", 429),
+        ("429", 429),
+        ("payment required", 402),
+        ("credits", 402),
+        ("402", 402),
+        ("quota", 429),
+    ):
+        if marker in text:
+            return code
+    return None
+
+
+def credits_reset_at() -> datetime.datetime | None:
+    """Ask Hugging Face when this account's included credits renew.
+
+    ``whoami`` reports ``periodEnd``, a POSIX timestamp, which is the only
+    authoritative answer to "when will this work again" after a 402. There is no
+    endpoint that reports a remaining balance, and inference responses carry no
+    quota headers at all, so this cannot be checked in advance -- only after
+    being refused.
+
+    Returns:
+        When the credits renew, or None if the lookup fails for any reason. The
+        caller then falls back to its default cooldown; this runs inside error
+        handling and must not raise.
+    """
+    try:
+        period_end = whoami(token=os.getenv("HF_TOKEN")).get("periodEnd")
+        if period_end is None:
+            return None
+        return datetime.datetime.fromtimestamp(float(period_end), datetime.UTC)
+    except Exception as error:
+        logging.warning(f"Could not read the credit reset time from Hugging Face: {error}")
+        return None
+
+
+def deduplicate(docs: list[Document]) -> list[Document]:
+    """Collapse documents that are the same stored point, keeping the best score.
+
+    ``MultiQueryRetriever`` unions the results of several phrasings and dedupes
+    them with ``[doc for i, doc in enumerate(docs) if doc not in docs[:i]]``,
+    which compares whole ``Document`` objects -- **including metadata**. That
+    works until something writes per-query state into metadata, which
+    :class:`ScoredRetriever` does: it stashes the similarity score under
+    ``_score`` before the union happens. Two phrasings that both find the same
+    point produce two objects whose scores differ, so they compare unequal and
+    both survive. The library's dedup is silently disabled by our own
+    annotation.
+
+    ``metadata["_id"]`` is the stored point id, written by ``langchain_qdrant``
+    on every document it builds, and is the identity that actually matters.
+    Deduping on it also has to decide which copy to keep: the highest ``_score``
+    wins, because a document retrieved by several phrasings should be
+    represented by its best match, not by whichever phrasing happened to run
+    last.
+
+    Documents without an ``_id`` are passed through untouched rather than
+    collapsed together -- they have no identity to compare, and treating them as
+    one document would be a worse error than keeping a duplicate.
+
+    Args:
+        docs: Documents from one or more retrieval calls, in any order.
+
+    Returns:
+        The documents, first occurrence order preserved, one per point id.
+    """
+    # Position by point id rather than searching `out` for the previous copy:
+    # list.index compares Documents by value, so it would find whichever earlier
+    # element happened to compare equal rather than the one actually being
+    # replaced.
+    position: dict[str, int] = {}
+    out: list[Document] = []
+    for doc in docs:
+        point_id = doc.metadata.get("_id")
+        if point_id is None:
+            out.append(doc)
+            continue
+        index = position.get(point_id)
+        if index is None:
+            position[point_id] = len(out)
+            out.append(doc)
+        elif doc.metadata.get("_score", 0.0) > out[index].metadata.get("_score", 0.0):
+            # Same point, better score: keep this copy where the first one
+            # already sits, so ordering stays stable.
+            out[index] = doc
+    return out
+
+
+def describe_sources(docs: list[Document], snippet_chars: int = 200) -> list[dict]:
+    """Turn retrieved documents into the citations the stream reports.
+
+    These are the threads retrieval actually selected, which is the whole point:
+    the alternative is asking the model to reprint links it was shown and
+    parsing them back out of its prose, where it can drop one, invent one, or
+    format the list in a way the parser does not expect.
+
+    Documents are stored as a TITLE line, a CONTENT line and then the COMMENT
+    TREE, so the title is recoverable without another payload key. Anything that
+    does not match that layout falls back to the permalink rather than raising
+    -- a citation is not worth failing a request over.
+
+    Several documents can share a post and therefore a permalink, so the list is
+    collapsed to one entry per post, keeping the first (best-ranked).
+
+    Args:
+        docs: Documents in final rank order.
+        snippet_chars: How much of the discussion to include as a preview.
+
+    Returns:
+        One dict per distinct thread, in rank order.
+    """
+    out: list[dict] = []
+    seen: set[str] = set()
+    for doc in docs:
+        permalink = doc.metadata.get("permalink")
+        if not permalink or permalink in seen:
+            continue
+        seen.add(permalink)
+
+        first_line, _, rest = doc.page_content.partition("\n")
+        title = first_line[len("TITLE: ") :].strip() if first_line.startswith("TITLE: ") else ""
+        _, _, tree = rest.partition("COMMENT TREE:")
+        # Prefer the discussion, fall back to whatever followed the title, and
+        # finally to the raw document -- an empty preview is worse than a rough
+        # one.
+        snippet = " ".join((tree or rest or doc.page_content).split())[:snippet_chars]
+        out.append({"permalink": permalink, "title": title or permalink, "snippet": snippet})
+    return out
+
+
+def rank(docs: list[Document]) -> list[Document]:
+    """Order documents by how the community received the answer.
+
+    Upvotes on the ROOT COMMENT, not on the post. The post's score is identical
+    across every document from one post and so ranks none of them, and it cannot
+    go negative, which makes a rejected answer indistinguishable from an unrated
+    one. The comment's score does both.
+
+    Sorted directly on the raw count, with no normalisation and no scale
+    constant. A bounded 0..1 factor would only be needed to *multiply*
+    endorsement with relevance; ordering needs no such thing, because sorting is
+    invariant to monotonic transforms -- ranking by ``log(score)/log(25)`` gives
+    exactly the ranking of ``score``. Removing the multiplication removes the
+    constant, and with it the only value in the configuration that was derived
+    from a snapshot of the corpus and would drift as it grew.
+
+    **The sort is stable, and that is load-bearing.** Documents arrive in
+    cross-encoder order, and most answers carry very few upvotes, so ties are
+    the common case -- and a tie keeps the relevance order it came in with. The
+    effect is "upvotes where they differ, relevance where they do not", without
+    either being expressed as a weight.
+
+    A missing score sorts as zero: neither endorsed nor rejected, so it sits
+    above genuinely downvoted answers and below genuinely upvoted ones.
+
+    Args:
+        docs: Documents that already cleared the relevance cutoff, in
+            cross-encoder order.
+
+    Returns:
+        The same documents, best first.
+    """
+
+    def upvotes(doc: Document) -> float:
+        score = doc.metadata.get("root_comment_score")
+        return float(score) if isinstance(score, int | float) and not isinstance(score, bool) else 0.0
+
+    return sorted(docs, key=upvotes, reverse=True)
 
 
 class ScoredRetriever(BaseRetriever):
-    """A retriever that keeps the similarity score alongside each document.
+    """A retriever that keeps the search score alongside each document.
 
     LangChain's ``BaseRetriever`` interface returns bare documents, discarding
-    the scores the vector store computed. Those scores are the only ranking
-    signal available when the cross-encoder is disabled, so this wrapper stashes
-    each one in ``doc.metadata["_score"]``.
+    the scores the vector store computed. Those scores order the candidate pool
+    and are the only ranking signal available when the cross-encoder is
+    disabled, so this wrapper stashes each one in ``doc.metadata["_score"]``.
 
-    The underscore prefix marks it as locally attached rather than part of the
-    payload written by ``services/db`` -- it is not in the collection contract.
+    It calls ``similarity_search_with_score`` rather than
+    ``similarity_search_with_relevance_scores`` deliberately. The latter maps
+    the score through a "relevance" function -- for cosine, ``(score + 1) / 2``
+    -- and applies ``score_threshold`` to *that*, client side, after popping it
+    out of the kwargs so Qdrant never sees it. Under hybrid retrieval it would
+    be normalising a Reciprocal Rank Fusion score as though it were a cosine
+    similarity, which is meaningless. This returns whatever the mode actually
+    produced.
+
+    Note the scale therefore depends on the mode: a cosine similarity under
+    ``dense``, a Reciprocal Rank Fusion score under ``hybrid`` -- which is
+    derived from rank position rather than similarity, and lives on a far
+    smaller scale. Nothing compares scores across modes, and nothing may
+    threshold the fused one.
+
+    ``_score`` is locally attached, not part of the payload written by
+    ``services/db``, and is not in the collection contract.
     """
 
     vector_store: QdrantVectorStore
-    search_kwargs: dict
+    k: int
+    score_threshold: float | None = None
 
-    def _get_relevant_documents(self, query: str, *, run_manager: CallbackManagerForRetrieverRun) -> list[Document]:
-        """Retrieve documents synchronously, annotating each with its score."""
-        results = self.vector_store.similarity_search_with_relevance_scores(query, **self.search_kwargs)
+    def _annotate(self, results: list[tuple[Document, float]]) -> list[Document]:
+        """Attach each score to its document."""
         for doc, score in results:
             doc.metadata["_score"] = score
         return [doc for doc, _ in results]
+
+    def _get_relevant_documents(self, query: str, *, run_manager: CallbackManagerForRetrieverRun) -> list[Document]:
+        """Retrieve documents synchronously, annotating each with its score."""
+        return self._annotate(
+            self.vector_store.similarity_search_with_score(query, k=self.k, score_threshold=self.score_threshold)
+        )
 
     async def _aget_relevant_documents(
         self, query: str, *, run_manager: CallbackManagerForRetrieverRun
     ) -> list[Document]:
         """Async twin of the above.
 
-        ``BaseRetriever`` supplies a default that runs the sync version in a
-        thread pool, but the whole request path is async, so implementing this
-        properly keeps the event loop free during the network round trip.
+        ``langchain_qdrant`` implements no async methods, so this resolves to
+        the base class running the sync search in a thread pool. Calling it
+        rather than the sync version is still what keeps the event loop free
+        during the round trip.
         """
-        results = await self.vector_store.asimilarity_search_with_relevance_scores(query, **self.search_kwargs)
-        for doc, score in results:
-            doc.metadata["_score"] = score
-        return [doc for doc, _ in results]
+        return self._annotate(
+            await self.vector_store.asimilarity_search_with_score(query, k=self.k, score_threshold=self.score_threshold)
+        )
 
 
 class RetrievalAugmentedGenerator:
@@ -156,6 +385,9 @@ class RetrievalAugmentedGenerator:
 
         with open(config_path) as file:
             self.config = yaml.safe_load(file)
+        self.retrieval_cfg = self.config["rag"]["retrieval"]
+        self.rerank_cfg = self.config["rag"]["rerank"]
+        self.sources_cfg = self.config["rag"]["sources"]
 
         # The collection name, embedding model and vector geometry are contracted
         # with services/db, not configured per service. Everything is checked
@@ -164,6 +396,11 @@ class RetrievalAugmentedGenerator:
         self.contract = contract_mod.load()
         contract_mod.require_metadata(self.contract, *REQUIRED_METADATA)
 
+        # Before anything expensive loads, so a bad combination is a startup
+        # crash naming the fix rather than a pipeline that quietly returns
+        # nothing.
+        self._validate_config()
+
         self.embedding = HuggingFaceEmbeddings(model_name=self.contract.model)
         contract_mod.validate_embedding(self.contract, self.embedding)
 
@@ -171,20 +408,32 @@ class RetrievalAugmentedGenerator:
         contract_mod.validate_collection(self.contract, self.qdrant_client)
         logging.info(f"Qdrant collection {self.contract.name!r} matches conf/collection.yaml.")
 
-        # Dense retrieval only, even though every point also carries the BM25
-        # sparse vector services/db writes. Reading hybrid is a change to this
-        # constructor rather than a re-index -- which is the whole reason the
-        # sparse vector is written now -- but it is not a free switch: Qdrant
-        # fuses the two rankings with Reciprocal Rank Fusion, whose output is a
-        # rank-derived score on a different scale from cosine similarity, so
-        # `score_threshold` would silently stop meaning anything and the
-        # reranker cutoff would need re-deriving.
+        # Hybrid reads the BM25 sparse vector services/db has been writing on
+        # every point since before anything queried it -- which is exactly why
+        # turning it on here is a constructor change and not a re-index.
+        #
+        # Qdrant fuses the dense and sparse rankings with Reciprocal Rank
+        # Fusion, so the score it returns is derived from rank position rather
+        # than similarity and is nothing like a cosine. Nothing may threshold on
+        # it; see _validate_config.
+        mode = self.retrieval_cfg["mode"]
+        sparse_kwargs = {}
+        if mode == "hybrid":
+            from langchain_qdrant import FastEmbedSparse, RetrievalMode
+
+            sparse_kwargs = {
+                "sparse_embedding": FastEmbedSparse(model_name=self.contract.sparse_model),
+                "sparse_vector_name": self.contract.sparse_vector_name,
+                "retrieval_mode": RetrievalMode.HYBRID,
+            }
         self.vector_store = QdrantVectorStore(
             collection_name=self.contract.name,
             embedding=self.embedding,
             client=self.qdrant_client,
             vector_name=self.contract.vector_name,
+            **sparse_kwargs,
         )
+        logging.info(f"Retrieval mode: {mode}")
 
         # Two chat models, both streaming. `provider` routes the call through a
         # third-party inference provider (nscale) rather than HF's own hardware.
@@ -214,8 +463,9 @@ class RetrievalAugmentedGenerator:
             )
         )
 
-        # Answer prompt: system rules (cite sources, refuse off-topic questions)
-        # plus the human turn carrying {question} and the retrieved {context}.
+        # Answer prompt: system rules (answer only from context, do not
+        # reprint the sources, refuse off-topic questions) plus the human turn
+        # carrying {question} and the retrieved {context}.
         self.prompt = ChatPromptTemplate.from_messages(
             [
                 ("system", self.config["rag"]["prompts"]["system_prompt"]),
@@ -234,99 +484,239 @@ class RetrievalAugmentedGenerator:
 
         self.retriever = ScoredRetriever(
             vector_store=self.vector_store,
-            search_kwargs=self.config["rag"]["search_kwargs"],
+            k=self.retrieval_cfg["k"],
+            # Under hybrid this is None, enforced by _validate_config: the fused
+            # score is a rank artefact and cannot be thresholded.
+            score_threshold=self.retrieval_cfg["score_threshold"],
         )
 
         # torch and sentence_transformers are imported lazily: together they are
         # the heaviest dependency in the image, and a deployment with the reranker
         # disabled should not pay to import them.
-        reranker_cfg = self.config["rag"].get("reranker", {})
-        if reranker_cfg.get("enabled", False):
+        if self.rerank_cfg["enabled"]:
             import torch
             from sentence_transformers import CrossEncoder
 
             # Sigmoid squashes the raw logit into 0..1 so `score_threshold` is a
             # probability-like cutoff that means the same thing across models.
-            self.cross_encoder = CrossEncoder(reranker_cfg["model"], activation_fn=torch.nn.Sigmoid())
-            logging.info(f"Cross-encoder reranker loaded: {reranker_cfg['model']}")
+            self.cross_encoder = CrossEncoder(self.rerank_cfg["model"], activation_fn=torch.nn.Sigmoid())
+            logging.info(f"Cross-encoder reranker loaded: {self.rerank_cfg['model']}")
         else:
             self.cross_encoder = None
 
-        # Two chains differing only in which model writes the final answer; both
-        # retrieve with the primary model.
-        self.rag_chain_primary = self._build_chain(self.llm_primary)
-        self.rag_chain_thinking = self._build_chain(self.llm_thinking)
-
-    def _build_chain(self, llm: BaseChatModel) -> RunnableSerializable[str, str]:
-        """Compose the LCEL chain that turns a question into a stream of answer text.
-
-        Args:
-            llm: The model that writes the final answer. Retrieval always uses
-                the primary model regardless of this argument.
-
-        Returns:
-            A runnable taking ``{"input", "question", "chat_history"}`` and
-            streaming answer strings.
-        """
-        # Always use llm_primary for retrieval steps — never burn thinking-model
-        # tokens on question rewriting or multi-query expansion.
-        multiquery_retriever = MultiQueryRetriever.from_llm(
+        # Retrieval is assembled from parts rather than composed into a chain,
+        # so `retrieve` can hand the documents back to the caller. A chain would
+        # consume them internally and yield only text, leaving nothing to report
+        # as the answer's sources.
+        #
+        # Both retrieval-side steps always use the primary model, so thinking
+        # tokens are never spent on reformulating a question.
+        self._rewrite_chain = self.frame_qn_prompt | self.llm_primary | StrOutputParser()
+        self.multiquery = MultiQueryRetriever.from_llm(
             retriever=self.retriever,
             llm=self.llm_primary,
+            prompt=self._multi_query_prompt(),
+            # Defaults to False, which would keep the rewritten query -- the one
+            # built to be self-contained and retrieval-friendly -- from ever
+            # reaching the index. Only the LLM's paraphrases of it would.
+            include_original=True,
         )
 
-        # Rewrite, then retrieve: the dict pulls the two fields the rewrite prompt
-        # needs, the LLM rewrites, StrOutputParser unwraps the message into a
-        # plain string, and that string is what the retriever searches with.
-        history_aware_retriever = (
-            {"input": itemgetter("input"), "chat_history": itemgetter("chat_history")}
-            | self.frame_qn_prompt
-            | self.llm_primary
-            | StrOutputParser()
-            | multiquery_retriever
+        # Cross-encoder passes allowed at once. Serialised by default because a
+        # cpu-basic Space has two vCPUs, and concurrent torch inferences thrash
+        # rather than overlap.
+        self._rerank_gate = asyncio.Semaphore(self.rerank_cfg["concurrency"])
+
+        # Two answer chains differing only in which model writes the answer.
+        # This is the only LCEL left, and streaming is the reason it stays.
+        self._answer_primary = self.prompt | self.llm_primary | StrOutputParser()
+        self._answer_thinking = self.prompt | self.llm_thinking | StrOutputParser()
+
+    def _multi_query_prompt(self) -> PromptTemplate:
+        """Build the prompt that writes the alternative phrasings.
+
+        Supplied rather than left to the library, whose default prompt hardcodes
+        "3 different versions" in its wording -- so the count cannot be
+        configured without replacing the prompt outright.
+
+        ``{count}`` is substituted here rather than declared as an input
+        variable, because it is fixed for the life of the process and the
+        retriever only ever passes ``{question}``.
+
+        Returns:
+            A prompt template taking ``question``.
+        """
+        template = self.config["rag"]["prompts"]["multi_query_prompt"]
+        return PromptTemplate(
+            input_variables=["question"],
+            template=template.replace("{count}", str(self.retrieval_cfg["query_expansions"])),
         )
 
-        # `assign` runs the retriever and adds its output under "docs" while
-        # keeping the original input keys, so "input" survives for the reranker
-        # (which needs the query) and for the answer prompt further down.
-        return (
-            RunnablePassthrough.assign(docs=history_aware_retriever)
-            | RunnableLambda(self._rerank)
-            | {
-                "context": itemgetter("docs") | RunnableLambda(self.format_docs),
-                "question": itemgetter("input"),
-            }
-            | self.prompt
-            | llm
-            | StrOutputParser()
-        )
+    def _validate_config(self) -> None:
+        """Refuse to start on a configuration that cannot work.
+
+        Every case here is one that would otherwise fail silently -- returning
+        no documents, or filtering nothing at all -- rather than raising. A
+        pipeline that answers "I don't have that information" to every question
+        looks like a content problem, not a configuration one, and that is an
+        expensive thing to debug.
+
+        Raises:
+            ValueError: With a message naming what to change.
+        """
+        rag_cfg = self.config["rag"]
+
+        # Blocks that this file no longer reads. Each is refused rather than
+        # ignored, because a stale block is set by somebody who expects it to do
+        # something, and silently doing nothing is the worst answer available.
+        for stale, guidance in (
+            (
+                "search_kwargs",
+                "its `k` is now rag.retrieval.k and its `score_threshold` is now rag.rerank.score_threshold",
+            ),
+            ("reranker", "it is now rag.rerank, which also carries score_threshold and top_n"),
+            ("ranking", "ranking is a sort on the answer's upvotes and takes no weights; remove the block"),
+        ):
+            if stale in rag_cfg:
+                raise ValueError(f"conf/config.yaml: rag.{stale} is not read -- {guidance}.")
+
+        mode = self.retrieval_cfg["mode"]
+        if mode not in ("dense", "hybrid"):
+            raise ValueError(f"conf/config.yaml: rag.retrieval.mode must be 'dense' or 'hybrid', not {mode!r}.")
+
+        if mode == "hybrid":
+            if self.retrieval_cfg["score_threshold"] is not None:
+                raise ValueError(
+                    "conf/config.yaml: rag.retrieval.score_threshold must be null when mode is hybrid. "
+                    "Qdrant applies it to the fused score, which is derived from rank position rather "
+                    "than similarity and lives on a far smaller scale, so a value chosen for a cosine "
+                    "similarity discards every document and every answer becomes 'I don't have that "
+                    "information'. Filter with rag.rerank.score_threshold instead."
+                )
+            if not self.contract.sparse_vector_name:
+                raise ValueError(
+                    "conf/config.yaml: rag.retrieval.mode is hybrid, but conf/collection.yaml declares no "
+                    "sparse vector, so there is no lexical index to fuse with. Use mode: dense."
+                )
+            if not self.rerank_cfg["enabled"]:
+                raise ValueError(
+                    "conf/config.yaml: rag.retrieval.mode is hybrid with rag.rerank.enabled false, which "
+                    "leaves nothing filtering relevance at all -- the fused score is a rank artefact, not a "
+                    "similarity, so it cannot be thresholded. Enable the reranker or use mode: dense."
+                )
+
+    async def search_query_for(self, question: str, chat_history: list) -> str:
+        """Decide what string retrieval should actually search for.
+
+        With chat history, the question may be elliptical -- "is it hard?" means
+        nothing on its own -- so it is rewritten into a standalone query against
+        the history. That rewrite is an LLM round trip.
+
+        With no history there is nothing to resolve against, so the rewrite is
+        skipped and the question is searched verbatim. The prompt's other job,
+        expanding PESU abbreviations, is deliberately not worth a round trip
+        here: the rewrite expands *alongside* the original rather than replacing
+        it, so the abbreviation still reaches BM25 either way, and lexical
+        matching on those tokens is where hybrid retrieval earns its keep.
+
+        Args:
+            question: The user's question, as asked.
+            chat_history: Prior turns, already alternating human/AI.
+
+        Returns:
+            The query to retrieve with.
+        """
+        if not chat_history:
+            return question
+        return await self._rewrite_chain.ainvoke({"input": question, "chat_history": chat_history})
+
+    async def retrieve(self, question: str, chat_history: list) -> tuple[str, list[Document]]:
+        """Find the documents that should answer a question.
+
+        The stages are separate and ordered deliberately:
+
+        1. **Rewrite** into a standalone query, when there is history to resolve.
+        2. **Expand** into several phrasings and union what each retrieves.
+        3. **Deduplicate** on the stored point id. This must come before
+           reranking, or the cross-encoder pays to score the same point twice.
+        4. **Rerank** against the search query -- not the original question. For
+           a follow-up the original may be contentless, and scoring "is it
+           hard?" against a comment tree produces noise. This is also where the
+           relevance cutoff is applied, and it is the only place anything is
+           discarded for being a poor answer.
+        5. **Rank** by upvotes on the answer. Strictly after the cutoff, so
+           this only reorders documents that already answer the question.
+
+        Args:
+            question: The user's question, as asked.
+            chat_history: Prior turns, already alternating human/AI.
+
+        Returns:
+            ``(search_query, documents)``. The query is returned because the
+            caller needs to know what was actually searched for.
+        """
+        search_query = await self.search_query_for(question, chat_history)
+        docs = deduplicate(await self.multiquery.ainvoke(search_query))
+
+        docs = await self.rerank(search_query, docs)
+        docs = rank(docs)
+        return search_query, docs[: self.rerank_cfg["top_n"]]
 
     def format_docs(self, docs: list[Document]) -> str:
         """Flatten retrieved documents into the ``{context}`` block of the answer prompt.
 
-        Each document is prefixed with its Reddit permalink because the system
-        prompt instructs the model to end its answer with a Sources list, and the
-        link has to be visible in the context for the model to cite it. The
-        permalink always addresses the thread the answer came from, which `url`
-        does not for link posts.
+        Documents from the same post are grouped under one heading. Each is
+        stored as a TITLE line, a CONTENT line and then the COMMENT TREE, where
+        the first two are the submission's and identical across every comment
+        tree on that post -- often a large share of the document, so repeating
+        it once per answer is waste.
 
-        Order matters -- the model weights earlier context more heavily -- so the
-        best document goes first.
+        Nothing caps how many documents one post contributes, so this is what
+        keeps several answers from the same post affordable: they share one
+        heading and the post body is written once rather than per answer.
+
+        Each group is prefixed with the thread's permalink, which is what the
+        answer cites. `permalink` rather than `url` because for a link post
+        `url` is the external article, not the discussion the answer came from.
+        A document that somehow carries no permalink is still emitted, without
+        the heading: :func:`describe_sources` takes the same view, and losing a
+        citation is a far smaller failure than losing the answer.
+
+        Order matters -- the model weights earlier context more heavily -- so
+        documents arrive best-first and that order is preserved, with the
+        caveat that grouping pulls a lower-ranked document up next to its
+        higher-ranked sibling. That is acceptable because the two are the same
+        thread and equally attributable.
 
         Args:
-            docs: Documents surviving retrieval and reranking.
+            docs: Documents surviving retrieval and reranking, already
+                ordered best first.
 
         Returns:
             The documents as one blank-line-separated string.
         """
-        # When the reranker ran it already sorted by cross-encoder score. Without
-        # it the documents arrive in retriever order, which for a multi-query
-        # union is not globally sorted, so sort by the stashed vector score.
-        if self.cross_encoder is None:
-            docs = sorted(docs, key=lambda d: d.metadata.get("_score", 0.0), reverse=True)
-        return "\n\n".join(f"{doc.metadata['permalink']}\n{doc.page_content}" for doc in docs)
+        blocks: list[list[str]] = []
+        index_of: dict[str, int] = {}
+        for doc in docs:
+            post_id = doc.metadata.get("post_id")
+            permalink = doc.metadata.get("permalink")
+            heading = f"{permalink}\n" if permalink else ""
+            head, separator, tree = doc.page_content.partition("COMMENT TREE:")
+            # A document that does not carry the expected layout is emitted
+            # whole rather than dropped or mangled.
+            if not separator:
+                blocks.append([f"{heading}{doc.page_content}"])
+                continue
+            seen = index_of.get(post_id) if post_id is not None else None
+            if seen is None:
+                if post_id is not None:
+                    index_of[post_id] = len(blocks)
+                blocks.append([f"{heading}{head.rstrip()}", f"{separator}{tree}"])
+            else:
+                blocks[seen].append(f"{separator}{tree}")
+        return "\n\n".join("\n".join(block) for block in blocks)
 
-    def _rerank(self, inputs: dict) -> dict:
+    async def rerank(self, query: str, docs: list[Document]) -> list[Document]:
         """Re-score documents against the query and drop the weak ones.
 
         Vector search compares two embeddings computed independently, so it can
@@ -341,25 +731,30 @@ class RetrievalAugmentedGenerator:
         have that information. That is the intended behaviour -- an admission
         beats an answer invented from weak context.
 
+        The model call is a synchronous, CPU-bound torch inference. It runs in a
+        worker thread rather than inline, because inline it would block the
+        event loop for every other request streaming at the same time, and
+        behind a semaphore, because two vCPUs cannot usefully run several torch
+        inferences at once.
+
         Args:
-            inputs: Chain state carrying at least ``"input"`` and ``"docs"``.
+            query: What retrieval actually searched for -- the rewritten query
+                when there was history, not necessarily the user's wording.
+            docs: Documents to score.
 
         Returns:
-            The same dict with ``"docs"`` filtered and sorted best-first.
+            The documents that cleared the threshold, best first.
         """
-        if self.cross_encoder is None:
-            return inputs
+        if self.cross_encoder is None or not docs:
+            return docs
 
-        query = inputs["input"]
-        docs = inputs["docs"]
-        if not docs:
-            return inputs
-
-        # Reuses the vector-search threshold deliberately: one number to tune,
-        # and the sigmoid puts cross-encoder scores on a comparable 0..1 scale.
-        threshold = self.config["rag"]["search_kwargs"]["score_threshold"]
+        # The cross-encoder's own sigmoid scale, and the only relevance filter
+        # in the pipeline. Deliberately not shared with retrieval, which under
+        # hybrid has no thresholdable score at all.
+        threshold = self.rerank_cfg["score_threshold"]
         pairs = [[query, doc.page_content] for doc in docs]
-        scores = self.cross_encoder.predict(pairs)
+        async with self._rerank_gate:
+            scores = await asyncio.to_thread(self.cross_encoder.predict, pairs)
 
         reranked = []
         for doc, score in zip(docs, scores):
@@ -369,8 +764,7 @@ class RetrievalAugmentedGenerator:
 
         reranked.sort(key=lambda d: d.metadata["_score"], reverse=True)
         logging.debug(f"Reranker: {len(docs)} → {len(reranked)} docs above threshold {threshold}")
-        inputs["docs"] = reranked
-        return inputs
+        return reranked
 
     def _process_thinking_chunk(self, chunk: str, pending: str, thinking_done: bool) -> tuple[str, bool, list[dict]]:
         """Split one streamed chunk into reasoning (``step``) and answer (``token``) events.
@@ -446,13 +840,15 @@ class RetrievalAugmentedGenerator:
         query: str,
         thinking: bool,
         history: list,
-        on_quota_exceeded: Callable[[], None] | None = None,
+        on_quota_exceeded: Callable[[datetime.datetime | None], None] | None = None,
     ) -> AsyncGenerator[str, None]:
         """Run the pipeline and yield newline-delimited JSON events.
 
         Each yielded string is one complete JSON object plus a newline, so the
         client can parse incrementally without buffering the whole response:
 
+        - ``{"type": "sources", "sources": [...]}`` the threads retrieval
+          selected, sent once, before the first token
         - ``{"type": "step", "content": ...}``  reasoning, thinking mode only
         - ``{"type": "token", "content": ...}`` a piece of the answer
         - ``{"type": "error", "content": ...}`` generation failed
@@ -467,9 +863,10 @@ class RetrievalAugmentedGenerator:
             query: The user's question.
             thinking: Use the thinking model for the answer.
             history: Prior ``{query, answer}`` turns from the client.
-            on_quota_exceeded: Called if the failure looks like a provider quota
-                or rate-limit refusal. Lets the caller start a cooldown without
-                this module knowing about quota state.
+            on_quota_exceeded: Called if the provider refused us on budget,
+                with the time the refusal is expected to lift (or None to let
+                the caller pick). Lets the caller start a cooldown without this
+                module knowing about quota state.
 
         Yields:
             NDJSON lines, each terminated by a newline.
@@ -486,7 +883,7 @@ class RetrievalAugmentedGenerator:
                 chat_history.append(HumanMessage(convo.query))
                 chat_history.append(AIMessage(convo.answer))
 
-        rag_chain = self.rag_chain_thinking if thinking else self.rag_chain_primary
+        answer_chain = self._answer_thinking if thinking else self._answer_primary
 
         logging.info(f"Using {'thinking' if thinking else 'primary'} LLM for query: {query}")
 
@@ -497,11 +894,23 @@ class RetrievalAugmentedGenerator:
         token_count = 0
 
         try:
-            async for chunk in rag_chain.astream(
+            # Retrieval runs to completion before the answer starts
+            # streaming, which is unavoidable -- nothing can be generated
+            # without context. Holding the documents here rather than inside a
+            # chain is what lets the stream report its own sources.
+            search_query, docs = await self.retrieve(query, chat_history)
+            logging.info(f"Retrieved {len(docs)} documents for {search_query!r}")
+
+            # Before the first token, so a client can render citations while the
+            # answer is still being written. Emitted even when empty, so the UI
+            # can distinguish "no sources" from "sources not sent yet".
+            sources = describe_sources(docs, self.sources_cfg["snippet_chars"])
+            yield json.dumps({"type": "sources", "sources": sources}) + "\n"
+
+            async for chunk in answer_chain.astream(
                 {
-                    "input": query,
                     "question": query,
-                    "chat_history": chat_history,
+                    "context": self.format_docs(docs),
                 }
             ):
                 token_count += 1
@@ -521,10 +930,13 @@ class RetrievalAugmentedGenerator:
             logging.info(f"Stream complete. Total chunks: {token_count}")
         except Exception as e:
             logging.error(f"Error in generate(): {str(e)}", exc_info=True)
-            if on_quota_exceeded is not None and _is_quota_error(e):
+            refusal = _quota_refusal(e)
+            if on_quota_exceeded is not None and refusal is not None:
                 # Tell the caller to start a cooldown so subsequent requests are
-                # rejected up front instead of failing mid-stream.
-                on_quota_exceeded()
+                # rejected up front instead of failing mid-stream. A 402 waits
+                # for the billing period to roll over, which is knowable exactly
+                # and is usually much longer than a rate-limit cooldown.
+                on_quota_exceeded(credits_reset_at() if refusal == 402 else None)
             yield json.dumps({"type": "error", "content": str(e)}) + "\n"
 
         # Emitted on every path, success or failure, so the client always has a

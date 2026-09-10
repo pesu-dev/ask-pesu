@@ -58,12 +58,12 @@ what CI checks is the structural invariants a running service cannot see. See
    because a `git subtree split` ships only `services/<name>/`. A second committed copy fails CI.
    See [Why builds copy shared files](../README.md#why-builds-copy-shared-files).
 2. **Editing a dependency means recompiling `requirements.txt`**, with the exact command in
-   `pyproject.toml` — `--group cpu` included, or torch resolves to the CUDA build and adds about
-   4 GB to both images. CI recompiles and fails on any difference.
-3. **Five pairs of files must agree and cannot import from each other**, so they are checked
+   `pyproject.toml` — `--group cpu` included, or torch resolves to the CUDA build and inflates
+   both images by an order of magnitude. CI recompiles and fails on any difference.
+3. **Six pairs of files must agree and cannot import from each other**, so they are checked
    instead: `uv run python scripts/check_duplication.py`. If you change a contract loader, a
-   payload key, a Space README's model list, a stream event name or the ruff version, change both
-   sides.
+   payload key, a Space README's model list, a stream event name, the ruff version or a `rag.*`
+   config key, change both sides.
 4. **Anything that would make already-stored vectors unreadable belongs in
    `conf/collection.yaml`**, not in `services/api/conf/config.yaml`. Prompts, model ids and
    retrieval knobs are configuration; the embedding model and vector shape are a contract between

@@ -20,7 +20,7 @@ means one schema contract, shared by everything.
 - [Running the services](#running-the-services) · [Backfilling history](#backfilling-history) · [Configuration](#configuration)
 - [The frontend](#the-frontend) · [Quota and cooldowns](#quota-and-cooldowns) · [Failure behaviour](#failure-behaviour)
 - [Testing](#testing) · [Linting and formatting](#linting-and-formatting) · [Continuous integration](#continuous-integration)
-- [Deployment](#deployment) · [Rollback](#rollback) · [Contributing](#contributing) · [Known issues](#known-issues)
+- [Deployment](#deployment) · [Rollback](#rollback) · [Contributing](#contributing)
 
 ---
 
@@ -72,16 +72,27 @@ A daemon thread consumes `subreddit.stream.comments(skip_existing=True)`. For ea
 it walks up to the thread's root comment, renders the whole thread as indented text with
 `anytree`, prefixes the submission title and body, and upserts a single point per root comment.
 
-**The unit of indexing is a thread, not a comment.** A reply like "yes, around 8.5" is
-meaningless alone; embedded with its question and the post it hangs off, it is answerable. The
+**The unit of indexing is a thread, not a comment.** Three words are used precisely throughout:
+a **post** (or submission) is a Reddit post; a **thread** is one root comment together with all
+its replies; a **document** is exactly one thread. A post therefore contains several threads, and
+retrieval is free to surface more than one of them for the same question — they are different
+people answering, not duplicates.
+
+A reply like "yes, around 8.5" is meaningless alone; embedded with its question and the post it
+hangs off, it is answerable. The
 point id is a UUIDv5 of the root comment's Reddit id, so a busy thread is repeatedly
 overwritten rather than accumulating near-duplicate points. AutoModerator comments are skipped —
 its boilerplate appears on many threads and would otherwise be retrieved for unrelated
 questions.
 
 Every point is written with **two vectors**: the dense embedding, and a BM25 sparse vector from
-`fastembed`. The reader currently queries dense only. Writing sparse now is what makes turning
-on hybrid retrieval a configuration change later instead of re-embedding the whole collection.
+`fastembed`. The reader queries both and lets Qdrant fuse them, which is possible without ever
+re-embedding the collection precisely because the sparse vector was written from the start.
+
+The payload records the **answer** as well as the submission it sits under. `root_comment_score`
+and `root_comment_author` are the reply's own, and are what ranking uses; the plain `score` and
+`author` belong to the post and are identical across every document from one post, so they
+cannot distinguish one reply from another.
 
 A stream only yields comments posted after it opens, so a restart would otherwise leave a
 permanent hole — and this service restarts on every promotion. Before opening the stream it
@@ -104,28 +115,50 @@ Anything older than that window comes from [the backfill scripts](#backfilling-h
 
 ### The reader — `services/api`
 
-`POST /ask` streams newline-delimited JSON. The pipeline, wired with LangChain Expression
-Language in `app/rag.py`:
+`POST /ask` streams newline-delimited JSON. The pipeline lives in `app/rag.py`:
 
-1. **Rewrite** — the question plus chat history becomes one standalone, retrieval-friendly
-   query. This resolves "is it hard?" into "is the Data Structures course at PES University
-   hard?" and expands PESU abbreviations (RR, EC, CSE, SGPA…).
+1. **Rewrite** — with chat history, the question plus that history becomes one standalone
+   query, resolving "is it hard?" into something retrievable. **Skipped when there is no
+   history**, since there is nothing to resolve against and it saves a round trip on every
+   first question. The prompt expands PESU abbreviations *alongside* the original —
+   `CSE (Computer Science Engineering)`, never replacing it — because the threads themselves
+   say `CSE`, and replacing it deletes the token the lexical index matches on.
 2. **Multi-query expansion** — `MultiQueryRetriever` asks the LLM for several phrasings and
-   unions what each retrieves, recovering passages a single phrasing would miss.
-3. **Dense retrieval** — `k=5` per phrasing against the Qdrant collection, through
-   `ScoredRetriever`, which keeps each document's similarity score rather than discarding it.
-4. **Rerank** — `cross-encoder/ms-marco-MiniLM-L6-v2` scores every (query, document) pair
-   through a sigmoid and drops anything below `score_threshold`. A cross-encoder reads both
-   texts together, which a vector search structurally cannot.
-5. **Generate** — `Qwen/Qwen3-4B-Instruct-2507` via Hugging Face Inference (`nscale` provider),
-   streamed token by token.
+   unions what each retrieves, recovering passages a single phrasing would miss. The rewritten
+   query is itself included in that set (`include_original=True`), which the library does not
+   do by default.
+3. **Retrieval** — `k=15` per phrasing through `ScoredRetriever`, which keeps each document's
+   score. Hybrid by default: Qdrant fuses the dense vector with the BM25 sparse vector using
+   Reciprocal Rank Fusion. The four searches run concurrently, so the pool is at most `4 × k`
+   and costs roughly one round trip regardless of `k`.
+4. **Deduplication** — the union collapses on the stored point id, keeping the best-scoring
+   copy. This runs before reranking so the cross-encoder never pays to score a point twice.
+5. **Rerank** — `cross-encoder/ms-marco-MiniLM-L6-v2` scores every (query, document) pair
+   through a sigmoid and drops anything below `rerank.score_threshold`. This is the only place
+   a document is discarded for being a poor answer. A cross-encoder reads
+   both texts together, which a vector search structurally cannot. It scores the query
+   retrieval actually used, so a follow-up is judged on its resolved form rather than on "is
+   it hard?".
+6. **Ranking** — upvotes on the answer decide the order of what survived. Strictly after the
+   cutoff, so it only reorders documents that already answer the question. The sort is stable, so
+   documents with equal upvotes keep the relevance order they arrived in. The best `top_n` go on.
+7. **Generate** — `Qwen/Qwen3-4B-Instruct-2507` via Hugging Face Inference (`nscale` provider),
+   streamed token by token, after the retrieved threads have been reported as a `sources` event.
 
 Both retrieval-side LLM calls always use the **primary** model, even in thinking mode, so
 thinking tokens are never spent reformulating a question.
 
-Step 4 is a filter, not just a sort. If nothing clears the threshold the answer prompt receives
-no context and the system prompt makes the model say it does not have that information — an
-admission is better than an answer invented from weak context.
+Only step 8 is a LangChain Expression Language chain, because streaming is what LCEL earns its
+place for. The retrieval stages run explicitly: expressed as a chain they yield only the answer
+text and keep their documents inside, which leaves the backend unable to say which threads an
+answer came from except by asking the model to reprint the links.
+
+Step 5 is the **only** filter. `k` bounds how much is retrieved and `top_n` bounds how much the
+model reads, but neither judges whether a document answers the question — the cutoff is the one
+thing that does. If nothing clears the
+threshold the answer prompt receives no context and the system prompt makes the model say it
+does not have that information — an admission is better than an answer invented from weak
+context.
 
 **Conversations are never stored server-side.** The frontend keeps them in `localStorage` and
 replays the relevant history with each request.
@@ -138,6 +171,7 @@ without buffering the whole response:
 | `type` | Meaning |
 |---|---|
 | `step` | Reasoning text, thinking mode only (the content between `<think>` and `</think>`) |
+| `sources` | The posts the answer draws on. Sent **once, before the first token**, carrying `permalink`, `title` and `snippet`, one entry per post. May be empty |
 | `token` | A chunk of the answer |
 | `error` | Generation failed; `content` carries the message |
 | `done` | Always last, on success and on failure alike |
@@ -152,9 +186,15 @@ Two properties worth knowing:
   characters — the longest fragment that could still complete the tag — and emits everything
   before it.
 
+- **Citations are exact.** `sources` carries the documents retrieval actually selected. The
+  system prompt explicitly tells the model *not* to print a source list, so a citation no longer
+  depends on the model formatting one correctly and cannot name a link it was never shown. The
+  frontend keeps a fallback parser only for conversations saved before this event existed.
+
 The event shape is duplicated between the backend that emits it and the client that parses it.
-Any change must be made in **both** `services/api/app/rag.py` and
-`services/api/frontend/src/lib/api.ts`; nothing enforces that they agree.
+Any change must be made in **both** `services/api/app/models/response/ask.py` and
+`services/api/frontend/src/lib/api.ts` — and unlike before, `scripts/check_duplication.py`
+enforces that they agree.
 
 ## HTTP API
 
@@ -249,7 +289,7 @@ index. Point local work at it; point deployed services at `ask-pesu-prod`.
 | Vector size / distance | 768 / Cosine |
 | Dense vector name | `dense` — named, not the unnamed default, so one collection can hold both vectors |
 | Sparse vector | `sparse`, `modifier: idf`, from `Qdrant/bm25` — written by the db, not yet queried by the api |
-| Payload keys | `root_comment_id`, `post_id`, `author`, `url`, `permalink`, `score`, `upvote_ratio`, `created_utc`, `flair`, `nsfw` |
+| Payload keys | `root_comment_id`, `root_comment_score`, `root_comment_author`, `post_id`, `author`, `url`, `permalink`, `score`, `upvote_ratio`, `created_utc`, `flair`, `nsfw` |
 | Citation target | `permalink` — for a link post `url` is the external article, not the discussion |
 
 It is enforced, not merely documented:
@@ -412,7 +452,7 @@ exactly one place, the [GPU backfill](#backfilling-history), and is spelled out 
 which have neither uv nor a lockfile, and it carries no `dev` group. Installing it by hand also
 has to reproduce the torch index redirection that `uv sync` applies on its own — `pip` needs
 `--extra-index-url`, uv additionally needs `--index-strategy unsafe-best-match`, and getting
-either wrong yields a 4 GB CUDA torch or a resolution failure.
+either wrong yields the CUDA torch or a resolution failure.
 
 There is **one** `pyproject.toml` and **one** `requirements.txt`, both at the root. What the two
 services share is the base `dependencies`; what only one needs is an extra (`api` / `db`):
@@ -423,7 +463,7 @@ uv pip compile pyproject.toml --extra api --extra db --group cpu \
 ```
 
 This compiles the **union**, so each image installs a little it does not import — the api
-carries `fastembed`/`onnxruntime` (~190 MB), the db carries `langchain-classic` and friends.
+carries `fastembed`/`onnxruntime`, the db carries `langchain-classic` and friends.
 That is the price of one file, and it buys something worth having: the embedding stack is
 resolved exactly **once**, so the writer and the reader cannot end up on different versions of
 the library that produces the vectors. `--python-platform` and `--python-version` are pinned so
@@ -431,7 +471,7 @@ the file generated on a laptop is the file the linux/amd64 Space installs.
 
 `--group cpu` is load-bearing, not decoration. `torch` lives in a dependency group rather than in
 `dependencies`, so compiling without it leaves torch to resolve transitively from PyPI as the CUDA
-build — roughly 4 GB of image for libraries that are never loaded. Naming it directly is also what
+build — a great deal of image for libraries that are never loaded. Naming it directly is also what
 makes the redirection work at all: uv's `[tool.uv.sources]` applies to direct dependencies only,
 and only `sentence-transformers` actually imports torch.
 
@@ -574,7 +614,7 @@ docker run --rm -p 7860:7860 --env-file .env ask-pesu
 ```
 
 Substitute `db` for `api` for the listener. Both images install the **CPU build of torch** from
-PyTorch's own index, which is what keeps them near 3 GB instead of ~16 GB. Both run as uid 1000,
+PyTorch's own index, which is what keeps them from ballooning. Both run as uid 1000,
 matching how Hugging Face Spaces run containers.
 
 ## Backfilling history
@@ -613,12 +653,12 @@ uv run python scripts/populate_db.py --data-dir processed_data
 the contract, without building the embedding model or writing anything — everything that can go
 wrong cheaply, before the expensive part.
 
-**Use a GPU if the machine has one.** The default `cpu` dependency group pins `torch==2.14.0+cpu`,
-which is right for the Spaces — they are CPU-only, and the CUDA wheels are 15 extra `nvidia-*`
-packages, about 4 GB of image — but it also means `torch.cuda.is_available()` is False locally and
-sentence-transformers quietly selects the CPU. Measured on this corpus, the contracted model runs
-at **0.5 documents per second on CPU and 137 on an RTX 3060**: the same backfill is either most of
-a day or about five minutes.
+**Use a GPU if the machine has one.** The default `cpu` dependency group pins the CPU build of
+torch, which is right for the Spaces — they are CPU-only, and the CUDA wheels pull in a long tail
+of `nvidia-*` packages — but it also means `torch.cuda.is_available()` is False locally and
+sentence-transformers quietly selects the CPU. The difference is not marginal — embedding is what
+the backfill spends its time on, and a GPU turns a run measured in hours into one measured in
+minutes. `populate_db.py` prints the device it chose, and warns when that is the CPU.
 
 Switching to CUDA is still a `uv sync`. The `gpu` group is the same torch from PyTorch's CUDA
 index, and `--no-group cpu` is required because `cpu` is a default group and the two are declared
@@ -676,11 +716,62 @@ Runtime behaviour that is *not* part of the collection contract lives in
 | `llm.*.temperature` | `0.3` | Sampling temperature; low, to stay close to retrieved threads |
 | `llm.*.max_new_tokens` | `2048` | Generation cap. A thinking model spends part of it on reasoning |
 | `llm.*.timeout` | `120` | Seconds to wait on the provider before failing the stream |
-| `search_kwargs.k` | `5` | Documents retrieved **per generated phrasing**, so the reranker usually sees more than this |
-| `search_kwargs.score_threshold` | `0.3` | Minimum relevance, reused as the reranker's cutoff — one knob, not two |
-| `reranker.enabled` | `true` | Turning it off skips the torch and sentence-transformers load at startup, and falls back to ranking by vector score |
-| `reranker.model` | `cross-encoder/ms-marco-MiniLM-L6-v2` | The cross-encoder |
+| `retrieval.mode` | `hybrid` | `dense` is vector search alone; `hybrid` also queries the BM25 sparse vector and lets Qdrant fuse the two |
+| `retrieval.query_expansions` | `3` | Alternative phrasings written per question; the original is searched too, so `query_expansions + 1` searches run |
+| `retrieval.k` | `15` | Documents **per phrasing**. With `query_expansions` it sets the candidate pool, and so the cross-encoder work paid before the first token |
+| `retrieval.score_threshold` | `null` | Cosine cutoff, **dense only**. Must stay `null` under hybrid; startup refuses otherwise |
+| `rerank.enabled` | `true` | Turning it off skips the torch and sentence-transformers load at startup. Not permitted under hybrid |
+| `rerank.model` | `cross-encoder/ms-marco-MiniLM-L6-v2` | The cross-encoder |
+| `rerank.score_threshold` | `0.3` | **The** relevance cutoff, and the only place a document is dropped for being a poor answer. Deliberately permissive; see below |
+| `rerank.top_n` | `6` | Documents that reach the answer prompt. **Not measured** — see below |
+| `rerank.concurrency` | `1` | Cross-encoder passes at once; serialised because two vCPUs thrash |
+| `sources.snippet_chars` | `200` | Preview length in the `sources` event; presentation only |
 | `prompts.*` | — | System, answer and query-rewrite prompts |
+
+**On the two thresholds.** There is deliberately only one that filters. A retrieval-side cutoff
+is close to useless here: `langchain_core` pops `score_threshold` and applies it client-side to a
+*normalised* score, `(cosine + 1) / 2`, so a value like `0.3` excludes only documents below a
+cosine similarity of **−0.4** — and under hybrid it would be applied to a Reciprocal Rank Fusion
+score, which is derived from rank position rather than similarity and lives on a scale small
+enough that any value chosen for a cosine discards everything. The cross-encoder cutoff is the
+real filter. Startup refuses the older `search_kwargs` shape with an error explaining this.
+
+**The cross-encoder filters; endorsement ranks.** That split is measured, not stylistic.
+
+Its scores barely separate the documents that reach the prompt, so it cannot rank them. It also
+cannot sharply filter: the scores it gives correct answers and irrelevant ones overlap enough
+that raising the gate discards the right ones about as fast as the wrong ones. Its job is to drop
+the obviously off-topic tail, and something else has to choose between the survivors.
+
+That something is **upvotes on the answer**, read from `root_comment_score`. The plain `score` is
+the **submission's** — identical across every document from one post, so it ranks none of them,
+and it cannot go negative, so a downvoted answer looks like an unrated one.
+
+Documents are sorted on the raw count, with no normalisation and no scale constant. Ordering
+needs neither: sorting is invariant to monotonic transforms, so ranking by `log(score)/log(C)` is
+exactly ranking by `score`. A bounded 0–1 factor would only be required to *multiply* upvotes
+with relevance, and dropping that multiplication removed the last configuration value derived
+from a snapshot of the corpus — the kind that silently drifts as the collection grows.
+
+**The sort is stable, and that is load-bearing.** Documents arrive in cross-encoder order, and
+most answers carry very few upvotes, so ties are the common case — and a tie keeps the relevance
+order it came in with. The behaviour is *upvotes where they differ, relevance where they do not*,
+with neither expressed as a weight.
+
+**Nothing caps how many answers one thread contributes.** A document is one comment tree, so
+several documents from one post are several *different people answering the same question*,
+which is frequently the best result available rather than duplication. The repeated post title
+and body that would make that wasteful is already handled: `format_docs` emits it once per
+thread.
+
+**`rerank.top_n` is a guess and is labelled as one in the config** — six is "enough perspectives,
+not a wall of text", and nobody has checked whether four answers as well. It is not a filter:
+everything it drops has already cleared the cutoff.
+
+**There is deliberately no recency term.** Age is not a proxy for usefulness here. r/PESU
+directs repeated questions to existing threads, so its most-referenced answers are old on
+purpose, and its most prolific contributors wrote the bulk of them years ago at well above the
+typical score. Weighting by recency demotes exactly what the community treats as canonical.
 
 Prompt and model changes go here first — they are configuration, not code. Anything that would
 make already-stored vectors unreadable belongs in `conf/collection.yaml` instead.
@@ -698,7 +789,7 @@ relative URLs and production needs no CORS configuration.
 
 | Path | What is there |
 |---|---|
-| `src/lib/api.ts` | The NDJSON client: parses `step`/`token`/`error`/`done` events off the stream |
+| `src/lib/api.ts` | The NDJSON client: parses `step`/`token`/`sources`/`error`/`done` events off the stream |
 | `src/lib/chat-store.ts`, `chat-persistence.ts` | Conversation state, persisted to `localStorage` |
 | `src/components/chat/` | Message rendering, sources, input, welcome screen, error banner |
 | `src/hooks/use-quota.ts`, `use-health.ts` | Poll `/quota` and `/health` so the UI can disable a mode before it is used |
@@ -770,7 +861,7 @@ receives is complete. It also runs the one check that behaves like a test:
 uv run python scripts/check_duplication.py
 ```
 
-Five pairs of files must agree and cannot share code, because each side ships somewhere the other
+Six pairs of files must agree and cannot share code, because each side ships somewhere the other
 never reaches — a `git subtree split` sends only `services/<name>/`, the frontend is TypeScript,
 Space frontmatter is read before any code runs, and pre-commit builds its hook environments from a
 git ref rather than from `uv.lock`. The script asserts each pair:
@@ -782,6 +873,7 @@ git ref rather than from `uv.lock`. The script asserts each pair:
 | each Space README's `models:`/`preload_from_hub:` | must list the contracted embedding model |
 | the NDJSON event names | pydantic `Literal` compared to the frontend's `StreamEvent` union |
 | the ruff version | `.pre-commit-config.yaml`'s `rev` compared to the `ruff==` pin in the `dev` group |
+| the `rag.*` config keys | every key `app/rag.py` subscripts must exist in `conf/config.yaml` |
 
 The loaders have drifted once already, which is what the first of those exists to prevent.
 
@@ -813,7 +905,7 @@ in CI — and because pre-commit builds its hook environments from a git ref and
 | `contract.yaml` | Push, PR | Asserts each shared file is tracked exactly once; recompiles `requirements.txt` and fails on drift; runs [`scripts/check_duplication.py`](scripts/check_duplication.py); rehearses the deploy vendoring and checks each split tree is a complete Space root |
 | `docker.yaml` | Push to `dev`, chained off Pre-Commit; or manual | Builds both images, boots each container, polls `/health` |
 
-`docker.yaml` costs roughly twenty minutes per merge, building two ~3 GB images. That is the
+`docker.yaml` is by far the slowest job, because it builds both images from scratch. That is the
 price of the only check that exercises a Dockerfile at all — nothing else in CI builds one.
 | `deploy-dev-api.yaml` | Push to `dev` | Deploys the api to `askpesu-dev`. The db is not deployed from `dev` |
 | `deploy-prod.yaml` | Manual | Fast-forwards `dev` → `main`, then deploys **both** services to `askpesu` and `askpesu-db` |
@@ -953,18 +1045,6 @@ Before opening a PR: `uv run pre-commit run --all-files`.
 
 Reviewers are assigned by [`.github/CODEOWNERS`](.github/CODEOWNERS). Changes to
 `conf/collection.yaml` affect both services and always require owner review.
-
-## Known issues
-
-Only work that is actually pending lives here. Deliberate limits are documented where the
-subsystem is explained, rather than collected as though someone intends to fix them.
-
-- **Retrieval is dense-only while writes are hybrid.** Every point carries a BM25 sparse vector
-  that nothing queries. Switching the reader to `RetrievalMode.HYBRID` is a change to one
-  constructor rather than a re-index, but it is not free: Qdrant fuses the two rankings with
-  Reciprocal Rank Fusion, whose output is a rank-derived score on a different scale from cosine
-  similarity, so `score_threshold` would stop meaning anything and the reranker cutoff would need
-  re-deriving against real queries. Planned as its own change.
 
 ## License
 

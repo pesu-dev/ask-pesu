@@ -21,9 +21,9 @@ RUN echo "user:x:1000:1000:user:/home/user:/bin/bash" >> /etc/passwd \
 
 # Install dependencies
 # torch is pinned to the +cpu build, which is published only on PyTorch's own
-# index -- both Spaces run on CPU, and the CUDA wheels were ~4 GB of the image
-# for libraries that are never loaded. requirements.txt pins the exact +cpu
-# version, and PyPI has no such wheel, so this resolves deterministically.
+# index -- both Spaces run on CPU, so the CUDA wheels are a large amount of
+# image for libraries that are never loaded. requirements.txt pins the exact
+# +cpu version, and PyPI has no such wheel, so this resolves deterministically.
 RUN pip install --extra-index-url https://download.pytorch.org/whl/cpu -r requirements.txt
 COPY . /app
 # Drop privileges. Everything above needed root to install packages; the

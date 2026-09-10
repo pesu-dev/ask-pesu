@@ -62,8 +62,8 @@ jobs:
         #
         # `--group cpu` must match pyproject.toml's documented command exactly:
         # it is what puts torch in the file, and therefore what selects the +cpu
-        # build. Without it torch resolves from PyPI and brings 15 `nvidia-*`
-        # packages, about 4 GB, into both images.
+        # build. Without it torch resolves from PyPI and brings the CUDA
+        # runtime into both images, inflating them by an order of magnitude.
         run: |
           pipx install uv || pip install uv
           cp requirements.txt /tmp/requirements.check
@@ -75,9 +75,10 @@ jobs:
 
       - name: Files that must agree, and cannot share code, still agree
         # The two contract loaders, both writers' payload dicts, each Space's
-        # frontmatter, the NDJSON event names, and the ruff version that
-        # pre-commit and the `dev` group each pin separately. See the script's
-        # docstring for why none of these can be a shared import.
+        # frontmatter, the NDJSON event names, the ruff version that pre-commit
+        # and the `dev` group each pin separately, and every rag.* config key
+        # app/rag.py subscripts. See the script's docstring for why none of
+        # these can be a shared import.
         run: |
           pip install pyyaml --quiet
           python3 scripts/check_duplication.py

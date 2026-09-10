@@ -36,43 +36,118 @@ rag:
       temperature: 0.3
       max_new_tokens: 2048
       timeout: 120
-  # Passed straight through to the Qdrant similarity search, once per phrasing
-  # the multi-query step generates -- so the documents reaching the reranker are
-  # the union across phrasings, and there are usually more than `k` of them.
-  search_kwargs:
-    # Documents per phrasing. Raising it widens recall and gives the cross-encoder
-    # more to work with, at the cost of more pairs to score.
-    k: 5
-    # Minimum relevance for a document to be considered at all. The reranker
-    # reuses this same number as its own cutoff, so it is one knob, not two:
-    # raise it for stricter answers and more "I don't have that information",
-    # lower it to answer more often from weaker context.
-    score_threshold: 0.3
+  # Retrieval finds candidates. It does not decide relevance -- the reranker
+  # below is the only thing that filters.
+  retrieval:
+    # dense  -- vector search alone.
+    # hybrid -- vector search AND the BM25 sparse vector every point carries,
+    #           fused by Qdrant with Reciprocal Rank Fusion.
+    #
+    # Hybrid is the default because a lexical index reaches what paraphrase
+    # cannot: the words the corpus itself uses -- CSE, PESSAT, T1, SGPA. On
+    # plain-English questions the two modes perform about the same; on questions
+    # written in that vocabulary hybrid is clearly ahead.
+    mode: hybrid
+    # Documents fetched per phrasing. With `query_expansions` this sets the
+    # candidate pool, since the original query is searched alongside each
+    # phrasing: the pool is (query_expansions + 1) * k before deduplication.
+    #
+    # The searches run concurrently, so this costs little in network time. What
+    # it buys is cross-encoder work, which grows with the pool and is paid in
+    # full before the first token reaches the user. That makes this the dial
+    # between recall and time-to-first-token, and nothing downstream caps the
+    # pool, so it is the only thing standing between a large value and a long
+    # silence. Time a representative question after changing it.
+    k: 15
+    # Alternative phrasings the LLM writes for each question, to reach
+    # discussions whose wording the question misses. Each one costs a search and
+    # its `k` documents of cross-encoder time; they are written in a single LLM
+    # response, so the LLM cost does not scale with this.
+    query_expansions: 3
+    # Minimum relevance, applied to the cosine score. DENSE ONLY, and it must be
+    # null under hybrid: fusing two rankings produces a score derived from rank
+    # position rather than similarity, on a far smaller scale, so a threshold
+    # chosen for cosine discards every document. Startup refuses the combination
+    # rather than letting it silently return nothing.
+    score_threshold: null
 
-  reranker:
+  rerank:
     # A cross-encoder re-scores the shortlist by reading query and document
     # together, which a vector search cannot do. Disabling it removes the
     # sentence-transformers and torch load at startup and falls back to ranking
-    # by vector score alone -- faster to boot, noticeably worse ordering.
+    # by retrieval score alone -- faster to boot, and not allowed under hybrid,
+    # where the retrieval score is a rank artefact rather than a similarity, so
+    # nothing would be judging relevance at all.
     enabled: true
     # The canonical repo id. `ms-marco-MiniLM-L-6-v2`, with the hyphen before the
     # 6, is a legacy alias that Hugging Face answers with a 307 to this one -- it
     # works, but every file lookup at startup pays a redirect.
     model: "cross-encoder/ms-marco-MiniLM-L6-v2"
+    # THE relevance cutoff, on the cross-encoder's own 0..1 sigmoid scale, and
+    # the only place anything is discarded for being a poor answer. Applied
+    # before the sort, so a document is admitted on relevance alone and only
+    # then ordered by upvotes.
+    #
+    # Deliberately permissive, and raising it does not pay: this model scores
+    # right and wrong answers too similarly for a higher gate to separate them,
+    # so it discards correct answers about as fast as irrelevant ones. Its job
+    # is to drop the obviously off-topic tail; upvotes decide the order of what
+    # survives. Check the effect on real questions before changing it.
+    score_threshold: 0.3
+    # Documents that actually reach the answer prompt.
+    #
+    # NOT MEASURED. Six is a guess -- enough threads to answer from several
+    # perspectives, few enough that the model is not reading a wall of text.
+    # Not a filter: everything it drops has already cleared the cutoff, so
+    # raising it costs context and lowers no quality bar.
+    top_n: 6
+    # Cross-encoder passes allowed at once. Serialised, because the Spaces have
+    # few cores and concurrent torch inferences contend for them rather than
+    # overlapping -- letting requests queue is faster than letting them fight.
+    # Worth raising only on hardware with cores to spare.
+    concurrency: 1
+
+  # How the retrieved threads are described in the `sources` stream event.
+  sources:
+    # Characters of the discussion shown as a preview under each title.
+    # Presentation only -- it changes nothing the model reads and nothing ranks.
+    snippet_chars: 200
 
   # The three prompts the pipeline uses. `{question}`, `{context}`, `{input}` and
   # `{chat_history}` are filled in by app/rag.py; renaming one breaks the chain.
   prompts:
+    # Writes the alternative phrasings the multi-query step searches with.
+    # `{count}` is filled in from rag.retrieval.query_expansions and `{question}`
+    # by the retriever.
+    #
+    # This replaces the library's default prompt, which hardcodes "3 different
+    # versions" in its text -- so the count could not be configured without
+    # supplying a prompt. Two other things are worth keeping here: the output
+    # parser splits the response on newlines and keeps every non-empty line, so
+    # numbering or a preamble would become part of the queries; and abbreviations
+    # must survive, because the sparse half of hybrid retrieval matches them
+    # literally and the corpus writes "CSE", not "Computer Science Engineering".
+    multi_query_prompt: |
+      You are helping search an index of r/PESU discussions.
+
+      Write {count} alternative phrasings of the question below. Vary the wording and the phrasing,
+      so that between them they match discussions a single phrasing would miss.
+
+      Keep any abbreviation the question uses -- CSE, ECE, PESSAT, SGPA, CGPA -- exactly as
+      written in at least one phrasing. The index matches those tokens literally and expanding
+      them everywhere loses the match.
+
+      Output one phrasing per line and nothing else: no numbering, no bullets, no blank lines,
+      no preamble.
+
+      Question: {question}
     system_prompt: |
       You are askPESU, a helpful assistant developed by the PESU Dev team that helps users find information about PES University.
       You must answer using knowledge only from the r/PESU subreddit, which will be provided to you as context.
       Always answer accurately, comprehensively and in depth, based on the context, optionally formatted in markdown.
 
-      End your response with EXACTLY this format and nothing after:
-
-      **Sources:**
-      - [Brief description of source](URL)
-      - [Another description](URL)
+      Do NOT end with a list of sources or links. The threads you were given are reported to the user
+      separately and exactly; repeating them wastes your response and risks citing a link you were never shown.
 
       If the context does not contain the answer, respond with "I'm sorry, I don't have that information."
       If asked anything unrelated to PES University, politely decline.
@@ -91,6 +166,11 @@ rag:
       - Admission routes: KCET, JEE Mains, management quota
       - Grading: SGPA (semester GPA), CGPA (cumulative GPA)
       - Expand any other abbreviations including the above when they appear in the question.
+
+      CRITICAL: expand an abbreviation ALONGSIDE the original, never in place of it.
+      Write "CSE (Computer Science Engineering)", not "Computer Science Engineering".
+      Retrieval searches a lexical index as well as a semantic one, and the threads themselves
+      say "CSE" -- replacing the abbreviation deletes the exact token that matches them.
 
       Rewrite rules:
       1. ONLY use the chat history if the user's question is ambiguous or refers to previous context (e.g., pronouns like 'he', 'she', 'it', 'they', 'that').

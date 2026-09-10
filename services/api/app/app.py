@@ -165,20 +165,41 @@ async def test_stream() -> AsyncIterator[str]:
     """Replay a canned answer in the real NDJSON format, for ``ENV=test``.
 
     Lets the frontend be developed against realistic streaming -- including
-    thinking steps, markdown, LaTeX and a Sources list -- without a Qdrant
-    instance, an HF token, or spending inference quota.
+    thinking steps, markdown, LaTeX and citations -- without a Qdrant instance,
+    an HF token, or spending inference quota.
+
+    It must emit the same event types in the same order as the real pipeline,
+    or the mode stops exercising the surface it exists to exercise.
     """
-    # Step 1
-    yield json.dumps({"type": "step", "content": "Searching documents...\n"}) + "\n"
+    # First, exactly as in the real stream: retrieval finishes before generation
+    # begins, so the citations are known before there is any answer to attach
+    # them to.
+    yield (
+        json.dumps(
+            {
+                "type": "sources",
+                "sources": [
+                    {
+                        "permalink": "https://reddit.com/r/PESU/comments/1phgfw0/",
+                        "title": '[Question] How does "relative grading" work at our clg?',
+                        "snippet": "relative grading has always been a mystery in pes, the coe decides a cutoff...",
+                    },
+                    {
+                        "permalink": "https://reddit.com/r/PESU/comments/1ikhflo/",
+                        "title": "GPA Doubt",
+                        "snippet": "wrt to second year idt it would be too difficult as long as you put in efforts...",
+                    },
+                ],
+            }
+        )
+        + "\n"
+    )
     await asyncio.sleep(0.02)
 
-    # Step 2
-    yield json.dumps({"type": "step", "content": "Ranking sources...\n"}) + "\n"
-
-    await asyncio.sleep(0.02)
-    # Step 3
-    yield json.dumps({"type": "step", "content": "Generating answer...\n"}) + "\n"
-    await asyncio.sleep(0.02)
+    # Then the reasoning the thinking model would emit, then the answer.
+    for step in ("Searching documents...\n", "Ranking sources...\n", "Generating answer...\n"):
+        yield json.dumps({"type": "step", "content": step}) + "\n"
+        await asyncio.sleep(0.02)
 
     tokens = [
         "### How SGPA is Calculated\n\n",
@@ -196,9 +217,7 @@ async def test_stream() -> AsyncIterator[str]:
         "#### Example\n\n",
         "- Course 1: 4 credits, grade **A** = 9 points\n",
         "- Course 2: 2 credits, grade **S** = 10 points\n\n",
-        "So the SGPA is **(4 x 9 + 2 x 10) / 6 = 9.33**.\n\n",
-        "**Sources**\n\n",
-        "- https://www.reddit.com/r/PESU/\n",
+        "So the SGPA is **(4 x 9 + 2 x 10) / 6 = 9.33**.\n",
     ]
     for t in tokens:
         yield json.dumps({"type": "token", "content": t}) + "\n"
@@ -475,13 +494,28 @@ def main() -> None:
     # reads this value. See CONFIG_PATH_VAR.
     os.environ[CONFIG_PATH_VAR] = args.config
 
-    # Set up logging configuration
+    # Set up logging configuration.
+    #
+    # `force` is load-bearing, not tidiness. basicConfig() does nothing at all if
+    # the root logger already has a handler, and importing this module pulls in
+    # the ML stack, something in which installs one. Without it the level and
+    # format below were both silently discarded: every logging.info in the
+    # service vanished, --debug changed nothing, and warnings came out in the
+    # default `WARNING:root:...` format rather than this one.
     logging_level = logging.DEBUG if args.debug else logging.INFO
     logging.basicConfig(
         level=logging_level,
         format="%(asctime)s - %(levelname)s - %(filename)s:%(funcName)s:%(lineno)d - %(message)s",
         filemode="w",
+        force=True,
     )
+
+    # Libraries that narrate every HTTP request at INFO. Loading the embedding
+    # model alone makes a dozen calls to huggingface.co, and each retrieval makes
+    # more, so left alone these bury the service's own lines completely. Their
+    # warnings and errors still come through.
+    for noisy in ("httpx", "httpcore", "urllib3", "sentence_transformers", "filelock"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
 
     # Run the app
     uvicorn.run("app.app:app", host=args.host, port=args.port, reload=args.debug)

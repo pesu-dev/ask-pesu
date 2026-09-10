@@ -18,11 +18,13 @@ thumbnail: >-
 models:
 - Alibaba-NLP/gte-modernbert-base
 - cross-encoder/ms-marco-MiniLM-L6-v2
+- Qdrant/bm25
 - Qwen/Qwen3-4B-Instruct-2507
 - Qwen/Qwen3-4B-Thinking-2507
 preload_from_hub:
 - Alibaba-NLP/gte-modernbert-base
 - cross-encoder/ms-marco-MiniLM-L6-v2
+- Qdrant/bm25
 tags:
 - rag
 - assistant

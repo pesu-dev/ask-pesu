@@ -2,8 +2,9 @@
 //
 // Owns the streaming lifecycle. Two paths call askStream -- handleSubmit for a
 // normal question and handleThinkLonger for re-answering an existing reply with
-// the thinking model -- and both must handle all four event types, since a
-// dropped `error` event leaves a failure invisible.
+// the thinking model -- and both must handle every event type, since a dropped
+// `error` event leaves a failure invisible and a dropped `sources` event leaves
+// the reply with no citations.
 //
 // Tokens are buffered and flushed on requestAnimationFrame: the model emits far
 // faster than the browser can usefully repaint, so applying every token as its
@@ -29,6 +30,7 @@ import { useHealth } from "@/hooks/use-health";
 import {
   Conversation,
   Message,
+  Source,
   createConversation,
   createId,
 } from "@/lib/chat-store";
@@ -151,6 +153,9 @@ export default function Index() {
     let pendingTokens = "";
     let flushScheduled = false;
     let streamClosed = false; // set on done OR error; no further tokens are written
+    // Citations from the backend's `sources` event. Kept out of the message
+    // until `done` so a retry cannot leave a half-written list behind.
+    let streamSources: Source[] = [];
 
     const flush = () => {
       flushScheduled = false;
@@ -203,6 +208,14 @@ export default function Index() {
           } else if (evt.type === "token") {
             pendingTokens += evt.content;
             scheduleFlush();
+          } else if (evt.type === "sources") {
+            // Map the wire shape onto the stored one here, so nothing already
+            // in localStorage has to change.
+            streamSources = evt.sources.map((src) => ({
+              title: src.title,
+              url: src.permalink,
+              snippet: src.snippet,
+            }));
           } else if (evt.type === "done") {
             streamClosed = true;
             flush();
@@ -211,7 +224,10 @@ export default function Index() {
               return {
                 ...m,
                 content: cleanContent,
-                sources,
+                // The backend's citations are the documents actually retrieved,
+                // so they win. extractSources only covers a model that printed
+                // a list anyway, and conversations saved before this existed.
+                sources: streamSources.length > 0 ? streamSources : sources,
                 status: undefined,
               };
             });
@@ -323,6 +339,7 @@ export default function Index() {
     let pendingTokens = "";
     let flushScheduled = false;
     let streamClosed = false;
+    let streamSources: Source[] = [];
 
     const flush = () => {
       flushScheduled = false;
@@ -350,9 +367,8 @@ export default function Index() {
         onEvent: (evt) => {
           if (streamClosed) return; // ignore anything arriving after fail/done
           if (evt.type === "step") {
-            // Reasoning text from the thinking model. Dropping these was
-            // especially wrong here: this handler exists to run that model, so
-            // it was the one path guaranteed to produce steps.
+            // Reasoning text from the thinking model. This handler exists to
+            // run that model, so it is the one path certain to produce steps.
             updateAssistantMessage(convId, thinkingResponseId, (m) => ({
               ...m,
               status: evt.content,
@@ -360,6 +376,14 @@ export default function Index() {
           } else if (evt.type === "token") {
             pendingTokens += evt.content;
             scheduleFlush();
+          } else if (evt.type === "sources") {
+            // Map the wire shape onto the stored one here, so nothing already
+            // in localStorage has to change.
+            streamSources = evt.sources.map((src) => ({
+              title: src.title,
+              url: src.permalink,
+              snippet: src.snippet,
+            }));
           } else if (evt.type === "done") {
             streamClosed = true;
             flush();
@@ -368,7 +392,10 @@ export default function Index() {
               return {
                 ...m,
                 content: cleanContent,
-                sources,
+                // The backend's citations are the documents actually retrieved,
+                // so they win. extractSources only covers a model that printed
+                // a list anyway, and conversations saved before this existed.
+                sources: streamSources.length > 0 ? streamSources : sources,
                 status: undefined,
               };
             });
