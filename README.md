@@ -123,6 +123,11 @@ Anything older than that window comes from [the backfill scripts](#backfilling-h
    first question. The prompt expands PESU abbreviations *alongside* the original —
    `CSE (Computer Science Engineering)`, never replacing it — because the threads themselves
    say `CSE`, and replacing it deletes the token the lexical index matches on.
+   The model obeys that for abbreviations in the question and drops it for ones it resolves
+   out of the history, so `preserve_acronyms` appends any that went missing. It consults the
+   previous turn only when the question names no abbreviation of its own; otherwise
+   "what about ECE?" would be searched for `CSE` as well. Every alternative phrasing below is
+   written from this query, so a token lost here is lost from all four searches.
 2. **Multi-query expansion** — `MultiQueryRetriever` asks the LLM for several phrasings and
    unions what each retrieves, recovering passages a single phrasing would miss. The rewritten
    query is itself included in that set (`include_original=True`), which the library does not
@@ -188,7 +193,12 @@ Two properties worth knowing:
 - **`</think>` can split across chunks.** The stream arrives in arbitrary pieces, so `"...</thi"`
   and `"nk>..."` can be separate chunks. The backend holds back the last `len("</think>") - 1`
   characters — the longest fragment that could still complete the tag — and emits everything
-  before it.
+  before it. The opening tag is decided the same way: until enough has arrived to tell whether
+  the stream opens with `<think>`, nothing is emitted, so a model that emits no reasoning block
+  streams as an answer rather than as reasoning.
+- **Thinking mode can end without an answer.** If `max_new_tokens` runs out while the model is
+  still reasoning, `</think>` never arrives. The buffered tail is reported as `step`, not as a
+  one-word answer, and an `error` event says the budget was spent on reasoning.
 
 - **Citations are exact.** `sources` carries the documents retrieval actually selected. The
   system prompt explicitly tells the model *not* to print a source list, so a citation no longer

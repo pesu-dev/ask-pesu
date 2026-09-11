@@ -81,6 +81,16 @@ load_dotenv()
 THINK_START = "<think>"
 THINK_END = "</think>"
 
+# Where a thinking-mode stream has got to. Three states rather than a "done"
+# flag, because "not done" conflated two very different situations: inside a
+# reasoning block, and not yet knowing whether there is one. Treating the
+# second as the first is what made a model that emits no <think> at all --
+# a different repo_id, or a provider that moves reasoning into its own field
+# -- render its entire answer as reasoning.
+PHASE_START = "start"  # nothing decided yet; the opening tag may still arrive
+PHASE_THINKING = "thinking"  # inside the block, waiting for </think>
+PHASE_ANSWER = "answer"  # past it, or there never was one: all answer now
+
 # Payload keys read out of retrieved documents. Checked against the contract at
 # startup so removing one from conf/collection.yaml fails here rather than as a
 # KeyError on the first query.
@@ -901,11 +911,11 @@ class RetrievalAugmentedGenerator:
         logging.debug(f"Reranker: {len(docs)} → {len(reranked)} docs above threshold {threshold}")
         return reranked
 
-    def _process_thinking_chunk(self, chunk: str, pending: str, thinking_done: bool) -> tuple[str, bool, list[dict]]:
+    def _process_thinking_chunk(self, chunk: str, pending: str, phase: str) -> tuple[str, str, list[dict]]:
         """Split one streamed chunk into reasoning (``step``) and answer (``token``) events.
 
         A thinking model emits ``<think>reasoning</think>answer``, but the stream
-        arrives in arbitrary chunks, so ``</think>`` can be split across a chunk
+        arrives in arbitrary chunks, so either tag can be split across a chunk
         boundary -- ``"...</thi"`` then ``"nk>..."``. Emitting eagerly would leak
         a fragment of the closing tag into the visible reasoning and then fail to
         recognise the tag at all.
@@ -916,33 +926,45 @@ class RetrievalAugmentedGenerator:
         is seen the buffer is no longer needed and later chunks pass straight
         through as answer tokens.
 
+        The opening tag is decided the same way. Until enough has arrived to tell
+        whether the stream opens with ``<think>``, nothing is emitted; a stream
+        that turns out not to open with it is answer text from the first
+        character, not reasoning.
+
         Args:
             chunk: Newly received text.
             pending: Characters withheld from previous chunks.
-            thinking_done: Whether ``</think>`` has already been seen.
+            phase: Where the stream has got to; one of the ``PHASE_*`` values.
 
         Returns:
-            ``(pending, thinking_done, events)`` -- the updated buffer, the
-            updated flag, and the events to emit for this chunk.
+            ``(pending, phase, events)`` -- the updated buffer, the updated
+            phase, and the events to emit for this chunk.
         """
-        events = []
-
-        if thinking_done:
-            events.append({"type": "token", "content": chunk})
-            return pending, thinking_done, events
+        if phase == PHASE_ANSWER:
+            return pending, phase, [{"type": "token", "content": chunk}]
 
         pending += chunk
 
-        # Strip the opening <think> tag if it appears at the start of the stream
-        if pending.startswith(THINK_START):
-            pending = pending[len(THINK_START) :]
+        if phase == PHASE_START:
+            # Leading whitespace before the tag is not reasoning, and dropping it
+            # from an answer costs nothing either.
+            opening = pending.lstrip()
+            if opening.startswith(THINK_START):
+                pending = opening[len(THINK_START) :]
+                phase = PHASE_THINKING
+            elif THINK_START.startswith(opening[: len(THINK_START)]):
+                # Still short of the tag, and still consistent with it.
+                return pending, phase, []
+            else:
+                return "", PHASE_ANSWER, [{"type": "token", "content": opening}]
 
+        events: list[dict] = []
         if THINK_END in pending:
-            idx = pending.index(THINK_END)
-            step_part = pending[:idx]
-            token_part = pending[idx + len(THINK_END) :]
+            index = pending.index(THINK_END)
+            step_part = pending[:index]
+            token_part = pending[index + len(THINK_END) :]
             pending = ""
-            thinking_done = True
+            phase = PHASE_ANSWER
 
             if step_part:
                 events.append({"type": "step", "content": step_part})
@@ -956,19 +978,33 @@ class RetrievalAugmentedGenerator:
                 events.append({"type": "step", "content": pending[:safe_end]})
                 pending = pending[safe_end:]
 
-        return pending, thinking_done, events
+        return pending, phase, events
 
-    def _flush_pending(self, pending: str, thinking_done: bool) -> dict:
-        """Emit whatever is left in the buffer once the stream ends.
+    def _flush_pending(self, pending: str, phase: str) -> list[dict]:
+        """Emit whatever is left once the stream ends.
 
-        Reaching here with ``thinking_done`` false means the model never closed
-        its ``<think>`` block -- truncated by ``max_new_tokens``, or it simply did
-        not follow the format. The buffer is emitted as answer text rather than
-        discarded, so the user sees something instead of an empty reply.
+        Reaching here still in ``PHASE_THINKING`` means the model never closed
+        its ``<think>`` block, which in practice means ``max_new_tokens`` ran out
+        while it was still reasoning. There is no answer in that case: what the
+        buffer holds is the tail of the reasoning, at most a few characters, and
+        emitting it as the answer produced a reply like "nothing" -- which reads
+        as a real answer and is worse than admitting the failure. It goes out as
+        reasoning, and the stream reports an error.
         """
-        if not thinking_done:
-            logging.warning("</think> never detected in thinking mode — emitting buffer as answer.")
-        return {"type": "token", "content": pending}
+        if phase == PHASE_THINKING:
+            logging.warning("</think> never arrived; the answer budget ran out during reasoning.")
+            events: list[dict] = [{"type": "step", "content": pending}] if pending else []
+            events.append(
+                {
+                    "type": "error",
+                    "content": (
+                        "The model spent its whole answer budget on reasoning and never began the "
+                        "answer. Ask again, or use normal mode."
+                    ),
+                }
+            )
+            return events
+        return [{"type": "token", "content": pending}] if pending else []
 
     async def generate(
         self,
@@ -1040,8 +1076,8 @@ class RetrievalAugmentedGenerator:
         logging.info(f"Using {'thinking' if thinking else 'primary'} LLM for query: {query}")
 
         # Streaming state. `pending` buffers characters that might be a partial
-        # </think> tag; see _process_thinking_chunk.
-        thinking_done = False
+        # <think> or </think> tag; see _process_thinking_chunk.
+        phase = PHASE_START
         pending = ""
         token_count = 0
 
@@ -1074,12 +1110,14 @@ class RetrievalAugmentedGenerator:
                     yield json.dumps({"type": "token", "content": chunk}) + "\n"
                     continue
 
-                pending, thinking_done, events = self._process_thinking_chunk(chunk, pending, thinking_done)
+                pending, phase, events = self._process_thinking_chunk(chunk, pending, phase)
                 for event in events:
                     yield json.dumps(event) + "\n"
 
-            if pending:
-                yield json.dumps(self._flush_pending(pending, thinking_done)) + "\n"
+            # Not guarded on `pending`: a reasoning block that never closed has
+            # an error to report whether or not anything is still buffered.
+            for event in self._flush_pending(pending, phase):
+                yield json.dumps(event) + "\n"
             logging.info(f"Stream complete. Total chunks: {token_count}")
         except Exception as e:
             logging.error(f"Error in generate(): {str(e)}", exc_info=True)
