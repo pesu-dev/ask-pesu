@@ -254,6 +254,19 @@ def _thread_month(doc: Document) -> str:
         return ""
 
 
+def _heading(doc: Document) -> str:
+    """The line a thread's block in the context is prefixed with.
+
+    Empty when the document carries no permalink, in which case the block is
+    still emitted -- losing a citation beats losing the answer.
+    """
+    permalink = doc.metadata.get("permalink")
+    if not permalink:
+        return ""
+    month = _thread_month(doc)
+    return f"{permalink} (posted {month})\n" if month else f"{permalink}\n"
+
+
 def describe_sources(docs: list[Document], snippet_chars: int = 200) -> list[dict]:
     """Turn retrieved documents into the citations the stream reports.
 
@@ -638,6 +651,15 @@ class RetrievalAugmentedGenerator:
             if stale in rag_cfg:
                 raise ValueError(f"conf/config.yaml: rag.{stale} is not read -- {guidance}.")
 
+        answer_turns = self.history_cfg["answer_turns"]
+        if not isinstance(answer_turns, int) or isinstance(answer_turns, bool) or answer_turns < 0:
+            raise ValueError(
+                f"conf/config.yaml: rag.history.answer_turns must be a non-negative integer, not "
+                f"{answer_turns!r}. It slices the conversation from the end, so a negative value "
+                f"drops the OLDEST turns and keeps every other one -- the prompt would then grow "
+                f"with the conversation, which is the one thing this setting exists to stop."
+            )
+
         mode = self.retrieval_cfg["mode"]
         if mode not in ("dense", "hybrid"):
             raise ValueError(f"conf/config.yaml: rag.retrieval.mode must be 'dense' or 'hybrid', not {mode!r}.")
@@ -757,9 +779,7 @@ class RetrievalAugmentedGenerator:
         index_of: dict[str, int] = {}
         for doc in docs:
             post_id = doc.metadata.get("post_id")
-            permalink = doc.metadata.get("permalink")
-            month = _thread_month(doc)
-            heading = f"{permalink}{f' (posted {month})' if month else ''}\n" if permalink else ""
+            heading = _heading(doc)
             head, separator, tree = doc.page_content.partition("COMMENT TREE:")
             # A document that does not carry the expected layout is emitted
             # whole rather than dropped or mangled.
@@ -936,21 +956,28 @@ class RetrievalAugmentedGenerator:
         # on every request. Skip any turn whose query equals the current one:
         # clients may include the in-flight question, and feeding it back as
         # already-answered confuses the rewrite step.
-        chat_history = []
-        for convo in history:
-            if query != convo.query:
-                chat_history.append(HumanMessage(convo.query))
-                chat_history.append(AIMessage(convo.answer))
+        turns = [(HumanMessage(convo.query), AIMessage(convo.answer)) for convo in history if query != convo.query]
+        chat_history = [message for turn in turns for message in turn]
 
-        # What the ANSWER prompt sees, which is not what retrieval sees. The
-        # rewrite step keeps the whole conversation, because the thing a
-        # follow-up refers to can be several turns back; the answer only has to
-        # know what is being asked now, and every turn it carries is a full
-        # previous answer sitting alongside the retrieved documents. `history`
-        # itself is unbounded -- see #79 -- so without this the prompt grows
-        # with the conversation and nothing stops it.
+        # What the ANSWER prompt sees, which is not what retrieval sees, in two
+        # ways.
+        #
+        # Only whole turns. The client sends a turn with an empty answer when
+        # one was aborted or failed, deliberately, because the question still
+        # says what the user was asking about. Rendered into the rewrite
+        # prompt's text that is harmless, but here it would become a real empty
+        # assistant message in the chat completion, which providers variously
+        # reject or answer strangely.
+        #
+        # And only the last few. The rewrite step keeps the whole conversation,
+        # because the thing a follow-up refers to can be several turns back; the
+        # answer only has to know what is being asked now, and every turn it
+        # carries is a full previous answer sitting alongside the retrieved
+        # documents. `history` itself has no ceiling, so without this the prompt
+        # grows with the conversation and nothing stops it.
         answer_turns = self.history_cfg["answer_turns"]
-        recent_history = chat_history[-2 * answer_turns :] if answer_turns else []
+        complete = [turn for turn in turns if turn[0].content.strip() and turn[1].content.strip()]
+        recent_history = [message for turn in complete[-answer_turns:] for message in turn] if answer_turns else []
 
         answer_chain = self._answer_thinking if thinking else self._answer_primary
 
