@@ -5,6 +5,10 @@ export interface Source {
   title: string;
   url: string;
   snippet: string;
+  /** Unix seconds the thread was posted. Optional: conversations saved before
+   *  this field existed have none, and the backend sends null when the thread
+   *  carries no usable timestamp. */
+  postedAt?: number | null;
 }
 
 export interface Message {

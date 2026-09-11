@@ -51,6 +51,7 @@ import asyncio
 import datetime
 import json
 import logging
+import math
 import os
 from collections.abc import AsyncGenerator, Callable
 
@@ -215,6 +216,44 @@ def deduplicate(docs: list[Document]) -> list[Document]:
     return out
 
 
+def _created_utc(doc: Document) -> float | None:
+    """The thread's timestamp, or None when it is missing or not a number.
+
+    This is the SUBMISSION's time, not the root comment's. It tracks the age of
+    the discussion closely -- root comments arrive within a day of the post
+    about nine times in ten -- but it is not the answer's own date, so do not
+    present it as one.
+
+    Qdrant round-trips payloads through JSON, so a value that was written as a
+    string comes back as one; anything not already a number is dropped rather
+    than coerced, since a citation is not worth failing a request over.
+
+    Non-finite and non-positive values are dropped too. A NaN would reach the
+    stream as the bare token ``NaN``, which ``json.dumps`` emits happily and
+    ``JSON.parse`` rejects -- one bad payload would break the client mid-answer.
+    """
+    value = doc.metadata.get("created_utc")
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    value = float(value)
+    return value if math.isfinite(value) and value > 0 else None
+
+
+def _thread_month(doc: Document) -> str:
+    """The thread's month and year for the context block, or "" if unknown.
+
+    Month rather than a full date: the model is being told roughly how old an
+    answer is so it can say so, and a precise day would invite it to quote one.
+    """
+    created = _created_utc(doc)
+    if created is None:
+        return ""
+    try:
+        return datetime.datetime.fromtimestamp(created, tz=datetime.UTC).strftime("%B %Y")
+    except (OverflowError, OSError, ValueError):
+        return ""
+
+
 def describe_sources(docs: list[Document], snippet_chars: int = 200) -> list[dict]:
     """Turn retrieved documents into the citations the stream reports.
 
@@ -253,7 +292,14 @@ def describe_sources(docs: list[Document], snippet_chars: int = 200) -> list[dic
         # finally to the raw document -- an empty preview is worse than a rough
         # one.
         snippet = " ".join((tree or rest or doc.page_content).split())[:snippet_chars]
-        out.append({"permalink": permalink, "title": title or permalink, "snippet": snippet})
+        out.append(
+            {
+                "permalink": permalink,
+                "title": title or permalink,
+                "snippet": snippet,
+                "created_utc": _created_utc(doc),
+            }
+        )
     return out
 
 
@@ -712,7 +758,8 @@ class RetrievalAugmentedGenerator:
         for doc in docs:
             post_id = doc.metadata.get("post_id")
             permalink = doc.metadata.get("permalink")
-            heading = f"{permalink}\n" if permalink else ""
+            month = _thread_month(doc)
+            heading = f"{permalink}{f' (posted {month})' if month else ''}\n" if permalink else ""
             head, separator, tree = doc.page_content.partition("COMMENT TREE:")
             # A document that does not carry the expected layout is emitted
             # whole rather than dropped or mangled.

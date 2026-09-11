@@ -215,6 +215,7 @@ export default function Index() {
               title: src.title,
               url: src.permalink,
               snippet: src.snippet,
+              postedAt: src.created_utc,
             }));
           } else if (evt.type === "done") {
             streamClosed = true;
@@ -383,6 +384,7 @@ export default function Index() {
               title: src.title,
               url: src.permalink,
               snippet: src.snippet,
+              postedAt: src.created_utc,
             }));
           } else if (evt.type === "done") {
             streamClosed = true;
