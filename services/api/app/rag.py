@@ -62,7 +62,7 @@ from langchain_core.callbacks import CallbackManagerForRetrieverRun
 from langchain_core.documents.base import Document
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.output_parsers import StrOutputParser
-from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder, PromptTemplate
 from langchain_core.retrievers import BaseRetriever
 from langchain_huggingface import ChatHuggingFace, HuggingFaceEndpoint
 from langchain_huggingface.embeddings import HuggingFaceEmbeddings
@@ -388,6 +388,7 @@ class RetrievalAugmentedGenerator:
         self.retrieval_cfg = self.config["rag"]["retrieval"]
         self.rerank_cfg = self.config["rag"]["rerank"]
         self.sources_cfg = self.config["rag"]["sources"]
+        self.history_cfg = self.config["rag"]["history"]
 
         # The collection name, embedding model and vector geometry are contracted
         # with services/db, not configured per service. Everything is checked
@@ -464,11 +465,22 @@ class RetrievalAugmentedGenerator:
         )
 
         # Answer prompt: system rules (answer only from context, do not
-        # reprint the sources, refuse off-topic questions) plus the human turn
-        # carrying {question} and the retrieved {context}.
+        # reprint the sources, refuse off-topic questions), then the recent
+        # conversation, then the human turn carrying {question} and the
+        # retrieved {context}.
+        #
+        # The history is there so a follow-up can be understood -- "what about
+        # ECE?" says nothing on its own. It is also a second and far more
+        # convenient source of facts than the context, because it holds this
+        # model's own previous answers, so the system prompt carries a rule
+        # forbidding answering from it. The two are a pair; neither works alone.
+        #
+        # The retrieved context sits in the final turn, after the history, so
+        # what the answer must be drawn from is what the model read last.
         self.prompt = ChatPromptTemplate.from_messages(
             [
                 ("system", self.config["rag"]["prompts"]["system_prompt"]),
+                MessagesPlaceholder("chat_history"),
                 ("human", self.config["rag"]["prompts"]["answer_prompt"]),
             ]
         )
@@ -883,6 +895,16 @@ class RetrievalAugmentedGenerator:
                 chat_history.append(HumanMessage(convo.query))
                 chat_history.append(AIMessage(convo.answer))
 
+        # What the ANSWER prompt sees, which is not what retrieval sees. The
+        # rewrite step keeps the whole conversation, because the thing a
+        # follow-up refers to can be several turns back; the answer only has to
+        # know what is being asked now, and every turn it carries is a full
+        # previous answer sitting alongside the retrieved documents. `history`
+        # itself is unbounded -- see #79 -- so without this the prompt grows
+        # with the conversation and nothing stops it.
+        answer_turns = self.history_cfg["answer_turns"]
+        recent_history = chat_history[-2 * answer_turns :] if answer_turns else []
+
         answer_chain = self._answer_thinking if thinking else self._answer_primary
 
         logging.info(f"Using {'thinking' if thinking else 'primary'} LLM for query: {query}")
@@ -911,6 +933,7 @@ class RetrievalAugmentedGenerator:
                 {
                     "question": query,
                     "context": self.format_docs(docs),
+                    "chat_history": recent_history,
                 }
             ):
                 token_count += 1

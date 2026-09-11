@@ -107,6 +107,21 @@ rag:
     # Worth raising only on hardware with cores to spare.
     concurrency: 1
 
+  # How much of the conversation each LLM call receives.
+  history:
+    # Turns of conversation the ANSWER prompt is given, most recent last. One
+    # turn is a question and its answer.
+    #
+    # Retrieval is not bounded by this. The rewrite step still receives the
+    # whole conversation, because what a follow-up refers to can be several
+    # turns back; the answer only has to know what is being asked now.
+    #
+    # NOT MEASURED. Four is a guess -- enough to resolve "what about ECE?" and
+    # the turn before it, few enough that the prompt does not grow without
+    # limit. Each turn added is a full previous answer carried alongside the
+    # retrieved documents, and the request's `history` has no ceiling of its own.
+    answer_turns: 4
+
   # How the retrieved threads are described in the `sources` stream event.
   sources:
     # Characters of the discussion shown as a preview under each title.
@@ -148,6 +163,11 @@ rag:
 
       Do NOT end with a list of sources or links. The threads you were given are reported to the user
       separately and exactly; repeating them wastes your response and risks citing a link you were never shown.
+
+      Earlier turns of the conversation are provided only so you can tell what the user is referring to
+      when they say "it", "that one", or ask a follow-up that is not a whole question on its own.
+      Never answer from them. Every fact in your answer must come from the context below, even if you
+      stated that fact yourself a moment ago -- if the context does not support it, you do not have it.
 
       If the context does not contain the answer, respond with "I'm sorry, I don't have that information."
       If asked anything unrelated to PES University, politely decline.
