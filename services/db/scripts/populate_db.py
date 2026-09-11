@@ -33,6 +33,7 @@ import json
 import os
 import shutil
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -169,13 +170,71 @@ DEFAULT_BATCH_SIZE = 128
 DEFAULT_ENCODE_BATCH_SIZE = 8
 
 
+def _dry_run(
+    contract: contract_mod.Contract,
+    files: list[Path],
+    on_progress: Callable[[int, int, int], None] | None,
+) -> int:
+    """Parse every input file and check each payload, writing nothing.
+
+    Everything that can go wrong cheaply, before the expensive part. The
+    collection is validated by the caller; this deliberately does not build the
+    vector store, so no model is downloaded either.
+    """
+    total = 0
+    for done, path in enumerate(files, start=1):
+        for _text, payload, _point_id in documents_in(path):
+            contract_mod.validate_payload(contract, payload)
+            total += 1
+        if on_progress:
+            on_progress(done, len(files), total)
+    print(f"Dry run: {len(files)} files, {total} documents would be written to {contract.name!r}.")
+    print("Every payload matches the contract. Nothing was written.")
+    return 0
+
+
+def _verify_written(
+    contract: contract_mod.Contract,
+    client: QdrantClient,
+    written: list[str],
+    completed_dir: Path,
+) -> int:
+    """Read every inserted id back, and report any the collection does not hold.
+
+    Returns:
+        0 if all of them are present, 1 otherwise.
+    """
+    missing = []
+    for start in range(0, len(written), 100):
+        chunk = written[start : start + 100]
+        found = {str(p.id) for p in client.retrieve(collection_name=contract.name, ids=chunk)}
+        missing.extend(pid for pid in chunk if pid not in found)
+
+    if missing:
+        # Beside completed_dir rather than in the working directory. The CLI
+        # default puts that in the same place, but a caller elsewhere may not be
+        # able to write where the process happens to be running -- in the image
+        # the working directory is /app, owned by root while the process is uid
+        # 1000, so writing there raises at the very end of a finished run.
+        report = completed_dir.parent / "missing_points.json"
+        report.write_text(json.dumps(missing, indent=2))
+        print(f"WARNING: {len(missing)} inserted points could not be read back; ids in {report}")
+        return 1
+    print("All inserted points verified present.")
+    return 0
+
+
 def backfill(
     data_dir: Path,
     completed_dir: Path,
     *,
+    contract: contract_mod.Contract | None = None,
+    client: QdrantClient | None = None,
     encode_batch_size: int = DEFAULT_ENCODE_BATCH_SIZE,
     batch_size: int = DEFAULT_BATCH_SIZE,
     dry_run: bool = False,
+    on_progress: Callable[[int, int, int], None] | None = None,
+    show_progress: bool = True,
 ) -> int:
     """Backfill the contracted collection from a directory of processed posts.
 
@@ -187,52 +246,54 @@ def backfill(
     project spends a CI check preventing elsewhere.
 
     Credentials and the collection name are read from the environment
-    (``QDRANT_URL``, ``QDRANT_API_KEY``, ``QDRANT_COLLECTION``). Deliberately no
-    ``load_dotenv`` here -- that belongs to the command line, so a caller that
-    has already set them cannot have them silently replaced by a file.
+    (``QDRANT_URL``, ``QDRANT_API_KEY``, ``QDRANT_COLLECTION``) unless
+    ``contract`` and ``client`` are passed. Deliberately no ``load_dotenv``
+    here -- that belongs to the command line, so a caller that has already set
+    them cannot have them silently replaced by a file.
 
     Args:
         data_dir: Directory of processed post JSON files.
         completed_dir: Where each file moves once the batch containing it is
             stored. Created if absent.
+        contract: Which collection to write, and its shape. Defaults to the
+            environment's.
+        client: Qdrant client with write access. Defaults to one built from
+            ``QDRANT_URL`` and ``QDRANT_API_KEY``. Pass one to write with
+            credentials other than the process's own, which setting
+            ``os.environ`` would share with every other caller in the process.
         encode_batch_size: Documents the embedding model encodes at once.
             Bounds peak GPU memory and nothing else.
         batch_size: Documents per upsert, filled across files rather than per
             file.
         dry_run: Validate the collection and every payload, then stop without
             building the model or writing anything.
+        on_progress: Called after each file with
+            ``(files_done, files_total, documents_written)``. Raise from it to
+            stop the run; a file reaches ``completed_dir`` only once the batch
+            holding it is stored, so what is there stays accurate.
+        show_progress: Draw the tqdm bar. Turn it off where a redrawing bar is
+            noise, such as a server log.
 
     Returns:
         0 on success; 1 if there was nothing to read, or a written point could
         not be read back afterwards.
     """
-    contract = contract_mod.load()
+    contract = contract or contract_mod.load()
 
     files = sorted(p for p in data_dir.iterdir() if p.suffix == ".json")
     if not files:
         print(f"No .json files in {data_dir}", file=sys.stderr)
         return 1
 
-    client = QdrantClient(url=os.getenv("QDRANT_URL"), api_key=os.getenv("QDRANT_API_KEY"), timeout=120.0)
+    if client is None:
+        client = QdrantClient(url=os.getenv("QDRANT_URL"), api_key=os.getenv("QDRANT_API_KEY"), timeout=120.0)
     # Fails here rather than after embedding thousands of documents into a
     # collection the reader cannot use.
     contract_mod.validate_collection(contract, client)
     print(f"Collection {contract.name!r} matches the contract.")
 
     if dry_run:
-        # Everything that can go wrong cheaply, before the expensive part: the
-        # collection is already validated above, and this parses every input
-        # file and checks each payload against the contract. It deliberately
-        # does not build the vector store, so no model is downloaded and nothing
-        # is written.
-        total = 0
-        for path in files:
-            for _text, payload, _point_id in documents_in(path):
-                contract_mod.validate_payload(contract, payload)
-                total += 1
-        print(f"Dry run: {len(files)} files, {total} documents would be written to {contract.name!r}.")
-        print("Every payload matches the contract. Nothing was written.")
-        return 0
+        return _dry_run(contract, files, on_progress)
 
     vector_store = build_vector_store(contract, client, encode_batch_size)
     completed_dir.mkdir(parents=True, exist_ok=True)
@@ -253,8 +314,10 @@ def backfill(
     # Driven by hand rather than by iterating the bar: tqdm closes itself when
     # the iterator it wraps runs out, and the last partial batch is written
     # after that, so an iterated bar finishes showing the second-to-last count.
-    with tqdm(total=len(files), unit="file", desc=f"Backfilling {contract.name}") as progress:
-        for path in files:
+    with tqdm(
+        total=len(files), unit="file", desc=f"Backfilling {contract.name}", disable=not show_progress
+    ) as progress:
+        for done, path in enumerate(files, start=1):
             for text, payload, point_id in documents_in(path):
                 # Reject a drifting payload before it reaches Qdrant, the same
                 # way the listener does on every write.
@@ -274,26 +337,22 @@ def backfill(
                 # the document count too.
                 progress.set_postfix(documents=inserted)
             progress.update(1)
+            # After the flush, so `inserted` counts stored documents rather
+            # than staged ones. Raising here leaves `batch` unwritten and
+            # `staged` unretired, so completed/ stays accurate.
+            if on_progress:
+                on_progress(done, len(files), inserted)
 
         # Whatever the last full batch left behind.
         inserted += flush_batch(vector_store, batch, written)
         staged = _retire(staged, completed_dir)
         progress.set_postfix(documents=inserted)
+        if on_progress:
+            on_progress(len(files), len(files), inserted)
 
     print(f"Files: {len(files)} | Documents written: {inserted}")
 
-    missing = []
-    for start in range(0, len(written), 100):
-        chunk = written[start : start + 100]
-        found = {str(p.id) for p in client.retrieve(collection_name=contract.name, ids=chunk)}
-        missing.extend(pid for pid in chunk if pid not in found)
-
-    if missing:
-        Path("missing_points.json").write_text(json.dumps(missing, indent=2))
-        print(f"WARNING: {len(missing)} inserted points could not be read back; ids in missing_points.json")
-        return 1
-    print("All inserted points verified present.")
-    return 0
+    return _verify_written(contract, client, written, completed_dir)
 
 
 def main() -> int:
