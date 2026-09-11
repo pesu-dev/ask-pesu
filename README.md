@@ -239,10 +239,13 @@ A `/quota` response while the thinking model is in cooldown:
 |---|---|
 | `GET /` | A small status page: whether the listener is alive, which collection it writes, and why it stopped if it has. Always **200** |
 | `GET /health` | `{"status": "ok"}`, or **503** `{"status": "error", "detail": ...}` once the listener has stopped on a contract violation |
+| `POST /backfill` | Rebuild a collection from an uploaded r/PESU export. **202** and a job id; see [Backfilling over HTTP](#backfilling-over-http) |
+| `GET /backfill/{job_id}` | That job's state, file and document counts |
+| `DELETE /backfill/{job_id}` | Stop a running job after its current file |
 
-The listener has no other surface; all of its work happens on a background thread. `/` exists
-because a Space is rendered at that path, so without it the Space page is a 404 for anyone who
-opens it.
+Apart from the backfill routes the listener has no surface; all of its work happens on a
+background thread. `/` exists because a Space is rendered at that path, so without it the Space
+page is a 404 for anyone who opens it.
 
 The split in status codes is deliberate. `/` is what the platform polls to decide the app is up,
 and a contract violation is permanent — answering 503 there could have the Space restarted on a
@@ -261,6 +264,7 @@ while it was down**. So `/` stays 200 and reports the problem in its text; `/hea
 | Cooldown behaviour | `services/api/app/quota.py` |
 | What gets indexed, and how a thread is rendered | `services/db/app/app.py`, `services/db/app/utils.py` |
 | The offline backfill | `services/db/scripts/` |
+| The backfill endpoint, its gate and its job records | `services/db/app/backfill_api.py` |
 | Collection name, embedding model, vector geometry, payload keys | `conf/collection.yaml` |
 | The streaming event contract | `services/api/app/rag.py` **and** `services/api/frontend/src/lib/api.ts` |
 
@@ -702,6 +706,47 @@ stored. After the run, every inserted id is read back and any that are missing a
 
 Prefer running the backfill with the listener stopped. Both write by the same id so they
 converge rather than conflict, but there is no reason to pay for the same embedding twice.
+
+### Backfilling over HTTP
+
+The db Space runs the same backfill on an export uploaded to it. A full run takes about a day:
+a Space has two CPU cores and the image installs the CPU build of torch, which is some two
+orders of magnitude slower here than a GPU. Use `notebooks/backfill.ipynb` where you can.
+
+Upload the two exports, or a `.tar.gz` of them. A `.jsonl.gz` is expanded on arrival.
+
+```bash
+curl -X POST -H "X-Qdrant-Api-Key: $QDRANT_API_KEY" \
+  -F posts=@dump/r_PESU_posts.jsonl -F comments=@dump/r_PESU_comments.jsonl \
+  "https://pesu-dev-askpesu-db.hf.space/backfill?collection=ask-pesu-dev&dry_run=true"
+
+curl -X POST -H "X-Qdrant-Api-Key: $QDRANT_API_KEY" \
+  -F archive=@dump.tar.gz \
+  "https://pesu-dev-askpesu-db.hf.space/backfill?collection=ask-pesu-dev"
+```
+
+`collection` is required and has no default. `dry_run` defaults to false; a dry run parses the
+export and checks every payload against the contract, builds no model and writes nothing.
+
+The response is **202** and a job id. `GET /backfill/{job_id}` reports `state`, `files_done`,
+`files_total` and `documents`. `DELETE /backfill/{job_id}` stops the run after the batch it is
+embedding, which on a Space is several minutes. One job runs at a time.
+
+Job records are held in memory. A Space restart loses them and kills the run. Send it again:
+point ids come from the root comment, so a repeat overwrites.
+
+The `X-Qdrant-Api-Key` header authenticates the request and is the key the job writes with. The
+Space's own `QDRANT_API_KEY` is not used, so Qdrant refuses a read-only key. `QDRANT_URL` comes
+from the Space and is not read from the request. The key and the collection are checked together
+in one round trip before the upload is read.
+
+| Code | Cause |
+|---|---|
+| **401** | no `X-Qdrant-Api-Key` |
+| **400** | no `collection`; the collection does not exist; the form is neither shape |
+| **403** | Qdrant rejected the key |
+| **409** | a job is already running |
+| **411**, **413** | no `Content-Length`; upload over the cap |
 
 ## Configuration
 

@@ -57,11 +57,12 @@ once. Being the only writer, it is redeployed only by a production promotion,
 never on a merge to `dev`: every restart interrupts the comment stream, and what
 is missed while it is down is not picked up when it returns.
 
-This Space only sees comments posted after it starts. History is loaded
-separately with `scripts/populate_db.py`.
+This Space only sees comments posted after it starts. History is loaded with
+`scripts/populate_db.py`, or by posting a raw r/PESU export to `POST /backfill`,
+which runs the same code here. That route takes the caller's own Qdrant key and
+writes with it. A full run takes about a day, since a Space has two CPU cores.
 
-There is no interface to speak of: `/` is a status page and `/health` reports
-whether the listener is still running.
+`/` is a status page and `/health` reports whether the listener is running.
 
 **Configuration.** `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET`, `QDRANT_URL`,
 `QDRANT_API_KEY` and `QDRANT_COLLECTION` are set as Space secrets. Startup fails
