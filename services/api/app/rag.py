@@ -53,6 +53,7 @@ import json
 import logging
 import math
 import os
+import re
 from collections.abc import AsyncGenerator, Callable
 
 import yaml
@@ -162,6 +163,54 @@ def credits_reset_at() -> datetime.datetime | None:
     except Exception as error:
         logging.warning(f"Could not read the credit reset time from Hugging Face: {error}")
         return None
+
+
+# Two or more characters of capitals and digits: how the corpus writes the tokens
+# the lexical half of retrieval matches on -- CSE, RR, SGPA, PESSAT, T1, AIML.
+# A pattern rather than a list, so there is no vocabulary to keep in step with
+# the rewrite prompt's.
+ACRONYM = re.compile(r"\b[A-Z][A-Z0-9]+\b")
+
+
+def preserve_acronyms(rewritten: str, question: str, fallback: str = "") -> str:
+    """Put back any acronym the rewrite expanded away instead of keeping.
+
+    The rewrite prompt is told to expand an abbreviation *alongside* the
+    original -- "CSE (Computer Science Engineering)" -- because BM25 matches the
+    literal token and the threads themselves say CSE. It obeys that for
+    abbreviations in the question and drops it for ones it resolves out of the
+    chat history: "is it hard?" against a conversation about CSE at RR comes
+    back as "Computer Science Engineering at the Ring Road campus", with both
+    tokens gone. That costs the whole of hybrid retrieval's advantage on the
+    request, since every alternative phrasing is written from the rewritten
+    query and inherits the loss.
+
+    ``fallback`` is consulted only when the question carries no acronym of its
+    own. A question that names one has already said what it is about, and
+    reaching into the previous turn then drags the topic the user just left back
+    into the query -- "what about ECE?" would be searched for CSE as well.
+
+    Appended rather than substituted, because where they belong in the sentence
+    is not knowable from the text. The query is only ever embedded, matched and
+    handed to the reranker, never shown to anyone, so trailing tokens cost
+    nothing but the space they take.
+
+    Args:
+        rewritten: What the rewrite returned.
+        question: The user's question, as asked.
+        fallback: The turn being resolved against, used only when ``question``
+            has no acronym.
+
+    Returns:
+        The rewritten query, with any lost acronym appended.
+    """
+    wanted = ACRONYM.findall(question) or ACRONYM.findall(fallback)
+    present = set(ACRONYM.findall(rewritten))
+    missing: list[str] = []
+    for token in wanted:
+        if token not in present and token not in missing:
+            missing.append(token)
+    return f"{rewritten} {' '.join(missing)}" if missing else rewritten
 
 
 def deduplicate(docs: list[Document]) -> list[Document]:
@@ -693,11 +742,12 @@ class RetrievalAugmentedGenerator:
         the history. That rewrite is an LLM round trip.
 
         With no history there is nothing to resolve against, so the rewrite is
-        skipped and the question is searched verbatim. The prompt's other job,
-        expanding PESU abbreviations, is deliberately not worth a round trip
-        here: the rewrite expands *alongside* the original rather than replacing
-        it, so the abbreviation still reaches BM25 either way, and lexical
-        matching on those tokens is where hybrid retrieval earns its keep.
+        skipped and the question is searched verbatim -- which also keeps its
+        abbreviations, and lexical matching on those tokens is where hybrid
+        retrieval earns its keep.
+
+        What comes back is passed through :func:`preserve_acronyms`, because the
+        rewrite drops those tokens when it resolves them out of the history.
 
         Args:
             question: The user's question, as asked.
@@ -708,7 +758,13 @@ class RetrievalAugmentedGenerator:
         """
         if not chat_history:
             return question
-        return await self._rewrite_chain.ainvoke({"input": question, "chat_history": chat_history})
+        rewritten = await self._rewrite_chain.ainvoke({"input": question, "chat_history": chat_history})
+        # The turn being resolved against, which is where an elliptical question
+        # gets its subject. The most recent one only: the rewrite prompt is told
+        # to prefer the most recent topic, so reaching further back would put
+        # tokens from an abandoned one into the query.
+        recent = next((m.content for m in reversed(chat_history) if isinstance(m, HumanMessage)), "")
+        return preserve_acronyms(rewritten, question, recent)
 
     async def retrieve(self, question: str, chat_history: list) -> tuple[str, list[Document]]:
         """Find the documents that should answer a question.
