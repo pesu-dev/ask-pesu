@@ -66,6 +66,10 @@ db = [
     "anytree>=2.13.0",
     "fastembed>=0.8.0",
     "praw>=7.8.1",
+    # Starlette parses a multipart form only when this is installed, and the
+    # backfill endpoint takes the export as an upload. FastAPI's own dependency
+    # on it is optional, so it has to be named here.
+    "python-multipart>=0.0.20",
 ]
 
 # Dependency groups rather than extras, because uv installs these by default and

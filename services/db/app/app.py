@@ -24,6 +24,7 @@ from contextlib import asynccontextmanager
 import praw
 import uvicorn
 from app import contract as contract_mod
+from app.backfill_api import router as backfill_router
 from app.utils import build_thread_string, convert_to_uuid
 from dotenv import load_dotenv
 from fastapi import FastAPI
@@ -378,6 +379,10 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+# The backfill endpoint. It shares nothing with the listener above except the
+# process and the two cores; see app/backfill_api.py.
+app.include_router(backfill_router)
 
 
 @app.get("/", response_class=HTMLResponse)

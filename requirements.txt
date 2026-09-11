@@ -181,6 +181,8 @@ pygments==2.21.0
     # via rich
 python-dotenv==1.2.3
     # via ask-pesu (pyproject.toml)
+python-multipart==0.0.32
+    # via ask-pesu (pyproject.toml)
 pytz==2026.3.post1
     # via ask-pesu (pyproject.toml)
 pyyaml==6.0.3
