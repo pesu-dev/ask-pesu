@@ -113,7 +113,7 @@ REQUIRED_METADATA = ("permalink", "post_id", "root_comment_score")
 _REFUSAL_STATUSES = (402, 429)
 
 
-def _quota_refusal(error: BaseException) -> int | None:
+def quota_refusal(error: BaseException) -> int | None:
     """Classify a failure as the provider refusing us on budget, or not.
 
     ``huggingface_hub`` raises ``HfHubHTTPError`` with the response attached, so
@@ -507,6 +507,7 @@ class RetrievalAugmentedGenerator:
         self.rerank_cfg = self.config["rag"]["rerank"]
         self.sources_cfg = self.config["rag"]["sources"]
         self.history_cfg = self.config["rag"]["history"]
+        self.limits_cfg = self.config["rag"]["limits"]
 
         # The collection name, embedding model and vector geometry are contracted
         # with services/db, not configured per service. Everything is checked
@@ -1048,6 +1049,12 @@ class RetrievalAugmentedGenerator:
         # on every request. Skip any turn whose query equals the current one:
         # clients may include the in-flight question, and feeding it back as
         # already-answered confuses the rewrite step.
+        # Oldest turns dropped rather than the request refused. A client that
+        # has accumulated a long conversation would otherwise fail every request
+        # until the user cleared it, and what resolves a follow-up is the recent
+        # end of the conversation regardless. `history` itself has no ceiling --
+        # it is whatever the client posted.
+        history = history[-self.limits_cfg["history_turns"] :]
         turns = [(HumanMessage(convo.query), AIMessage(convo.answer)) for convo in history if query != convo.query]
         chat_history = [message for turn in turns for message in turn]
 
@@ -1082,46 +1089,66 @@ class RetrievalAugmentedGenerator:
         token_count = 0
 
         try:
-            # Retrieval runs to completion before the answer starts
-            # streaming, which is unavoidable -- nothing can be generated
-            # without context. Holding the documents here rather than inside a
-            # chain is what lets the stream report its own sources.
-            search_query, docs = await self.retrieve(query, chat_history)
-            logging.info(f"Retrieved {len(docs)} documents for {search_query!r}")
+            # One deadline over everything. The per-call `timeout` in the llm
+            # config bounds a single provider call, and this pipeline makes
+            # several in sequence, so nothing bounded how long a request could
+            # take in total. It cannot become a 504: Starlette commits the
+            # status line before iterating this generator, so retrieval below is
+            # already running against sent headers, and the only thing left to
+            # report with is an error event.
+            async with asyncio.timeout(self.limits_cfg["timeout_seconds"]):
+                # Retrieval runs to completion before the answer starts
+                # streaming, which is unavoidable -- nothing can be generated
+                # without context. Holding the documents here rather than inside a
+                # chain is what lets the stream report its own sources.
+                search_query, docs = await self.retrieve(query, chat_history)
+                logging.info(f"Retrieved {len(docs)} documents for {search_query!r}")
 
-            # Before the first token, so a client can render citations while the
-            # answer is still being written. Emitted even when empty, so the UI
-            # can distinguish "no sources" from "sources not sent yet".
-            sources = describe_sources(docs, self.sources_cfg["snippet_chars"])
-            yield json.dumps({"type": "sources", "sources": sources}) + "\n"
+                # Before the first token, so a client can render citations while the
+                # answer is still being written. Emitted even when empty, so the UI
+                # can distinguish "no sources" from "sources not sent yet".
+                sources = describe_sources(docs, self.sources_cfg["snippet_chars"])
+                yield json.dumps({"type": "sources", "sources": sources}) + "\n"
 
-            async for chunk in answer_chain.astream(
-                {
-                    "question": query,
-                    "context": self.format_docs(docs),
-                    "chat_history": recent_history,
-                }
-            ):
-                token_count += 1
+                async for chunk in answer_chain.astream(
+                    {
+                        "question": query,
+                        "context": self.format_docs(docs),
+                        "chat_history": recent_history,
+                    }
+                ):
+                    token_count += 1
 
-                # Normal mode has no reasoning to separate, so chunks pass
-                # straight through as answer tokens.
-                if not thinking:
-                    yield json.dumps({"type": "token", "content": chunk}) + "\n"
-                    continue
+                    # Normal mode has no reasoning to separate, so chunks pass
+                    # straight through as answer tokens.
+                    if not thinking:
+                        yield json.dumps({"type": "token", "content": chunk}) + "\n"
+                        continue
 
-                pending, phase, events = self._process_thinking_chunk(chunk, pending, phase)
-                for event in events:
+                    pending, phase, events = self._process_thinking_chunk(chunk, pending, phase)
+                    for event in events:
+                        yield json.dumps(event) + "\n"
+
+                # Not guarded on `pending`: a reasoning block that never closed has
+                # an error to report whether or not anything is still buffered.
+                for event in self._flush_pending(pending, phase):
                     yield json.dumps(event) + "\n"
-
-            # Not guarded on `pending`: a reasoning block that never closed has
-            # an error to report whether or not anything is still buffered.
-            for event in self._flush_pending(pending, phase):
-                yield json.dumps(event) + "\n"
-            logging.info(f"Stream complete. Total chunks: {token_count}")
+                logging.info(f"Stream complete. Total chunks: {token_count}")
+        except TimeoutError:
+            budget = self.limits_cfg["timeout_seconds"]
+            logging.error(f"Request exceeded the {budget}s budget for {query!r}")
+            yield (
+                json.dumps(
+                    {
+                        "type": "error",
+                        "content": f"This took longer than {budget}s and was stopped. Please try again.",
+                    }
+                )
+                + "\n"
+            )
         except Exception as e:
             logging.error(f"Error in generate(): {str(e)}", exc_info=True)
-            refusal = _quota_refusal(e)
+            refusal = quota_refusal(e)
             if on_quota_exceeded is not None and refusal is not None:
                 # Tell the caller to start a cooldown so subsequent requests are
                 # rejected up front instead of failing mid-stream. A 402 waits

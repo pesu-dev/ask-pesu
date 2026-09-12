@@ -107,6 +107,30 @@ rag:
     # Worth raising only on hardware with cores to spare.
     concurrency: 1
 
+  # Bounds on a single request. POST /ask is public and unauthenticated, and
+  # every accepted request spends inference quota.
+  limits:
+    # Conversation turns a request may carry. Beyond this the OLDEST are
+    # dropped rather than the request refused: a client that has accumulated a
+    # long conversation would otherwise start failing every request until the
+    # user cleared it, and the recent turns are the ones that resolve a
+    # follow-up anyway. `history.answer_turns` narrows it further for the
+    # answer prompt; this is the bound on what reaches retrieval.
+    #
+    # NOT MEASURED. Fifty is a guess -- far more than a real conversation, and
+    # small enough that a request cannot carry an unbounded number of prior
+    # answers into the rewrite prompt.
+    history_turns: 50
+    # Seconds for the whole of /ask, across retrieval and every LLM call. The
+    # per-call `timeout` under llm bounds one provider call; this bounds the
+    # request, which makes several in sequence.
+    #
+    # Measured against a deployed Space: retrieval takes about 5 seconds and a
+    # full answer 10 to 32, so this is roughly six times the worst observed
+    # case. It exists to stop a stuck provider holding a connection, not to
+    # enforce a pleasant wait -- a user gives up long before it fires.
+    timeout_seconds: 180
+
   # How much of the conversation each LLM call receives.
   history:
     # Turns of conversation the ANSWER prompt is given, most recent last. One
