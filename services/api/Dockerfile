@@ -31,8 +31,9 @@ COPY requirements.txt /app/requirements.txt
 COPY --from=frontend-builder /app/frontend/dist frontend/dist
 
 # Set Hugging Face cache directory
-RUN mkdir -p /app/.cache/huggingface
-RUN chmod -R 777 /app/.cache
+# Owned by the uid the service runs as, rather than world-writable: the
+# process only needs to write its own caches.
+RUN mkdir -p /app/.cache/huggingface && chown -R 1000:1000 /app/.cache
 ENV HF_HOME=/app/.cache/huggingface
 
 # Set Torch cache directory

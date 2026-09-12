@@ -137,7 +137,13 @@ export async function askStream({
 
   while (true) {
     const { done, value } = await reader.read();
-    if (done) break;
+    if (done) {
+      // Flush the bytes the decoder is holding back for a partial character.
+      // Without this a final multi-byte character is dropped; the tail handling
+      // below is what then emits it.
+      buffer += decoder.decode();
+      break;
+    }
     buffer += decoder.decode(value, { stream: true });
 
     // Process buffer in chunks, leaving partial lines for the next read
