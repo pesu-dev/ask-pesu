@@ -42,6 +42,17 @@ class AskSourceModel(BaseModel):
         json_schema_extra={"example": "The Placement Policy if any of you are confused: 1) If you get a T1..."},
     )
 
+    created_utc: float | None = Field(
+        None,
+        title="Posted",
+        description=(
+            "Unix timestamp of the submission, for showing how old the discussion is. This is the "
+            "post's time, not the cited comment's; it tracks the thread's age closely but is not the "
+            "answer's own date. Null when the stored thread carries no usable timestamp."
+        ),
+        json_schema_extra={"example": 1715000000.0},
+    )
+
 
 class AskStreamEventModel(BaseModel):
     """One line of the ``/ask`` NDJSON stream.

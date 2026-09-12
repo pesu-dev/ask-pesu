@@ -144,6 +144,10 @@ Anything older than that window comes from [the backfill scripts](#backfilling-h
    documents with equal upvotes keep the relevance order they arrived in. The best `top_n` go on.
 7. **Generate** — `Qwen/Qwen3-4B-Instruct-2507` via Hugging Face Inference (`nscale` provider),
    streamed token by token, after the retrieved threads have been reported as a `sources` event.
+   The prompt is the system rules, then the last `history.answer_turns` turns of conversation,
+   then the question and the context. The history is there so the model can tell what a
+   follow-up refers to; the system prompt forbids answering from it, so every fact still has to
+   come from the retrieved threads.
 
 Both retrieval-side LLM calls always use the **primary** model, even in thinking mode, so
 thinking tokens are never spent reformulating a question.
@@ -171,7 +175,7 @@ without buffering the whole response:
 | `type` | Meaning |
 |---|---|
 | `step` | Reasoning text, thinking mode only (the content between `<think>` and `</think>`) |
-| `sources` | The posts the answer draws on. Sent **once, before the first token**, carrying `permalink`, `title` and `snippet`, one entry per post. May be empty |
+| `sources` | The posts the answer draws on. Sent **once, before the first token**, carrying `permalink`, `title`, `snippet` and `created_utc`, one entry per post. May be empty |
 | `token` | A chunk of the answer |
 | `error` | Generation failed; `content` carries the message |
 | `done` | Always last, on success and on failure alike |
@@ -726,6 +730,7 @@ Runtime behaviour that is *not* part of the collection contract lives in
 | `rerank.top_n` | `6` | Documents that reach the answer prompt. **Not measured** — see below |
 | `rerank.concurrency` | `1` | Cross-encoder passes at once; serialised because two vCPUs thrash |
 | `sources.snippet_chars` | `200` | Preview length in the `sources` event; presentation only |
+| `history.answer_turns` | `4` | Turns of conversation the **answer** prompt receives. Retrieval is not bounded by it. **Not measured** — see below |
 | `prompts.*` | — | System, answer and query-rewrite prompts |
 
 **On the two thresholds.** There is deliberately only one that filters. A retrieval-side cutoff
@@ -772,6 +777,25 @@ everything it drops has already cleared the cutoff.
 directs repeated questions to existing threads, so its most-referenced answers are old on
 purpose, and its most prolific contributors wrote the bulk of them years ago at well above the
 typical score. Weighting by recency demotes exactly what the community treats as canonical.
+
+The age is reported instead of ranked on. Each entry in the `sources` event carries
+`created_utc`, and each thread in the answer's context is headed with its month, so the reader
+can see how old an answer is and the model can say so. Both are the submission's timestamp, not
+the cited comment's. Deciding *when* age should matter is a property of the question rather than
+of the document — "what are the fees" wants a recent source, "how is SGPA calculated" does not —
+and that is still open.
+
+**`history.answer_turns` is a guess and is labelled as one in the config.** Only the answer
+prompt is bounded by it; the rewrite step still receives the whole conversation, because what a
+follow-up refers to can be several turns back while the answer only has to know what is being
+asked now. The bound exists because a request's `history` has no ceiling of its own, and every
+turn the answer prompt carries is a full previous answer sitting beside the retrieved documents.
+
+The answer prompt is given that history **only to resolve what the user is referring to**, and
+the system prompt forbids answering from it. Without that rule the model gains a second and far
+more convenient source of facts than the retrieved threads — its own previous answers — and can
+re-serve them when retrieval comes back weak, producing a confident answer whose `sources` do
+not support it.
 
 Prompt and model changes go here first — they are configuration, not code. Anything that would
 make already-stored vectors unreadable belongs in `conf/collection.yaml` instead.

@@ -51,6 +51,7 @@ import asyncio
 import datetime
 import json
 import logging
+import math
 import os
 from collections.abc import AsyncGenerator, Callable
 
@@ -62,7 +63,7 @@ from langchain_core.callbacks import CallbackManagerForRetrieverRun
 from langchain_core.documents.base import Document
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.output_parsers import StrOutputParser
-from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder, PromptTemplate
 from langchain_core.retrievers import BaseRetriever
 from langchain_huggingface import ChatHuggingFace, HuggingFaceEndpoint
 from langchain_huggingface.embeddings import HuggingFaceEmbeddings
@@ -215,6 +216,57 @@ def deduplicate(docs: list[Document]) -> list[Document]:
     return out
 
 
+def _created_utc(doc: Document) -> float | None:
+    """The thread's timestamp, or None when it is missing or not a number.
+
+    This is the SUBMISSION's time, not the root comment's. It tracks the age of
+    the discussion closely -- root comments arrive within a day of the post
+    about nine times in ten -- but it is not the answer's own date, so do not
+    present it as one.
+
+    Qdrant round-trips payloads through JSON, so a value that was written as a
+    string comes back as one; anything not already a number is dropped rather
+    than coerced, since a citation is not worth failing a request over.
+
+    Non-finite and non-positive values are dropped too. A NaN would reach the
+    stream as the bare token ``NaN``, which ``json.dumps`` emits happily and
+    ``JSON.parse`` rejects -- one bad payload would break the client mid-answer.
+    """
+    value = doc.metadata.get("created_utc")
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    value = float(value)
+    return value if math.isfinite(value) and value > 0 else None
+
+
+def _thread_month(doc: Document) -> str:
+    """The thread's month and year for the context block, or "" if unknown.
+
+    Month rather than a full date: the model is being told roughly how old an
+    answer is so it can say so, and a precise day would invite it to quote one.
+    """
+    created = _created_utc(doc)
+    if created is None:
+        return ""
+    try:
+        return datetime.datetime.fromtimestamp(created, tz=datetime.UTC).strftime("%B %Y")
+    except (OverflowError, OSError, ValueError):
+        return ""
+
+
+def _heading(doc: Document) -> str:
+    """The line a thread's block in the context is prefixed with.
+
+    Empty when the document carries no permalink, in which case the block is
+    still emitted -- losing a citation beats losing the answer.
+    """
+    permalink = doc.metadata.get("permalink")
+    if not permalink:
+        return ""
+    month = _thread_month(doc)
+    return f"{permalink} (posted {month})\n" if month else f"{permalink}\n"
+
+
 def describe_sources(docs: list[Document], snippet_chars: int = 200) -> list[dict]:
     """Turn retrieved documents into the citations the stream reports.
 
@@ -253,7 +305,14 @@ def describe_sources(docs: list[Document], snippet_chars: int = 200) -> list[dic
         # finally to the raw document -- an empty preview is worse than a rough
         # one.
         snippet = " ".join((tree or rest or doc.page_content).split())[:snippet_chars]
-        out.append({"permalink": permalink, "title": title or permalink, "snippet": snippet})
+        out.append(
+            {
+                "permalink": permalink,
+                "title": title or permalink,
+                "snippet": snippet,
+                "created_utc": _created_utc(doc),
+            }
+        )
     return out
 
 
@@ -388,6 +447,7 @@ class RetrievalAugmentedGenerator:
         self.retrieval_cfg = self.config["rag"]["retrieval"]
         self.rerank_cfg = self.config["rag"]["rerank"]
         self.sources_cfg = self.config["rag"]["sources"]
+        self.history_cfg = self.config["rag"]["history"]
 
         # The collection name, embedding model and vector geometry are contracted
         # with services/db, not configured per service. Everything is checked
@@ -464,11 +524,22 @@ class RetrievalAugmentedGenerator:
         )
 
         # Answer prompt: system rules (answer only from context, do not
-        # reprint the sources, refuse off-topic questions) plus the human turn
-        # carrying {question} and the retrieved {context}.
+        # reprint the sources, refuse off-topic questions), then the recent
+        # conversation, then the human turn carrying {question} and the
+        # retrieved {context}.
+        #
+        # The history is there so a follow-up can be understood -- "what about
+        # ECE?" says nothing on its own. It is also a second and far more
+        # convenient source of facts than the context, because it holds this
+        # model's own previous answers, so the system prompt carries a rule
+        # forbidding answering from it. The two are a pair; neither works alone.
+        #
+        # The retrieved context sits in the final turn, after the history, so
+        # what the answer must be drawn from is what the model read last.
         self.prompt = ChatPromptTemplate.from_messages(
             [
                 ("system", self.config["rag"]["prompts"]["system_prompt"]),
+                MessagesPlaceholder("chat_history"),
                 ("human", self.config["rag"]["prompts"]["answer_prompt"]),
             ]
         )
@@ -579,6 +650,15 @@ class RetrievalAugmentedGenerator:
         ):
             if stale in rag_cfg:
                 raise ValueError(f"conf/config.yaml: rag.{stale} is not read -- {guidance}.")
+
+        answer_turns = self.history_cfg["answer_turns"]
+        if not isinstance(answer_turns, int) or isinstance(answer_turns, bool) or answer_turns < 0:
+            raise ValueError(
+                f"conf/config.yaml: rag.history.answer_turns must be a non-negative integer, not "
+                f"{answer_turns!r}. It slices the conversation from the end, so a negative value "
+                f"drops the OLDEST turns and keeps every other one -- the prompt would then grow "
+                f"with the conversation, which is the one thing this setting exists to stop."
+            )
 
         mode = self.retrieval_cfg["mode"]
         if mode not in ("dense", "hybrid"):
@@ -699,8 +779,7 @@ class RetrievalAugmentedGenerator:
         index_of: dict[str, int] = {}
         for doc in docs:
             post_id = doc.metadata.get("post_id")
-            permalink = doc.metadata.get("permalink")
-            heading = f"{permalink}\n" if permalink else ""
+            heading = _heading(doc)
             head, separator, tree = doc.page_content.partition("COMMENT TREE:")
             # A document that does not carry the expected layout is emitted
             # whole rather than dropped or mangled.
@@ -877,11 +956,28 @@ class RetrievalAugmentedGenerator:
         # on every request. Skip any turn whose query equals the current one:
         # clients may include the in-flight question, and feeding it back as
         # already-answered confuses the rewrite step.
-        chat_history = []
-        for convo in history:
-            if query != convo.query:
-                chat_history.append(HumanMessage(convo.query))
-                chat_history.append(AIMessage(convo.answer))
+        turns = [(HumanMessage(convo.query), AIMessage(convo.answer)) for convo in history if query != convo.query]
+        chat_history = [message for turn in turns for message in turn]
+
+        # What the ANSWER prompt sees, which is not what retrieval sees, in two
+        # ways.
+        #
+        # Only whole turns. The client sends a turn with an empty answer when
+        # one was aborted or failed, deliberately, because the question still
+        # says what the user was asking about. Rendered into the rewrite
+        # prompt's text that is harmless, but here it would become a real empty
+        # assistant message in the chat completion, which providers variously
+        # reject or answer strangely.
+        #
+        # And only the last few. The rewrite step keeps the whole conversation,
+        # because the thing a follow-up refers to can be several turns back; the
+        # answer only has to know what is being asked now, and every turn it
+        # carries is a full previous answer sitting alongside the retrieved
+        # documents. `history` itself has no ceiling, so without this the prompt
+        # grows with the conversation and nothing stops it.
+        answer_turns = self.history_cfg["answer_turns"]
+        complete = [turn for turn in turns if turn[0].content.strip() and turn[1].content.strip()]
+        recent_history = [message for turn in complete[-answer_turns:] for message in turn] if answer_turns else []
 
         answer_chain = self._answer_thinking if thinking else self._answer_primary
 
@@ -911,6 +1007,7 @@ class RetrievalAugmentedGenerator:
                 {
                     "question": query,
                     "context": self.format_docs(docs),
+                    "chat_history": recent_history,
                 }
             ):
                 token_count += 1

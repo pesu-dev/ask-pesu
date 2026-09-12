@@ -52,7 +52,8 @@ ask_docs = ApiDocs(
                     "example": (
                         '{"type": "sources", "sources": [{"permalink": '
                         '"https://reddit.com/r/PESU/comments/1kq6d08/", "title": "Bootstrap 2024 megathread", '
-                        '"snippet": "bootstrap is a week of intro sessions before classes start..."}]}\n'
+                        '"snippet": "bootstrap is a week of intro sessions before classes start...", '
+                        '"created_utc": 1715000000.0}]}\n'
                         '{"type": "token", "content": "Bootstrap at PES University is "}\n'
                         '{"type": "token", "content": "a week-long series of activities for freshers."}\n'
                         '{"type": "done"}\n'

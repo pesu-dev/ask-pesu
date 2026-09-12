@@ -183,11 +183,15 @@ async def test_stream() -> AsyncIterator[str]:
                         "permalink": "https://reddit.com/r/PESU/comments/1phgfw0/",
                         "title": '[Question] How does "relative grading" work at our clg?',
                         "snippet": "relative grading has always been a mystery in pes, the coe decides a cutoff...",
+                        "created_utc": 1763000000.0,
                     },
                     {
+                        # Deliberately years older than the one above, so the UI
+                        # is exercised on a stale thread as well as a fresh one.
                         "permalink": "https://reddit.com/r/PESU/comments/1ikhflo/",
                         "title": "GPA Doubt",
                         "snippet": "wrt to second year idt it would be too difficult as long as you put in efforts...",
+                        "created_utc": 1644000000.0,
                     },
                 ],
             }

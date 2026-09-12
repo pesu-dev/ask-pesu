@@ -37,6 +37,10 @@ export interface StreamSource {
   permalink: string;
   title: string;
   snippet: string;
+  // Unix seconds, and the SUBMISSION's time rather than the cited comment's.
+  // Null when the stored thread carries no usable timestamp, so treat it as
+  // optional at every use.
+  created_utc?: number | null;
 }
 
 // One line of the /ask stream. Mirrors AskStreamEventModel in
