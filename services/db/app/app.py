@@ -15,9 +15,9 @@ see :mod:`app.contract`.
 
 import asyncio
 import html
+import logging
 import os
 import threading
-import traceback
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -59,6 +59,23 @@ listener_error = None
 # exit promptly -- it is a daemon, so it never holds up process exit.
 shutdown = threading.Event()
 
+# Consecutive failed writes before /health starts reporting a problem. The
+# listener treats everything except a contract violation as transient and
+# re-enters the stream, which is right for a network blip and wrong for a
+# revoked key or a deleted collection -- those retry forever while /health
+# answers 200. Counting consecutive failures separates the two without having to
+# classify the exception: a blip is followed by a success, a broken writer is
+# not.
+#
+# NOT MEASURED. Five is a guess, low enough to notice a real outage quickly and
+# high enough that a run of flaky requests does not trip it.
+MAX_CONSECUTIVE_WRITE_FAILURES = 5
+
+# Failed writes since the last successful one. Only ever touched from the
+# listener thread and read from the request path, where a stale read by one
+# iteration does not matter.
+consecutive_write_failures = 0
+
 # How far back the startup catch-up looks. The stream cannot see anything posted
 # before it opens, so this is what covers a restart -- generous on purpose, since
 # writes are idempotent and the service has no way to know how long it was down.
@@ -85,12 +102,21 @@ def update_chunk(chunk_id: str, text: str, metadata: dict) -> None:
     Raises:
         ContractViolationError: If the payload's keys differ from the contract.
     """
+    global consecutive_write_failures
+
     contract_mod.validate_payload(contract, metadata)
-    vector_store.add_texts(
-        texts=[text],
-        metadatas=[metadata],
-        ids=[chunk_id],
-    )
+    try:
+        vector_store.add_texts(
+            texts=[text],
+            metadatas=[metadata],
+            ids=[chunk_id],
+        )
+    except Exception:
+        # Counted, then re-raised unchanged: the listener still decides whether
+        # to carry on, and this only records that the write did not land.
+        consecutive_write_failures += 1
+        raise
+    consecutive_write_failures = 0
 
 
 def get_root_comment(comment: Comment) -> Comment:
@@ -190,7 +216,7 @@ def catch_up(limit: int = CATCH_UP_COMMENTS) -> None:
     Args:
         limit: How many recent comments to look back over.
     """
-    print(f"Catching up on the last {limit} r/PESU comments...")
+    logging.info(f"Catching up on the last {limit} r/PESU comments...")
     seen: set[str] = set()
     written = 0
     for comment in subreddit.comments(limit=limit):
@@ -207,7 +233,7 @@ def catch_up(limit: int = CATCH_UP_COMMENTS) -> None:
         seen.add(root_comment.id)
         if index_comment(comment, root_comment=root_comment):
             written += 1
-    print(f"Catch-up complete: {written} threads indexed from {len(seen)} distinct threads seen.")
+    logging.info(f"Catch-up complete: {written} threads indexed from {len(seen)} distinct threads seen.")
 
 
 def listen_comments() -> None:
@@ -234,30 +260,26 @@ def listen_comments() -> None:
     except contract_mod.ContractViolationError as error:
         # Same fatal case as below: a payload the reader cannot use.
         listener_error = str(error)
-        print("FATAL: contract violation during catch-up, stopping:")
-        traceback.print_exc()
+        logging.exception("FATAL: contract violation during catch-up, stopping.")
         return
     except Exception:
         # Anything else is not worth refusing to stream over -- the catch-up is
         # a recovery pass, and the live stream is the service's actual job.
-        print("Catch-up failed; continuing to the live stream anyway:")
-        traceback.print_exc()
+        logging.exception("Catch-up failed; continuing to the live stream anyway.")
 
     while not shutdown.is_set():
         try:
             for comment in subreddit.stream.comments(skip_existing=True):
                 if index_comment(comment):
-                    print("Updated chunk:", comment.id)
+                    logging.info(f"Updated chunk: {comment.id}")
         except contract_mod.ContractViolationError as error:
             # A payload schema mismatch is a code/contract bug, not a transient
             # failure -- retrying cannot fix it, so stop and surface it.
             listener_error = str(error)
-            print("FATAL: contract violation in listener, stopping:")
-            traceback.print_exc()
+            logging.exception("FATAL: contract violation in listener, stopping.")
             return
         except Exception:
-            print("Unexpected error in listener:")
-            traceback.print_exc()
+            logging.exception("Unexpected error in listener.")
 
 
 def background_listener() -> None:
@@ -298,7 +320,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # exists, checks its geometry and raises rather than writing into a
     # collection services/api will not be able to read.
     created = contract_mod.ensure_collection(contract, client)
-    print(f"Collection {contract.name!r} {'created' if created else 'already exists and matches the contract'}")
+    logging.info(f"Collection {contract.name!r} {'created' if created else 'already exists and matches the contract'}")
 
     # Hybrid, so every point carries a sparse BM25 vector alongside the dense
     # one. Writing dense-only would leave the collection's sparse vector empty
@@ -364,12 +386,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         raise RuntimeError(f"Reddit credentials rejected, or r/PESU unreachable: {error}") from error
 
     background_listener()
-    print("Background listener started.")
+    logging.info("Background listener started.")
 
     yield
 
     shutdown.set()
-    print("Shutdown requested; listener will stop after its current wait.")
+    logging.info("Shutdown requested; listener will stop after its current wait.")
 
 
 app = FastAPI(
@@ -416,11 +438,43 @@ There is no interface here; see <a href="/health">/health</a>.</p>
 
 @app.get("/health")
 async def health() -> JSONResponse:
-    """Report writer health; 503 once the listener has stopped on a contract violation."""
+    """Report writer health; 503 once the writer has stopped or stopped landing writes."""
     if listener_error:
         return JSONResponse({"status": "error", "detail": listener_error}, status_code=503)
+    if consecutive_write_failures >= MAX_CONSECUTIVE_WRITE_FAILURES:
+        return JSONResponse(
+            {
+                "status": "error",
+                "detail": (
+                    f"{consecutive_write_failures} consecutive writes to {contract.name!r} have failed. "
+                    f"The listener is still running and still retrying; check the Qdrant key, the URL, "
+                    f"and that the collection still exists."
+                ),
+            },
+            status_code=503,
+        )
     return JSONResponse({"status": "ok"})
 
 
 if __name__ == "__main__":
+    # `force` is load-bearing, not tidiness. basicConfig() does nothing at all if
+    # the root logger already has a handler, and importing this module pulls in
+    # the ML stack, something in which installs one.
+    #
+    # Set here rather than at import: uvicorn is given an import string and
+    # re-imports this module, but the root logger is process-wide and survives
+    # that, so configuring it once before the server starts is enough.
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(levelname)s - %(filename)s:%(funcName)s:%(lineno)d - %(message)s",
+        force=True,
+    )
+
+    # Libraries that narrate every HTTP request at INFO. Loading the embedding
+    # model alone makes a dozen calls to huggingface.co, and praw makes one per
+    # level of a nested comment, so left alone these bury the listener's own
+    # lines completely. Their warnings and errors still come through.
+    for noisy in ("httpx", "httpcore", "urllib3", "sentence_transformers", "filelock", "prawcore"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
+
     uvicorn.run("app.app:app", host="0.0.0.0", port=7860)
