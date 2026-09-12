@@ -185,12 +185,16 @@ rag:
         AIML = Artificial Intelligence & Machine Learning, BT = Biotechnology
       - Admission routes: KCET, JEE Mains, management quota
       - Grading: SGPA (semester GPA), CGPA (cumulative GPA)
-      - Expand any other abbreviations including the above when they appear in the question.
+      - Expand any other abbreviations including the above.
 
       CRITICAL: expand an abbreviation ALONGSIDE the original, never in place of it.
       Write "CSE (Computer Science Engineering)", not "Computer Science Engineering".
       Retrieval searches a lexical index as well as a semantic one, and the threads themselves
       say "CSE" -- replacing the abbreviation deletes the exact token that matches them.
+
+      This applies to abbreviations you take from the chat history just as much as to ones in
+      the question. Resolving "is it hard?" against a conversation about CSE at RR must produce
+      a question that still contains "CSE" and "RR", not only their expansions.
 
       Rewrite rules:
       1. ONLY use the chat history if the user's question is ambiguous or refers to previous context (e.g., pronouns like 'he', 'she', 'it', 'they', 'that').
