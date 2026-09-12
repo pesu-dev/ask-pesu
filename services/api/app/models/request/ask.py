@@ -6,6 +6,15 @@ rejected rather than becoming ``True`` -- so a malformed client fails visibly.
 
 from pydantic import BaseModel, ConfigDict, Field
 
+# Longest question accepted. A long real question is a couple of hundred
+# characters, so this is an order of magnitude of headroom over anything anyone
+# types, and it stops /ask being handed a megabyte to embed and rerank.
+#
+# Here rather than in conf/config.yaml because pydantic reads it when the class
+# is defined, which happens before any configuration is loaded -- and because it
+# then appears in the OpenAPI schema, where a client can see the limit.
+MAX_QUERY_CHARS = 2000
+
 
 class HistoryItem(BaseModel):
     """Model representing an item in the chat history list."""
@@ -22,7 +31,12 @@ class AskRequestModel(BaseModel):
     query: str = Field(
         ...,
         title="Query",
-        description="User's input query for the chatbot.",
+        max_length=MAX_QUERY_CHARS,
+        description=(
+            f"User's input query for the chatbot. At most {MAX_QUERY_CHARS} characters; longer is "
+            f"refused with a 422 rather than truncated, because answering a different question than "
+            f"the one asked is worse than saying no."
+        ),
         json_schema_extra={"example": "What is bootstrap?"},
     )
 

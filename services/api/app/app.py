@@ -40,7 +40,7 @@ from fastapi.staticfiles import StaticFiles
 from app.docs import ask_docs, health_docs, index_docs, quota_docs
 from app.models import AskRequestModel, HealthResponseModel, QuotaResponseModel, ShortenQueryModel
 from app.quota import QuotaExceededError, QuotaState
-from app.rag import RetrievalAugmentedGenerator
+from app.rag import RetrievalAugmentedGenerator, credits_reset_at, quota_refusal
 
 load_dotenv()
 
@@ -335,10 +335,37 @@ async def rewrite_query(payload: AskRequestModel) -> ShortenQueryModel:
 
     Under ``ENV=test`` there is no pipeline to call, so the question is truncated
     locally to the same eight-word shape the model is asked for.
+
+    That same truncation is the fallback whenever the model cannot be reached.
+    This route only names a conversation in the sidebar, so a blunter title is a
+    better outcome than an error -- unlike /ask, which has nothing to fall back
+    on and answers 429.
+
+    It uses the primary model, the one /ask gates on, so it observes the same
+    cooldown: it neither calls a model already known to be refusing, nor lets a
+    refusal here go unrecorded. Without the second half a quota failure on this
+    route left /quota reporting available.
     """
+    fallback = ShortenQueryModel(query=" ".join(payload.query.split()[:8]))
     if rag is None:
-        return ShortenQueryModel(query=" ".join(payload.query.split()[:8]))
-    return ShortenQueryModel(query=await rag.shorten_query(payload.query))
+        return fallback
+
+    PRIMARY_STATE.refresh()
+    if not PRIMARY_STATE.enabled:
+        logging.info("Primary LLM is in cooldown; naming the conversation locally.")
+        return fallback
+
+    try:
+        return ShortenQueryModel(query=await rag.shorten_query(payload.query))
+    except Exception as error:
+        refusal = quota_refusal(error)
+        if refusal is None:
+            raise
+        # The same cooldown /ask starts through its on_quota_exceeded callback. A
+        # 402 waits for the billing period to roll over, which is knowable exactly.
+        PRIMARY_STATE.disable(credits_reset_at() if refusal == 402 else None)
+        logging.warning(f"Primary LLM refused the title request ({refusal}); naming the conversation locally.")
+        return fallback
 
 
 @app.post(
