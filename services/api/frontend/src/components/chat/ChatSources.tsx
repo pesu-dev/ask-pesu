@@ -12,10 +12,8 @@ interface ChatSourcesProps {
 /**
  * Month and year a thread was posted, or "" when it is unknown or unusable.
  *
- * r/PESU sends repeat questions to existing threads, so an answer being old is
- * not the same as it being wrong -- this says how old, and leaves the reader to
- * judge. Month rather than a full date: it is the submission's timestamp, not
- * the cited comment's, so a precise day would claim more than it knows.
+ * Month, not a full date: the timestamp is the submission's, not the cited
+ * comment's.
  */
 function postedLabel(postedAt?: number | null): string {
   if (typeof postedAt !== "number" || !Number.isFinite(postedAt)) return "";

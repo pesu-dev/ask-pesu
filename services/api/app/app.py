@@ -546,12 +546,9 @@ def main() -> None:
 
     # Set up logging configuration.
     #
-    # `force` is load-bearing, not tidiness. basicConfig() does nothing at all if
-    # the root logger already has a handler, and importing this module pulls in
-    # the ML stack, something in which installs one. Without it the level and
-    # format below were both silently discarded: every logging.info in the
-    # service vanished, --debug changed nothing, and warnings came out in the
-    # default `WARNING:root:...` format rather than this one.
+    # `force` is required: basicConfig() does nothing when the root logger
+    # already has a handler, and importing this module pulls in the ML stack,
+    # something in which installs one.
     logging_level = logging.DEBUG if args.debug else logging.INFO
     logging.basicConfig(
         level=logging_level,
