@@ -336,15 +336,12 @@ async def rewrite_query(payload: AskRequestModel) -> ShortenQueryModel:
     Under ``ENV=test`` there is no pipeline to call, so the question is truncated
     locally to the same eight-word shape the model is asked for.
 
-    That same truncation is the fallback whenever the model cannot be reached.
-    This route only names a conversation in the sidebar, so a blunter title is a
-    better outcome than an error -- unlike /ask, which has nothing to fall back
-    on and answers 429.
+    That truncation is also the fallback when the model cannot be reached, since
+    this route only names a conversation in the sidebar.
 
-    It uses the primary model, the one /ask gates on, so it observes the same
-    cooldown: it neither calls a model already known to be refusing, nor lets a
-    refusal here go unrecorded. Without the second half a quota failure on this
-    route left /quota reporting available.
+    It uses the primary model, so it observes the same cooldown /ask does: it
+    does not call a model already known to be refusing, and it records a refusal
+    here so /quota reflects it.
     """
     fallback = ShortenQueryModel(query=" ".join(payload.query.split()[:8]))
     if rag is None:
@@ -361,8 +358,8 @@ async def rewrite_query(payload: AskRequestModel) -> ShortenQueryModel:
         refusal = quota_refusal(error)
         if refusal is None:
             raise
-        # The same cooldown /ask starts through its on_quota_exceeded callback. A
-        # 402 waits for the billing period to roll over, which is knowable exactly.
+        # A 402 waits for the billing period to roll over, which is knowable
+        # exactly; a 429 is not, so the caller picks.
         PRIMARY_STATE.disable(credits_reset_at() if refusal == 402 else None)
         logging.warning(f"Primary LLM refused the title request ({refusal}); naming the conversation locally.")
         return fallback

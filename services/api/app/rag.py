@@ -684,12 +684,10 @@ class RetrievalAugmentedGenerator:
         )
 
     def _validate_bounds(self) -> None:
-        """Refuse the numeric knobs that slice or time-box a request when they cannot do it.
+        """Check the numeric knobs that slice or time-box a request.
 
-        Each of these is read at request time rather than at startup, and each
-        fails quietly rather than loudly when it is wrong: a bad slice keeps the
-        whole conversation instead of the recent end of it, and a bad deadline
-        expires before retrieval begins.
+        All three are read at request time, and a wrong value fails quietly
+        rather than raising.
 
         Raises:
             ValueError: With a message naming what to change.
@@ -707,18 +705,17 @@ class RetrievalAugmentedGenerator:
         if not isinstance(history_turns, int) or isinstance(history_turns, bool) or history_turns < 1:
             raise ValueError(
                 f"conf/config.yaml: rag.limits.history_turns must be a positive integer, not "
-                f"{history_turns!r}. It slices the conversation from the end, where 0 means the "
-                f"whole list rather than none of it and a negative value drops the OLDEST turns "
-                f"and keeps every other one -- either way the request would carry an unbounded "
-                f"conversation, which is the one thing this setting exists to stop."
+                f"{history_turns!r}. It slices the conversation from the end, where 0 keeps the "
+                f"whole list and a negative value keeps everything after the oldest few, so the "
+                f"request would carry an unbounded conversation."
             )
 
         timeout_seconds = self.limits_cfg["timeout_seconds"]
         if not isinstance(timeout_seconds, int | float) or isinstance(timeout_seconds, bool) or timeout_seconds <= 0:
             raise ValueError(
                 f"conf/config.yaml: rag.limits.timeout_seconds must be a positive number, not "
-                f"{timeout_seconds!r}. Zero or less expires the deadline before retrieval starts, "
-                f"so every request would answer with a timeout error."
+                f"{timeout_seconds!r}. Zero or less expires before retrieval starts, so every "
+                f"request answers with a timeout error."
             )
 
     def _validate_config(self) -> None:
@@ -1080,11 +1077,8 @@ class RetrievalAugmentedGenerator:
         # on every request. Skip any turn whose query equals the current one:
         # clients may include the in-flight question, and feeding it back as
         # already-answered confuses the rewrite step.
-        # Oldest turns dropped rather than the request refused. A client that
-        # has accumulated a long conversation would otherwise fail every request
-        # until the user cleared it, and what resolves a follow-up is the recent
-        # end of the conversation regardless. `history` itself has no ceiling --
-        # it is whatever the client posted.
+        # `history` is whatever the client posted and has no ceiling of its
+        # own. The oldest turns are dropped; the request is not refused.
         history = history[-self.limits_cfg["history_turns"] :]
         turns = [(HumanMessage(convo.query), AIMessage(convo.answer)) for convo in history if query != convo.query]
         chat_history = [message for turn in turns for message in turn]
@@ -1120,13 +1114,12 @@ class RetrievalAugmentedGenerator:
         token_count = 0
 
         try:
-            # One deadline over everything. The per-call `timeout` in the llm
-            # config bounds a single provider call, and this pipeline makes
-            # several in sequence, so nothing bounded how long a request could
-            # take in total. It cannot become a 504: Starlette commits the
-            # status line before iterating this generator, so retrieval below is
-            # already running against sent headers, and the only thing left to
-            # report with is an error event.
+            # One deadline over the whole request; the per-call `timeout` in
+            # the llm config bounds a single provider call.
+            #
+            # It cannot be a 504. Starlette commits the status line before it
+            # iterates this generator, so retrieval below already runs against
+            # sent headers and an error event is the only way left to report.
             async with asyncio.timeout(self.limits_cfg["timeout_seconds"]):
                 # Retrieval runs to completion before the answer starts
                 # streaming, which is unavoidable -- nothing can be generated
