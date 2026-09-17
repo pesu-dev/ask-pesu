@@ -96,8 +96,7 @@ rag:
     score_threshold: 0.3
     # Documents that actually reach the answer prompt.
     #
-    # NOT MEASURED. Six is a guess -- enough threads to answer from several
-    # perspectives, few enough that the model is not reading a wall of text.
+    # NOT MEASURED. Six is a guess.
     # Not a filter: everything it drops has already cleared the cutoff, so
     # raising it costs context and lowers no quality bar.
     top_n: 6
@@ -129,10 +128,7 @@ rag:
     # whole conversation, because what a follow-up refers to can be several
     # turns back; the answer only has to know what is being asked now.
     #
-    # NOT MEASURED. Four is a guess -- enough to resolve "what about ECE?" and
-    # the turn before it, few enough that the prompt does not grow without
-    # limit. Each turn added is a full previous answer carried alongside the
-    # retrieved documents, and the request's `history` has no ceiling of its own.
+    # NOT MEASURED. Four is a guess.
     answer_turns: 4
 
   # How the retrieved threads are described in the `sources` stream event.

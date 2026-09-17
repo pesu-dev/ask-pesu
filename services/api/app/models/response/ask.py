@@ -46,9 +46,8 @@ class AskSourceModel(BaseModel):
         None,
         title="Posted",
         description=(
-            "Unix timestamp of the submission, for showing how old the discussion is. This is the "
-            "post's time, not the cited comment's; it tracks the thread's age closely but is not the "
-            "answer's own date. Null when the stored thread carries no usable timestamp."
+            "Unix timestamp of the submission, for showing how old the discussion is. The post's "
+            "time, not the cited comment's. Null when the thread carries no usable timestamp."
         ),
         json_schema_extra={"example": 1715000000.0},
     )

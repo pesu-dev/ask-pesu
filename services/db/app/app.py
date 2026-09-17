@@ -59,21 +59,15 @@ listener_error = None
 # exit promptly -- it is a daemon, so it never holds up process exit.
 shutdown = threading.Event()
 
-# Consecutive failed writes before /health starts reporting a problem. The
-# listener treats everything except a contract violation as transient and
-# re-enters the stream, which is right for a network blip and wrong for a
-# revoked key or a deleted collection -- those retry forever while /health
-# answers 200. Counting consecutive failures separates the two without having to
-# classify the exception: a blip is followed by a success, a broken writer is
-# not.
+# Consecutive failed writes before /health reports 503. Consecutive, because
+# the listener retries every failure that is not a contract violation: a blip is
+# followed by a success, a revoked key or a deleted collection is not.
 #
-# NOT MEASURED. Five is a guess, low enough to notice a real outage quickly and
-# high enough that a run of flaky requests does not trip it.
+# NOT MEASURED. Five is a guess.
 MAX_CONSECUTIVE_WRITE_FAILURES = 5
 
-# Failed writes since the last successful one. Only ever touched from the
-# listener thread and read from the request path, where a stale read by one
-# iteration does not matter.
+# Failed writes since the last successful one. Written by the listener thread
+# and read by the request path; a stale read costs nothing, so it takes no lock.
 consecutive_write_failures = 0
 
 # How far back the startup catch-up looks. The stream cannot see anything posted
@@ -112,8 +106,7 @@ def update_chunk(chunk_id: str, text: str, metadata: dict) -> None:
             ids=[chunk_id],
         )
     except Exception:
-        # Counted, then re-raised unchanged: the listener still decides whether
-        # to carry on, and this only records that the write did not land.
+        # Re-raised unchanged; the listener decides whether to carry on.
         consecutive_write_failures += 1
         raise
     consecutive_write_failures = 0
@@ -457,23 +450,20 @@ async def health() -> JSONResponse:
 
 
 if __name__ == "__main__":
-    # `force` is load-bearing, not tidiness. basicConfig() does nothing at all if
-    # the root logger already has a handler, and importing this module pulls in
-    # the ML stack, something in which installs one.
+    # `force` is required: basicConfig() does nothing when the root logger
+    # already has a handler, and importing this module pulls in the ML stack,
+    # something in which installs one.
     #
-    # Set here rather than at import: uvicorn is given an import string and
-    # re-imports this module, but the root logger is process-wide and survives
-    # that, so configuring it once before the server starts is enough.
+    # Set here rather than at import. uvicorn is given an import string and
+    # re-imports this module; the root logger is process-wide and survives that.
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s - %(levelname)s - %(filename)s:%(funcName)s:%(lineno)d - %(message)s",
         force=True,
     )
 
-    # Libraries that narrate every HTTP request at INFO. Loading the embedding
-    # model alone makes a dozen calls to huggingface.co, and praw makes one per
-    # level of a nested comment, so left alone these bury the listener's own
-    # lines completely. Their warnings and errors still come through.
+    # Libraries that log every HTTP request at INFO, which buries the
+    # listener's own lines. Their warnings and errors still come through.
     for noisy in ("httpx", "httpcore", "urllib3", "sentence_transformers", "filelock", "prawcore"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
 

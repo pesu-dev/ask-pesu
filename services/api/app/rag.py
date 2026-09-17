@@ -81,12 +81,9 @@ load_dotenv()
 THINK_START = "<think>"
 THINK_END = "</think>"
 
-# Where a thinking-mode stream has got to. Three states rather than a "done"
-# flag, because "not done" conflated two very different situations: inside a
-# reasoning block, and not yet knowing whether there is one. Treating the
-# second as the first is what made a model that emits no <think> at all --
-# a different repo_id, or a provider that moves reasoning into its own field
-# -- render its entire answer as reasoning.
+# Where a thinking-mode stream has got to. "Not yet known" is separate from
+# "inside a block": a stream that never opens <think> is answer text from its
+# first character, not reasoning.
 PHASE_START = "start"  # nothing decided yet; the opening tag may still arrive
 PHASE_THINKING = "thinking"  # inside the block, waiting for </think>
 PHASE_ANSWER = "answer"  # past it, or there never was one: all answer now
@@ -175,35 +172,27 @@ def credits_reset_at() -> datetime.datetime | None:
         return None
 
 
-# Two or more characters of capitals and digits: how the corpus writes the tokens
-# the lexical half of retrieval matches on -- CSE, RR, SGPA, PESSAT, T1, AIML.
-# A pattern rather than a list, so there is no vocabulary to keep in step with
-# the rewrite prompt's.
+# Two or more characters of capitals and digits: CSE, RR, SGPA, PESSAT, T1,
+# AIML. A pattern, so there is no vocabulary to keep in step with the rewrite
+# prompt's.
 ACRONYM = re.compile(r"\b[A-Z][A-Z0-9]+\b")
 
 
 def preserve_acronyms(rewritten: str, question: str, fallback: str = "") -> str:
     """Put back any acronym the rewrite expanded away instead of keeping.
 
-    The rewrite prompt is told to expand an abbreviation *alongside* the
-    original -- "CSE (Computer Science Engineering)" -- because BM25 matches the
-    literal token and the threads themselves say CSE. It obeys that for
-    abbreviations in the question and drops it for ones it resolves out of the
-    chat history: "is it hard?" against a conversation about CSE at RR comes
-    back as "Computer Science Engineering at the Ring Road campus", with both
-    tokens gone. That costs the whole of hybrid retrieval's advantage on the
-    request, since every alternative phrasing is written from the rewritten
-    query and inherits the loss.
+    The rewrite prompt is told to expand an abbreviation alongside the original,
+    since BM25 matches the literal token. It does that for abbreviations in the
+    question and not for ones it resolves out of the chat history, and every
+    alternative phrasing is written from the rewritten query, so a token lost
+    here is lost from every search the request makes.
 
-    ``fallback`` is consulted only when the question carries no acronym of its
-    own. A question that names one has already said what it is about, and
-    reaching into the previous turn then drags the topic the user just left back
-    into the query -- "what about ECE?" would be searched for CSE as well.
+    ``fallback`` is read only when the question carries no acronym of its own.
+    Otherwise "what about ECE?" would drag CSE in from the previous turn.
 
-    Appended rather than substituted, because where they belong in the sentence
-    is not knowable from the text. The query is only ever embedded, matched and
-    handed to the reranker, never shown to anyone, so trailing tokens cost
-    nothing but the space they take.
+    Appended rather than substituted: where a token belongs in the sentence is
+    not knowable from the text, and the query is only ever embedded, matched and
+    reranked, never shown to anyone.
 
     Args:
         rewritten: What the rewrite returned.
@@ -276,20 +265,16 @@ def deduplicate(docs: list[Document]) -> list[Document]:
 
 
 def _created_utc(doc: Document) -> float | None:
-    """The thread's timestamp, or None when it is missing or not a number.
+    """The thread's timestamp, or None when it is missing or unusable.
 
-    This is the SUBMISSION's time, not the root comment's. It tracks the age of
-    the discussion closely -- root comments arrive within a day of the post
-    about nine times in ten -- but it is not the answer's own date, so do not
-    present it as one.
+    This is the SUBMISSION's time, not the cited comment's. Do not present it as
+    the answer's own date.
 
-    Qdrant round-trips payloads through JSON, so a value that was written as a
-    string comes back as one; anything not already a number is dropped rather
-    than coerced, since a citation is not worth failing a request over.
-
-    Non-finite and non-positive values are dropped too. A NaN would reach the
-    stream as the bare token ``NaN``, which ``json.dumps`` emits happily and
-    ``JSON.parse`` rejects -- one bad payload would break the client mid-answer.
+    Qdrant round-trips payloads through JSON, so a value written as a string
+    comes back as one; anything that is not already a number is dropped rather
+    than coerced. Non-finite and non-positive values are dropped too: a NaN
+    reaches the stream as the bare token ``NaN``, which ``json.dumps`` emits and
+    ``JSON.parse`` rejects.
     """
     value = doc.metadata.get("created_utc")
     if isinstance(value, bool) or not isinstance(value, int | float):
@@ -301,8 +286,8 @@ def _created_utc(doc: Document) -> float | None:
 def _thread_month(doc: Document) -> str:
     """The thread's month and year for the context block, or "" if unknown.
 
-    Month rather than a full date: the model is being told roughly how old an
-    answer is so it can say so, and a precise day would invite it to quote one.
+    Month, not a full date -- the underlying timestamp is the submission's, so a
+    precise day would claim more than it knows.
     """
     created = _created_utc(doc)
     if created is None:
@@ -316,8 +301,8 @@ def _thread_month(doc: Document) -> str:
 def _heading(doc: Document) -> str:
     """The line a thread's block in the context is prefixed with.
 
-    Empty when the document carries no permalink, in which case the block is
-    still emitted -- losing a citation beats losing the answer.
+    Empty when the document carries no permalink; the block is still emitted,
+    without a heading.
     """
     permalink = doc.metadata.get("permalink")
     if not permalink:
@@ -588,14 +573,12 @@ class RetrievalAugmentedGenerator:
         # conversation, then the human turn carrying {question} and the
         # retrieved {context}.
         #
-        # The history is there so a follow-up can be understood -- "what about
-        # ECE?" says nothing on its own. It is also a second and far more
-        # convenient source of facts than the context, because it holds this
-        # model's own previous answers, so the system prompt carries a rule
-        # forbidding answering from it. The two are a pair; neither works alone.
+        # The history lets the model resolve a follow-up like "what about ECE?".
+        # It also holds the model's own previous answers, so the system prompt
+        # carries a rule forbidding answering from it; the placeholder and that
+        # rule go together.
         #
-        # The retrieved context sits in the final turn, after the history, so
-        # what the answer must be drawn from is what the model read last.
+        # The context sits in the final turn, after the history.
         self.prompt = ChatPromptTemplate.from_messages(
             [
                 ("system", self.config["rag"]["prompts"]["system_prompt"]),
@@ -697,8 +680,7 @@ class RetrievalAugmentedGenerator:
             raise ValueError(
                 f"conf/config.yaml: rag.history.answer_turns must be a non-negative integer, not "
                 f"{answer_turns!r}. It slices the conversation from the end, so a negative value "
-                f"drops the OLDEST turns and keeps every other one -- the prompt would then grow "
-                f"with the conversation, which is the one thing this setting exists to stop."
+                f"keeps everything after the oldest few and the prompt grows with the conversation."
             )
 
         history_turns = self.limits_cfg["history_turns"]
@@ -798,10 +780,9 @@ class RetrievalAugmentedGenerator:
         if not chat_history:
             return question
         rewritten = await self._rewrite_chain.ainvoke({"input": question, "chat_history": chat_history})
-        # The turn being resolved against, which is where an elliptical question
-        # gets its subject. The most recent one only: the rewrite prompt is told
-        # to prefer the most recent topic, so reaching further back would put
-        # tokens from an abandoned one into the query.
+        # The turn being resolved against. The most recent one only: the rewrite
+        # prompt prefers the most recent topic, so reaching further back would
+        # put tokens from an abandoned one into the query.
         recent = next((m.content for m in reversed(chat_history) if isinstance(m, HumanMessage)), "")
         return preserve_acronyms(rewritten, question, recent)
 
@@ -975,8 +956,8 @@ class RetrievalAugmentedGenerator:
         pending += chunk
 
         if phase == PHASE_START:
-            # Leading whitespace before the tag is not reasoning, and dropping it
-            # from an answer costs nothing either.
+            # Leading whitespace is not reasoning, and costs nothing to drop
+            # from an answer.
             opening = pending.lstrip()
             if opening.startswith(THINK_START):
                 pending = opening[len(THINK_START) :]
@@ -1012,13 +993,10 @@ class RetrievalAugmentedGenerator:
     def _flush_pending(self, pending: str, phase: str) -> list[dict]:
         """Emit whatever is left once the stream ends.
 
-        Reaching here still in ``PHASE_THINKING`` means the model never closed
-        its ``<think>`` block, which in practice means ``max_new_tokens`` ran out
-        while it was still reasoning. There is no answer in that case: what the
-        buffer holds is the tail of the reasoning, at most a few characters, and
-        emitting it as the answer produced a reply like "nothing" -- which reads
-        as a real answer and is worse than admitting the failure. It goes out as
-        reasoning, and the stream reports an error.
+        Still being in ``PHASE_THINKING`` means the block never closed, which in
+        practice means ``max_new_tokens`` ran out during reasoning. There is no
+        answer in that case, and the buffer holds the tail of the reasoning, so
+        it goes out as a step and the stream reports an error.
         """
         if phase == PHASE_THINKING:
             logging.warning("</think> never arrived; the answer budget ran out during reasoning.")
@@ -1086,19 +1064,13 @@ class RetrievalAugmentedGenerator:
         # What the ANSWER prompt sees, which is not what retrieval sees, in two
         # ways.
         #
-        # Only whole turns. The client sends a turn with an empty answer when
-        # one was aborted or failed, deliberately, because the question still
-        # says what the user was asking about. Rendered into the rewrite
-        # prompt's text that is harmless, but here it would become a real empty
-        # assistant message in the chat completion, which providers variously
-        # reject or answer strangely.
+        # Whole turns only. The client sends `answer: ""` for a turn that was
+        # aborted, and here that would become an empty assistant message in the
+        # chat completion, which providers variously reject or answer strangely.
         #
-        # And only the last few. The rewrite step keeps the whole conversation,
-        # because the thing a follow-up refers to can be several turns back; the
-        # answer only has to know what is being asked now, and every turn it
-        # carries is a full previous answer sitting alongside the retrieved
-        # documents. `history` itself has no ceiling, so without this the prompt
-        # grows with the conversation and nothing stops it.
+        # The last few turns only. The rewrite step keeps the whole
+        # conversation, since a referent can be several turns back; the answer
+        # needs only what is being asked now.
         answer_turns = self.history_cfg["answer_turns"]
         complete = [turn for turn in turns if turn[0].content.strip() and turn[1].content.strip()]
         recent_history = [message for turn in complete[-answer_turns:] for message in turn] if answer_turns else []
