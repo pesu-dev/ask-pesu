@@ -5,6 +5,7 @@ as indentation, which preserves who replied to whom well enough for the model to
 follow a conversation.
 """
 
+import logging
 import uuid
 
 from anytree import Node, RenderTree
@@ -42,7 +43,7 @@ def build_anytree(comment: Comment, parent_node: Node | None = None) -> Node | N
             build_anytree(reply, parent_node=node)
         return node
     except Exception as e:
-        print(f"Skipping comment due to error: {e}")
+        logging.warning(f"Skipping comment due to error: {e}")
         return None
 
 
@@ -74,7 +75,7 @@ def build_thread_string(root_comment: Comment) -> str:
     try:
         root_comment.refresh()
     except Exception as e:
-        print(f"Could not refresh root comment: {e}")
+        logging.warning(f"Could not refresh root comment: {e}")
         return "COMMENT TREE UNAVAILABLE"
 
     root_node = build_anytree(root_comment)

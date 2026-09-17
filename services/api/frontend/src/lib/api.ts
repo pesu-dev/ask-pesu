@@ -137,7 +137,14 @@ export async function askStream({
 
   while (true) {
     const { done, value } = await reader.read();
-    if (done) break;
+    if (done) {
+      // Flush rather than abandon the decoder mid-character. It only has
+      // anything held back here if the body ended partway through a character,
+      // which means the response was truncated -- so the line those bytes
+      // belong to will not parse either way. This is hygiene, not recovery.
+      buffer += decoder.decode();
+      break;
+    }
     buffer += decoder.decode(value, { stream: true });
 
     // Process buffer in chunks, leaving partial lines for the next read

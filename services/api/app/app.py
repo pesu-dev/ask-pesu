@@ -138,9 +138,31 @@ rag: RetrievalAugmentedGenerator | None = None
 THINKING_STATE = QuotaState(name="thinking", cooldown_hours=24)
 PRIMARY_STATE = QuotaState(name="primary", cooldown_hours=24)
 
+
 # Hashed asset bundles are served directly. Everything else falls through to the
 # routes below, so client-side routing still works.
 #
+class ImmutableStaticFiles(StaticFiles):
+    """Static files served with a permanent cache, for Vite's hashed build output.
+
+    Everything under /assets is content-addressed -- the build puts a hash of the
+    contents in the filename -- so a given URL's bytes never change and a browser
+    never needs to revalidate. A new deploy produces new filenames, which
+    index.html references and which are not in any cache yet.
+
+    index.html itself is the opposite case and is served `no-cache` elsewhere in
+    this module: it is the one file whose URL stays the same while its contents
+    change, and caching it would pin a client to the previous build's asset
+    names.
+    """
+
+    def file_response(self, *args: object, **kwargs: object) -> Response:
+        """Add the cache header to whatever the base class decided to send."""
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        return response
+
+
 # Mounted only when the build output is actually there. In the image it always
 # is -- the Dockerfile's first stage builds the frontend and copies dist/ in --
 # but the documented local workflow runs this server on its own and lets Vite
@@ -151,7 +173,7 @@ FRONTEND_BUILT = os.path.isdir(f"{DIST_DIR}/assets")
 if FRONTEND_BUILT:
     app.mount(
         "/assets",
-        StaticFiles(directory=f"{DIST_DIR}/assets"),
+        ImmutableStaticFiles(directory=f"{DIST_DIR}/assets"),
         name="assets",
     )
 else:
