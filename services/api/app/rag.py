@@ -683,6 +683,44 @@ class RetrievalAugmentedGenerator:
             template=template.replace("{count}", str(self.retrieval_cfg["query_expansions"])),
         )
 
+    def _validate_bounds(self) -> None:
+        """Refuse the numeric knobs that slice or time-box a request when they cannot do it.
+
+        Each of these is read at request time rather than at startup, and each
+        fails quietly rather than loudly when it is wrong: a bad slice keeps the
+        whole conversation instead of the recent end of it, and a bad deadline
+        expires before retrieval begins.
+
+        Raises:
+            ValueError: With a message naming what to change.
+        """
+        answer_turns = self.history_cfg["answer_turns"]
+        if not isinstance(answer_turns, int) or isinstance(answer_turns, bool) or answer_turns < 0:
+            raise ValueError(
+                f"conf/config.yaml: rag.history.answer_turns must be a non-negative integer, not "
+                f"{answer_turns!r}. It slices the conversation from the end, so a negative value "
+                f"drops the OLDEST turns and keeps every other one -- the prompt would then grow "
+                f"with the conversation, which is the one thing this setting exists to stop."
+            )
+
+        history_turns = self.limits_cfg["history_turns"]
+        if not isinstance(history_turns, int) or isinstance(history_turns, bool) or history_turns < 1:
+            raise ValueError(
+                f"conf/config.yaml: rag.limits.history_turns must be a positive integer, not "
+                f"{history_turns!r}. It slices the conversation from the end, where 0 means the "
+                f"whole list rather than none of it and a negative value drops the OLDEST turns "
+                f"and keeps every other one -- either way the request would carry an unbounded "
+                f"conversation, which is the one thing this setting exists to stop."
+            )
+
+        timeout_seconds = self.limits_cfg["timeout_seconds"]
+        if not isinstance(timeout_seconds, int | float) or isinstance(timeout_seconds, bool) or timeout_seconds <= 0:
+            raise ValueError(
+                f"conf/config.yaml: rag.limits.timeout_seconds must be a positive number, not "
+                f"{timeout_seconds!r}. Zero or less expires the deadline before retrieval starts, "
+                f"so every request would answer with a timeout error."
+            )
+
     def _validate_config(self) -> None:
         """Refuse to start on a configuration that cannot work.
 
@@ -711,14 +749,7 @@ class RetrievalAugmentedGenerator:
             if stale in rag_cfg:
                 raise ValueError(f"conf/config.yaml: rag.{stale} is not read -- {guidance}.")
 
-        answer_turns = self.history_cfg["answer_turns"]
-        if not isinstance(answer_turns, int) or isinstance(answer_turns, bool) or answer_turns < 0:
-            raise ValueError(
-                f"conf/config.yaml: rag.history.answer_turns must be a non-negative integer, not "
-                f"{answer_turns!r}. It slices the conversation from the end, so a negative value "
-                f"drops the OLDEST turns and keeps every other one -- the prompt would then grow "
-                f"with the conversation, which is the one thing this setting exists to stop."
-            )
+        self._validate_bounds()
 
         mode = self.retrieval_cfg["mode"]
         if mode not in ("dense", "hybrid"):
