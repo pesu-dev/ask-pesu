@@ -40,7 +40,7 @@ from fastapi.staticfiles import StaticFiles
 from app.docs import ask_docs, health_docs, index_docs, quota_docs
 from app.models import AskRequestModel, HealthResponseModel, QuotaResponseModel, ShortenQueryModel
 from app.quota import QuotaExceededError, QuotaState
-from app.rag import RetrievalAugmentedGenerator
+from app.rag import RetrievalAugmentedGenerator, credits_reset_at, quota_refusal
 
 load_dotenv()
 
@@ -357,10 +357,34 @@ async def rewrite_query(payload: AskRequestModel) -> ShortenQueryModel:
 
     Under ``ENV=test`` there is no pipeline to call, so the question is truncated
     locally to the same eight-word shape the model is asked for.
+
+    That truncation is also the fallback when the model cannot be reached, since
+    this route only names a conversation in the sidebar.
+
+    It uses the primary model, so it observes the same cooldown /ask does: it
+    does not call a model already known to be refusing, and it records a refusal
+    here so /quota reflects it.
     """
+    fallback = ShortenQueryModel(query=" ".join(payload.query.split()[:8]))
     if rag is None:
-        return ShortenQueryModel(query=" ".join(payload.query.split()[:8]))
-    return ShortenQueryModel(query=await rag.shorten_query(payload.query))
+        return fallback
+
+    PRIMARY_STATE.refresh()
+    if not PRIMARY_STATE.enabled:
+        logging.info("Primary LLM is in cooldown; naming the conversation locally.")
+        return fallback
+
+    try:
+        return ShortenQueryModel(query=await rag.shorten_query(payload.query))
+    except Exception as error:
+        refusal = quota_refusal(error)
+        if refusal is None:
+            raise
+        # A 402 waits for the billing period to roll over, which is knowable
+        # exactly; a 429 is not, so the caller picks.
+        PRIMARY_STATE.disable(credits_reset_at() if refusal == 402 else None)
+        logging.warning(f"Primary LLM refused the title request ({refusal}); naming the conversation locally.")
+        return fallback
 
 
 @app.post(

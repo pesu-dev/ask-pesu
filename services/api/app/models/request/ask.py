@@ -6,6 +6,13 @@ rejected rather than becoming ``True`` -- so a malformed client fails visibly.
 
 from pydantic import BaseModel, ConfigDict, Field
 
+# Longest question accepted; a longer one is refused with a 422.
+#
+# Here rather than in conf/config.yaml because pydantic reads it when the class
+# is defined, before any configuration is loaded, and because it then appears in
+# the OpenAPI schema.
+MAX_QUERY_CHARS = 2000
+
 
 class HistoryItem(BaseModel):
     """Model representing an item in the chat history list."""
@@ -22,7 +29,8 @@ class AskRequestModel(BaseModel):
     query: str = Field(
         ...,
         title="Query",
-        description="User's input query for the chatbot.",
+        max_length=MAX_QUERY_CHARS,
+        description=f"User's input query for the chatbot. At most {MAX_QUERY_CHARS} characters.",
         json_schema_extra={"example": "What is bootstrap?"},
     )
 

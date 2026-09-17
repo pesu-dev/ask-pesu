@@ -107,6 +107,19 @@ rag:
     # Worth raising only on hardware with cores to spare.
     concurrency: 1
 
+  # Bounds on a single request. /ask is public and unauthenticated.
+  limits:
+    # Conversation turns a request may carry. Beyond this the OLDEST are
+    # dropped; the request is not refused. `history.answer_turns` narrows it
+    # further for the answer prompt.
+    #
+    # NOT MEASURED. Fifty is a guess.
+    history_turns: 50
+    # Seconds for the whole of /ask, across retrieval and every LLM call. The
+    # per-call `timeout` under llm bounds one provider call; this bounds the
+    # request, which makes several.
+    timeout_seconds: 180
+
   # How much of the conversation each LLM call receives.
   history:
     # Turns of conversation the ANSWER prompt is given, most recent last. One

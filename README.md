@@ -217,8 +217,8 @@ enforces that they agree.
 | Route | Body | Returns |
 |---|---|---|
 | `GET /` | — | The compiled SPA. **503** with a JSON explanation if the frontend was never built |
-| `POST /ask` | `{query, thinking?, history?}` | An NDJSON stream — see [The streaming protocol](#the-streaming-protocol). **429** with a quota snapshot if that model is in cooldown |
-| `POST /rewriteQuery` | Same model as `/ask`; only `query` is read | `{query}` — the question condensed to at most eight words, for the conversation sidebar |
+| `POST /ask` | `{query, thinking?, history?}` | An NDJSON stream — see [The streaming protocol](#the-streaming-protocol). **429** with a quota snapshot if that model is in cooldown; **422** if `query` exceeds 2,000 characters |
+| `POST /rewriteQuery` | Same model as `/ask`; only `query` is read | `{query}` — the question condensed to at most eight words, for the conversation sidebar. Falls back to local truncation rather than failing when the model is unavailable |
 | `GET /health` | — | `{status, message, timestamp}`. Liveness only: it does not probe Qdrant or the provider, because the startup contract check means a running process already passed those |
 | `GET /quota` | — | `{status, quota, timestamp}`, keyed by mode. `next_available` is present only while a model is blocked, so a client can treat its presence as "retry after this" |
 | `GET /docs` | — | Swagger UI, generated from the pydantic models in `app/models/` and the examples in `app/docs/` |
@@ -741,6 +741,8 @@ Runtime behaviour that is *not* part of the collection contract lives in
 | `rerank.concurrency` | `1` | Cross-encoder passes at once; serialised because two vCPUs thrash |
 | `sources.snippet_chars` | `200` | Preview length in the `sources` event; presentation only |
 | `history.answer_turns` | `4` | Turns of conversation the **answer** prompt receives. Retrieval is not bounded by it. **Not measured** — see below |
+| `limits.history_turns` | `50` | Turns a request may carry. Beyond this the **oldest are dropped**, not the request refused. **Not measured** |
+| `limits.timeout_seconds` | `180` | Budget for the whole of `/ask`, across retrieval and every LLM call |
 | `prompts.*` | — | System, answer and query-rewrite prompts |
 
 **On the two thresholds.** There is deliberately only one that filters. A retrieval-side cutoff
@@ -794,6 +796,17 @@ can see how old an answer is and the model can say so. Both are the submission's
 the cited comment's. Deciding *when* age should matter is a property of the question rather than
 of the document — "what are the fees" wants a recent source, "how is SGPA calculated" does not —
 and that is still open.
+
+**A request is bounded three ways, and only one of them refuses.** `query` is capped at 2,000
+characters in `AskRequestModel` and a longer one is a **422** — answering a different question
+than the one asked is worse than saying no. `limits.history_turns` drops the *oldest* turns
+instead, because a client that has accumulated a long conversation would otherwise fail every
+request until the user cleared it, and the recent end is what resolves a follow-up anyway.
+`limits.timeout_seconds` bounds the request as a whole: the per-call `timeout` under `llm` bounds
+one provider call, and the pipeline makes several in sequence, so nothing capped the total.
+
+That last one can only ever be an `error` event, never a 504. Starlette commits the status line
+before it iterates the generator, so retrieval is already running against sent headers.
 
 **`history.answer_turns` is a guess and is labelled as one in the config.** Only the answer
 prompt is bounded by it; the rewrite step still receives the whole conversation, because what a
