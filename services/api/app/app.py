@@ -26,8 +26,9 @@ import datetime
 import json
 import logging
 import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import pytz
 import uvicorn
@@ -139,9 +140,19 @@ THINKING_STATE = QuotaState(name="thinking", cooldown_hours=24)
 PRIMARY_STATE = QuotaState(name="primary", cooldown_hours=24)
 
 
-# Hashed asset bundles are served directly. Everything else falls through to the
-# routes below, so client-side routing still works.
-#
+def _serve_file(path: str) -> Callable[[], Awaitable[FileResponse]]:
+    """Return an endpoint that serves one file.
+
+    A factory rather than a closure over the loop variable, which would leave
+    every route serving the last file.
+    """
+
+    async def serve() -> FileResponse:
+        return FileResponse(path)
+
+    return serve
+
+
 class ImmutableStaticFiles(StaticFiles):
     """Static files served with a permanent cache, for Vite's hashed build output.
 
@@ -176,6 +187,20 @@ if FRONTEND_BUILT:
         ImmutableStaticFiles(directory=f"{DIST_DIR}/assets"),
         name="assets",
     )
+
+    # Vite copies frontend/public/ to the root of dist/ -- the favicon,
+    # robots.txt. One route per file rather than a StaticFiles mount at "/",
+    # which would match every path and shadow the API routes unless it were
+    # registered after all of them.
+    for _root_file in sorted(Path(DIST_DIR).iterdir()):
+        if _root_file.is_file() and _root_file.name != "index.html":
+            app.add_api_route(
+                f"/{_root_file.name}",
+                _serve_file(str(_root_file)),
+                methods=["GET", "HEAD"],
+                name=f"static:{_root_file.name}",
+                include_in_schema=False,
+            )
 else:
     logging.warning(
         f"No frontend build at {DIST_DIR}/. The API works; / will not serve the UI. "
