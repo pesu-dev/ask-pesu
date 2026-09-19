@@ -134,7 +134,7 @@ export function AppSidebar({
               className="text-lg tracking-wide text-foreground"
               style={{ fontFamily: "'Capriola', sans-serif" }}
             >
-              ask
+              Ask
             </span>
             <span
               className="text-lg tracking-wide text-primary"
