@@ -47,7 +47,7 @@ There is no Python test suite; both services validate the collection, the embedd
 
 ## 🛠️ Affected Areas
 
-### 🔍 `services/api`
+### 🔍 AskPESU — `services/api`
 
 - [ ] `app/rag.py` — retrieval, reranking, ranking or answer generation
 - [ ] `conf/config.yaml` — prompts, models, retrieval knobs, limits
@@ -55,7 +55,7 @@ There is no Python test suite; both services validate the collection, the embedd
 - [ ] `app/models/` — request or response schemas
 - [ ] `frontend/` — the UI
 
-### ✍️ `services/db`
+### ✍️ AskPESU DB — `services/db`
 
 - [ ] `app/app.py` — the live listener
 - [ ] `scripts/` — processing and backfill

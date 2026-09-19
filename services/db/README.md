@@ -1,6 +1,6 @@
 ---
-title: Ask PESU DB updater
-short_description: A script that updates askPESU's DB automatically
+title: AskPESU DB
+short_description: Keeps AskPESU's search index up to date
 emoji: 🦀
 colorFrom: yellow
 colorTo: red
@@ -29,9 +29,9 @@ tags:
 - bot
 ---
 
-# askPESU DB updater
+# AskPESU DB
 
-Keeps askPESU's search index current. It watches r/PESU for new comments and,
+Keeps AskPESU's search index current. It watches r/PESU for new comments and,
 for each one, re-indexes the whole thread that comment belongs to.
 
 Threads rather than comments are the unit of indexing: a reply like "yes, around
@@ -49,7 +49,7 @@ validated against it if it does. Every payload is checked before it is written.
 A payload that disagrees stops the listener and turns `/health` into a 503,
 because a writer that keeps going is worse than one that visibly stops.
 
-This is the only writer there is. Both readers —
+This is the only writer there is. Both AskPESU Spaces —
 [askpesu](https://huggingface.co/spaces/pesu-dev/askpesu) and
 [askpesu-dev](https://huggingface.co/spaces/pesu-dev/askpesu-dev) — answer from
 the collection it fills, so a fault here is visible in every environment at

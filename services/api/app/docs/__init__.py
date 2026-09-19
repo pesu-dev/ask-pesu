@@ -1,4 +1,4 @@
-"""Custom documentation module for askPESU API."""
+"""Custom documentation module for the AskPESU API."""
 
 from .ask import ask_docs
 from .health import health_docs

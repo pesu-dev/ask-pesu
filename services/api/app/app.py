@@ -1,4 +1,4 @@
-"""HTTP surface of askPESU: routes, lifespan, and static file serving.
+"""HTTP surface of AskPESU: routes, lifespan, and static file serving.
 
 This one process serves both the API and the compiled React frontend from the
 same origin, which is why production needs no CORS configuration and the client
@@ -85,7 +85,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(
-    title="askPESU API",
+    title="AskPESU API",
     description="Backend APIs for AskPESU, a question-answering chatbot for PES University.",
     version="0.1.0",
     docs_url="/docs",
@@ -513,7 +513,7 @@ def main() -> None:
     """
     # Set up argument parser for command line arguments
     parser = argparse.ArgumentParser(
-        description="Run the FastAPI application for askPESU backend.",
+        description="Run the FastAPI application for the AskPESU backend.",
     )
     parser.add_argument(
         "--host",

@@ -3,12 +3,13 @@
 A retrieval-augmented question answering system for PES University, answering from
 [r/PESU](https://www.reddit.com/r/PESU/) discussions.
 
-This is a monorepo holding both halves of the system: the service that fills the search index,
-and the service that answers questions from it. They are deployed as three Hugging Face Spaces —
-a production and a development api, and a single db writing the collection both read — which
-means one schema contract, shared by everything.
+This monorepo holds both halves of it: **AskPESU**, which answers questions, and **AskPESU DB**,
+which fills the search index AskPESU answers from. They are deployed as three Hugging Face Spaces —
+a production and a development AskPESU, and a single AskPESU DB writing the collection both read —
+which means one schema contract, shared by everything.
 
-- **Live:** [askpesu](https://pesu-dev-askpesu.hf.space) · **Dev:** [askpesu-dev](https://pesu-dev-askpesu-dev.hf.space)
+- **AskPESU:** [askpesu](https://pesu-dev-askpesu.hf.space) (production) · [askpesu-dev](https://pesu-dev-askpesu-dev.hf.space) (development)
+- **AskPESU DB:** [askpesu-db](https://pesu-dev-askpesu-db.hf.space)
 
 ---
 
@@ -26,10 +27,10 @@ means one schema contract, shared by everything.
 
 ## Services
 
-| Path | What it does | Spaces |
-|---|---|---|
-| [`services/api`](services/api) | FastAPI + LangChain RAG backend, and the React frontend it serves | [`askpesu`](https://huggingface.co/spaces/pesu-dev/askpesu) (prod), [`askpesu-dev`](https://huggingface.co/spaces/pesu-dev/askpesu-dev) (dev) |
-| [`services/db`](services/db) | Reddit listener that streams new r/PESU comment threads into Qdrant, plus the offline backfill scripts | [`askpesu-db`](https://huggingface.co/spaces/pesu-dev/askpesu-db) — one instance, shared by both api environments |
+| Path | Service | What it does | Spaces |
+|---|---|---|---|
+| [`services/api`](services/api) | **AskPESU** | FastAPI + LangChain RAG backend, and the React frontend it serves | [`askpesu`](https://huggingface.co/spaces/pesu-dev/askpesu) (prod), [`askpesu-dev`](https://huggingface.co/spaces/pesu-dev/askpesu-dev) (dev) |
+| [`services/db`](services/db) | **AskPESU DB** | Reddit listener that streams new r/PESU comment threads into Qdrant, plus the offline backfill scripts | [`askpesu-db`](https://huggingface.co/spaces/pesu-dev/askpesu-db) — one instance, shared by both api environments |
 
 Each service directory is self-contained and shaped like a repository root — its own
 `README.md` carrying that Space's frontmatter, its own `Dockerfile`, its own `app/` package.

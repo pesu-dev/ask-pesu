@@ -1,5 +1,5 @@
 name: 🐛 Bug Report
-description: Report something askPESU does wrong
+description: Report something AskPESU or AskPESU DB does wrong
 labels: ["bug"]
 body:
   - type: markdown
@@ -30,7 +30,7 @@ body:
         - Error, timeout or empty answer
         - The UI
         - /ask, /rewriteQuery, /health or /quota
-        - The db listener or backfill
+        - AskPESU DB — the listener or backfill
         - CI, Docker or deployment
         - Other
     validations:

@@ -32,7 +32,7 @@ body:
         - Answer or retrieval quality
         - The UI
         - The API
-        - What gets indexed (the db service)
+        - What gets indexed (AskPESU DB)
         - Developer tooling, CI or deployment
         - Other
     validations:

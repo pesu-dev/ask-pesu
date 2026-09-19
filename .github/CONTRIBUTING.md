@@ -1,5 +1,8 @@
 # Contributing
 
+This repository holds two services: **AskPESU** (`services/api`), which answers questions, and
+**AskPESU DB** (`services/db`), which fills the search index it answers from.
+
 This file is the short path from a clone to a merged pull request. It links into the
 [README](../README.md) rather than restating it.
 

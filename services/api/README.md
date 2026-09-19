@@ -1,5 +1,5 @@
 ---
-title: Ask PESU
+title: AskPESU
 short_description: A RAG pipeline for question answering about PES University
 emoji: 🦀
 colorFrom: yellow
@@ -32,7 +32,7 @@ tags:
 - pes university
 ---
 
-# askPESU
+# AskPESU
 
 Retrieval-augmented question answering about PES University, answered from
 r/PESU discussions. This Space serves both the API and the web UI from one
@@ -40,11 +40,12 @@ origin.
 
 A question is rewritten into a standalone query, expanded into several
 phrasings, matched against a Qdrant collection of Reddit comment threads,
-reranked by a cross-encoder, and answered with the surviving threads as context
-and a Sources list linking back to them. If nothing clears the relevance
+reranked by a cross-encoder, and answered with the surviving threads as context.
+The threads an answer draws on are sent to the client alongside it, with their
+dates. If nothing clears the relevance
 threshold the model says so rather than inventing an answer.
 
-The collection it reads is written by the companion Space,
+The collection it reads is written by AskPESU DB,
 [askpesu-db](https://huggingface.co/spaces/pesu-dev/askpesu-db) — one writer,
 shared by this Space and its dev counterpart. Both agree on the collection's
 shape through `conf/collection.yaml`, which each verifies at startup, so a

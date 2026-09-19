@@ -1,4 +1,4 @@
-"""Reddit listener that keeps askPESU's shared Qdrant collection up to date.
+"""Reddit listener that keeps AskPESU's shared Qdrant collection up to date.
 
 Runs as a Hugging Face Space, which expects a web server, so this is a FastAPI
 app whose only real job happens on a background thread: consume new r/PESU
@@ -388,7 +388,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(
-    title="askPESU DB updater",
+    title="AskPESU DB",
     description="Streams new r/PESU comment threads into the shared Qdrant collection.",
     version="0.1.0",
     lifespan=lifespan,
@@ -415,14 +415,14 @@ async def index() -> HTMLResponse:
     status = "listening" if ok else "stopped"
     detail = "" if ok else f"<p><strong>Reason:</strong> {html.escape(listener_error)}</p>"
     return HTMLResponse(
-        f"""<!doctype html><meta charset="utf-8"><title>askPESU DB updater</title>
+        f"""<!doctype html><meta charset="utf-8"><title>AskPESU DB</title>
 <style>body{{font:15px/1.6 system-ui,sans-serif;max-width:34rem;margin:3rem auto;padding:0 1rem}}
 code{{background:#0001;padding:.1em .3em;border-radius:3px}}</style>
-<h1>askPESU DB updater</h1>
+<h1>AskPESU DB</h1>
 <p>Status: <strong>{status}</strong> &middot; collection <code>{html.escape(contract.name)}</code></p>
 {detail}
 <p>Streams new r/PESU comment threads into the shared Qdrant collection that
-<a href="https://huggingface.co/spaces/pesu-dev/askpesu">askPESU</a> answers from.
+<a href="https://huggingface.co/spaces/pesu-dev/askpesu">AskPESU</a> answers from.
 There is no interface here; see <a href="/health">/health</a>.</p>
 <p>Source: <a href="https://github.com/pesu-dev/ask-pesu">pesu-dev/ask-pesu</a></p>""",
         status_code=200,
