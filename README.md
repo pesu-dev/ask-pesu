@@ -950,12 +950,16 @@ in CI — and because pre-commit builds its hook environments from a git ref and
 | `source.yaml` | PR opened/updated | Rejects PRs that are not from a fork, come from a fork's `main`, or target anything other than `dev` |
 | `pre-commit.yaml` | Push, PR | Every pre-commit hook, on all files — ruff lint and format included |
 | `contract.yaml` | Push, PR | Asserts each shared file is tracked exactly once; recompiles `requirements.txt` and fails on drift; runs [`scripts/check_duplication.py`](scripts/check_duplication.py); rehearses the deploy vendoring and checks each split tree is a complete Space root |
+| `frontend.yaml` | Push, PR, when `services/api/frontend/` changes | `tsc --noEmit` on both tsconfig projects, then `vitest` |
 | `docker.yaml` | Push to `dev`, chained off Pre-Commit; or manual | Builds both images, boots each container, polls `/health` |
-
-`docker.yaml` is by far the slowest job, because it builds both images from scratch. That is the
-price of the only check that exercises a Dockerfile at all — nothing else in CI builds one.
 | `deploy-dev-api.yaml` | Push to `dev` | Deploys the api to `askpesu-dev`. The db is not deployed from `dev` |
 | `deploy-prod.yaml` | Manual | Fast-forwards `dev` → `main`, then deploys **both** services to `askpesu` and `askpesu-db` |
+
+`docker.yaml` is the slowest job, because it builds both images from scratch. It is also the only
+check that builds a Dockerfile.
+
+`frontend.yaml` exists because `vite build` strips TypeScript types without checking them, so a
+type error would otherwise compile and fail in the browser.
 
 `deploy-prod.yaml` refuses to run unless `github.actor` is listed in
 `vars.PROD_DEPLOYMENT_ALLOWED_USERS`. The dev deploy is not gated — merging to `dev` is the
