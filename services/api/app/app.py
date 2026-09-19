@@ -26,8 +26,9 @@ import datetime
 import json
 import logging
 import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import pytz
 import uvicorn
@@ -139,9 +140,19 @@ THINKING_STATE = QuotaState(name="thinking", cooldown_hours=24)
 PRIMARY_STATE = QuotaState(name="primary", cooldown_hours=24)
 
 
-# Hashed asset bundles are served directly. Everything else falls through to the
-# routes below, so client-side routing still works.
-#
+def _serve_file(path: str) -> Callable[[], Awaitable[FileResponse]]:
+    """Return an endpoint that serves one file.
+
+    A factory rather than a closure over the loop variable, which would leave
+    every route serving the last file.
+    """
+
+    async def serve() -> FileResponse:
+        return FileResponse(path)
+
+    return serve
+
+
 class ImmutableStaticFiles(StaticFiles):
     """Static files served with a permanent cache, for Vite's hashed build output.
 
@@ -504,6 +515,23 @@ async def quota() -> JSONResponse:
         timestamp=datetime.datetime.now(IST),
     )
     return JSONResponse(status_code=200, content=response.model_dump(mode="json", exclude_none=True))
+
+
+# Vite copies frontend/public/ into dist/, subdirectories included -- the
+# favicon, robots.txt. One route per file rather than a StaticFiles mount at
+# "/", which would match every path. Registered after every API route: the
+# first route that matches is the one served, so on a name clash the API wins.
+if FRONTEND_BUILT:
+    for _public_file in sorted(Path(DIST_DIR).rglob("*")):
+        _relative = _public_file.relative_to(DIST_DIR).as_posix()
+        if _public_file.is_file() and _relative != "index.html" and not _relative.startswith("assets/"):
+            app.add_api_route(
+                f"/{_relative}",
+                _serve_file(str(_public_file)),
+                methods=["GET", "HEAD"],
+                name=f"static:{_relative}",
+                include_in_schema=False,
+            )
 
 
 def main() -> None:
