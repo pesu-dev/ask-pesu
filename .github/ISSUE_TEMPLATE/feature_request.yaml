@@ -1,0 +1,65 @@
+name: ✨ Feature Request
+description: Suggest a new feature or an improvement
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## ✨ Feature Request
+
+  - type: input
+    id: summary
+    attributes:
+      label: 📌 Summary
+      placeholder: e.g. "Let users edit a question after sending it"
+    validations:
+      required: true
+
+  - type: textarea
+    id: motivation
+    attributes:
+      label: 💡 Motivation
+      description: The problem this solves, and who has it.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: 📁 Area
+      multiple: true
+      options:
+        - Answer or retrieval quality
+        - The UI
+        - The API
+        - What gets indexed (the db service)
+        - Developer tooling, CI or deployment
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: implementation
+    attributes:
+      label: 🧩 Suggested implementation
+      description: Optional.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: complexity
+    attributes:
+      label: 🧠 Estimated complexity
+      options:
+        - Low — one file, or a config or prompt change
+        - Medium — several files, no change to the collection
+        - High — needs a re-index, a contract change, or a new service
+    validations:
+      required: false
+
+  - type: textarea
+    id: related
+    attributes:
+      label: 🔗 Related issues or PRs
+    validations:
+      required: false
