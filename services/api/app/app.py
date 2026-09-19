@@ -300,11 +300,8 @@ async def unhandled_exception_handler(_request: Request, _exc: Exception) -> JSO
     )
 
 
-@app.api_route(
+@app.get(
     "/",
-    # HEAD as well as GET: the platform health-probes this path with HEAD, and a
-    # GET-only route answers 405, which reads like a fault in the logs.
-    methods=["GET", "HEAD"],
     response_class=FileResponse,
     # Two response types -- the SPA, or a 503 when it was never built -- so
     # FastAPI must not infer a schema from the annotation.
@@ -341,6 +338,12 @@ async def index() -> Response:
             },
         )
     return FileResponse(f"{DIST_DIR}/index.html", headers={"Cache-Control": "no-cache"})
+
+
+# HEAD as well: the platform health-probes this path with HEAD, and a GET-only
+# route answers 405. Registered separately and kept out of the schema: one route
+# listing both methods gives the two operations the same operationId.
+app.add_api_route("/", index, methods=["HEAD"], response_model=None, include_in_schema=False)
 
 
 @app.post(
