@@ -187,20 +187,6 @@ if FRONTEND_BUILT:
         ImmutableStaticFiles(directory=f"{DIST_DIR}/assets"),
         name="assets",
     )
-
-    # Vite copies frontend/public/ to the root of dist/ -- the favicon,
-    # robots.txt. One route per file rather than a StaticFiles mount at "/",
-    # which would match every path and shadow the API routes unless it were
-    # registered after all of them.
-    for _root_file in sorted(Path(DIST_DIR).iterdir()):
-        if _root_file.is_file() and _root_file.name != "index.html":
-            app.add_api_route(
-                f"/{_root_file.name}",
-                _serve_file(str(_root_file)),
-                methods=["GET", "HEAD"],
-                name=f"static:{_root_file.name}",
-                include_in_schema=False,
-            )
 else:
     logging.warning(
         f"No frontend build at {DIST_DIR}/. The API works; / will not serve the UI. "
@@ -529,6 +515,23 @@ async def quota() -> JSONResponse:
         timestamp=datetime.datetime.now(IST),
     )
     return JSONResponse(status_code=200, content=response.model_dump(mode="json", exclude_none=True))
+
+
+# Vite copies frontend/public/ into dist/, subdirectories included -- the
+# favicon, robots.txt. One route per file rather than a StaticFiles mount at
+# "/", which would match every path. Registered after every API route: the
+# first route that matches is the one served, so on a name clash the API wins.
+if FRONTEND_BUILT:
+    for _public_file in sorted(Path(DIST_DIR).rglob("*")):
+        _relative = _public_file.relative_to(DIST_DIR).as_posix()
+        if _public_file.is_file() and _relative != "index.html" and not _relative.startswith("assets/"):
+            app.add_api_route(
+                f"/{_relative}",
+                _serve_file(str(_public_file)),
+                methods=["GET", "HEAD"],
+                name=f"static:{_relative}",
+                include_in_schema=False,
+            )
 
 
 def main() -> None:
