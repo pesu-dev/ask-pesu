@@ -6,6 +6,9 @@ name: Frontend Checks
 # Two tsconfig projects: tsconfig.app.json covers src/, tsconfig.node.json
 # covers vite.config.ts. The root tsconfig.json only references them, so
 # checking it alone would check neither.
+#
+# Path-filtered, so it does not run on a PR that leaves the frontend alone. Do
+# not make it a required status check: GitHub would wait on those PRs forever.
 on:
   push:
     paths: [ "services/api/frontend/**", ".github/workflows/frontend.yaml" ]

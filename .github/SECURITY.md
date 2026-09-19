@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-Only what is deployed is supported: the `askpesu` Space, built from `main`. Fixes land on `dev` and reach production at the next promotion.
+Only what is deployed is supported: the production Spaces, `askpesu` and `askpesu-db`, built from `main`. Fixes land on `dev` and reach production at the next promotion.
 
 ## Reporting a vulnerability
 

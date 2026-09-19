@@ -32,14 +32,14 @@ There is no Python test suite; both services validate the collection, the embedd
 - [ ] `npm run typecheck` and `npm test`, in `services/api/frontend/` — for frontend changes
 - [ ] Ran the service locally against `ask-pesu-dev`
 - [ ] Checked the UI with `ENV=test`, which needs no Qdrant, token or quota
-- [ ] Built and booted the image: `docker build services/<name>`
+- [ ] Built and booted the image, vendoring the shared files first as in the README's [Docker](https://github.com/pesu-dev/ask-pesu/blob/dev/README.md#docker) section
 - [ ] For retrieval or prompt changes: compared answers before and after on real questions
 
 ## ✅ Checklist
 
-- [ ] Follows [CONTRIBUTING.md](CONTRIBUTING.md)
+- [ ] Follows [CONTRIBUTING.md](https://github.com/pesu-dev/ask-pesu/blob/dev/.github/CONTRIBUTING.md)
 - [ ] Self-reviewed the diff
-- [ ] Comments describe what the code does, not why it is right — see CONTRIBUTING.md
+- [ ] Comments describe what the code does, not why it is right — see [CONTRIBUTING.md](https://github.com/pesu-dev/ask-pesu/blob/dev/.github/CONTRIBUTING.md#comments-and-documentation)
 - [ ] Updated the README where behaviour or configuration changed
 - [ ] Recompiled `requirements.txt` if `pyproject.toml` changed, with the command in its header
 - [ ] Changed both sides of any pair `check_duplication.py` guards — contract loaders, payload keys, stream event names, `rag.*` config keys
