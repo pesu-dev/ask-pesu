@@ -3,12 +3,13 @@
 A retrieval-augmented question answering system for PES University, answering from
 [r/PESU](https://www.reddit.com/r/PESU/) discussions.
 
-This is a monorepo holding both halves of the system: the service that fills the search index,
-and the service that answers questions from it. They are deployed as three Hugging Face Spaces —
-a production and a development api, and a single db writing the collection both read — which
-means one schema contract, shared by everything.
+This monorepo holds both halves of it: **AskPESU**, which answers questions, and **AskPESU DB**,
+which fills the search index AskPESU answers from. They are deployed as three Hugging Face Spaces —
+a production and a development AskPESU, and a single AskPESU DB writing the collection both read —
+which means one schema contract, shared by everything.
 
-- **Live:** [askpesu](https://pesu-dev-askpesu.hf.space) · **Dev:** [askpesu-dev](https://pesu-dev-askpesu-dev.hf.space)
+- **AskPESU:** [askpesu](https://pesu-dev-askpesu.hf.space) (production) · [askpesu-dev](https://pesu-dev-askpesu-dev.hf.space) (development)
+- **AskPESU DB:** [askpesu-db](https://pesu-dev-askpesu-db.hf.space)
 
 ---
 
@@ -26,10 +27,10 @@ means one schema contract, shared by everything.
 
 ## Services
 
-| Path | What it does | Spaces |
-|---|---|---|
-| [`services/api`](services/api) | FastAPI + LangChain RAG backend, and the React frontend it serves | [`askpesu`](https://huggingface.co/spaces/pesu-dev/askpesu) (prod), [`askpesu-dev`](https://huggingface.co/spaces/pesu-dev/askpesu-dev) (dev) |
-| [`services/db`](services/db) | Reddit listener that streams new r/PESU comment threads into Qdrant, plus the offline backfill scripts | [`askpesu-db`](https://huggingface.co/spaces/pesu-dev/askpesu-db) — one instance, shared by both api environments |
+| Path | Service | What it does | Spaces |
+|---|---|---|---|
+| [`services/api`](services/api) | **AskPESU** | FastAPI + LangChain RAG backend, and the React frontend it serves | [`askpesu`](https://huggingface.co/spaces/pesu-dev/askpesu) (prod), [`askpesu-dev`](https://huggingface.co/spaces/pesu-dev/askpesu-dev) (dev) |
+| [`services/db`](services/db) | **AskPESU DB** | Reddit listener that streams new r/PESU comment threads into Qdrant, plus the offline backfill scripts | [`askpesu-db`](https://huggingface.co/spaces/pesu-dev/askpesu-db) — one instance, shared by both api environments |
 
 Each service directory is self-contained and shaped like a repository root — its own
 `README.md` carrying that Space's frontmatter, its own `Dockerfile`, its own `app/` package.
@@ -950,12 +951,16 @@ in CI — and because pre-commit builds its hook environments from a git ref and
 | `source.yaml` | PR opened/updated | Rejects PRs that are not from a fork, come from a fork's `main`, or target anything other than `dev` |
 | `pre-commit.yaml` | Push, PR | Every pre-commit hook, on all files — ruff lint and format included |
 | `contract.yaml` | Push, PR | Asserts each shared file is tracked exactly once; recompiles `requirements.txt` and fails on drift; runs [`scripts/check_duplication.py`](scripts/check_duplication.py); rehearses the deploy vendoring and checks each split tree is a complete Space root |
+| `frontend.yaml` | Push, PR, when `services/api/frontend/` changes | `tsc --noEmit` on both tsconfig projects, then `vitest` |
 | `docker.yaml` | Push to `dev`, chained off Pre-Commit; or manual | Builds both images, boots each container, polls `/health` |
-
-`docker.yaml` is by far the slowest job, because it builds both images from scratch. That is the
-price of the only check that exercises a Dockerfile at all — nothing else in CI builds one.
 | `deploy-dev-api.yaml` | Push to `dev` | Deploys the api to `askpesu-dev`. The db is not deployed from `dev` |
 | `deploy-prod.yaml` | Manual | Fast-forwards `dev` → `main`, then deploys **both** services to `askpesu` and `askpesu-db` |
+
+`docker.yaml` is the slowest job, because it builds both images from scratch. It is also the only
+check that builds a Dockerfile.
+
+`frontend.yaml` exists because `vite build` strips TypeScript types without checking them, so a
+type error would otherwise compile and fail in the browser.
 
 `deploy-prod.yaml` refuses to run unless `github.actor` is listed in
 `vars.PROD_DEPLOYMENT_ALLOWED_USERS`. The dev deploy is not gated — merging to `dev` is the

@@ -1,4 +1,4 @@
-"""Pydantic models for the askPESU API.
+"""Pydantic models for the AskPESU API.
 
 Split by direction: ``request`` models validate what clients send, ``response``
 models describe what routes return and populate the OpenAPI schema.

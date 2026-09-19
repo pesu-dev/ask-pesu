@@ -1,6 +1,6 @@
 {
-  "name": "askPESU",
-  "short_name": "askPESU",
+  "name": "AskPESU",
+  "short_name": "AskPESU",
   "description": "Your AI assistant for everything about PES University",
   "start_url": "/",
   "scope": "/",

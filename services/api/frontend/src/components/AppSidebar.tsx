@@ -119,7 +119,7 @@ export function AppSidebar({
           isCollapsed ? "px-0 justify-center" : "px-2 justify-between",
         )}
       >
-        {/* askPESU brand -- only present when expanded */}
+        {/* AskPESU brand -- only present when expanded */}
         <motion.div
           initial={false}
           animate={{
@@ -134,7 +134,7 @@ export function AppSidebar({
               className="text-lg tracking-wide text-foreground"
               style={{ fontFamily: "'Capriola', sans-serif" }}
             >
-              ask
+              Ask
             </span>
             <span
               className="text-lg tracking-wide text-primary"

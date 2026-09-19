@@ -37,7 +37,7 @@ export function WelcomeScreen({ visible, onSuggestionClick }: WelcomeScreenProps
             className="text-4xl md:text-7xl tracking-wide text-foreground"
             style={{ fontFamily: "'Capriola', sans-serif" }}
           >
-            ask
+            Ask
           </span>
           <span
             className="text-4xl md:text-7xl tracking-wide text-primary"

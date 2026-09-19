@@ -1,0 +1,110 @@
+name: 🐛 Bug Report
+description: Report something AskPESU or AskPESU DB does wrong
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## 🐛 Bug Report
+
+        For a security problem, do not open an issue — see [SECURITY.md](https://github.com/pesu-dev/ask-pesu/blob/dev/.github/SECURITY.md).
+
+  - type: input
+    id: summary
+    attributes:
+      label: 🧵 Summary
+      placeholder: e.g. "Follow-up questions ignore the previous answer"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: 📁 Area
+      multiple: true
+      options:
+        - Wrong, irrelevant or made-up answer
+        - Missing or wrong sources
+        - Follow-up question not understood
+        - Thinking mode
+        - Error, timeout or empty answer
+        - The UI
+        - /ask, /rewriteQuery, /health or /quota
+        - AskPESU DB — the listener or backfill
+        - CI, Docker or deployment
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: question
+    attributes:
+      label: 💬 What you asked
+      description: The question exactly as typed. If it was a follow-up, include the question before it too.
+      placeholder: |
+        1. How is CSE at RR campus?
+        2. and for ECE?
+    validations:
+      required: false
+
+  - type: dropdown
+    id: thinking
+    attributes:
+      label: 🧠 Thinking mode
+      options:
+        - "Off"
+        - "On"
+        - Not applicable
+    validations:
+      required: false
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: ✅ Expected
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: ❌ Actual
+      description: What happened instead. For a wrong answer, paste it along with the sources it listed.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 📋 Steps to reproduce
+      description: For anything other than an answer-quality problem.
+      placeholder: |
+        1. Run `uv run python -m app.app` in services/api
+        2. POST /ask with ...
+        3. See ...
+    validations:
+      required: false
+
+  - type: input
+    id: where
+    attributes:
+      label: 🌐 Where
+      description: The Space, or a local branch and commit.
+      placeholder: e.g. "askpesu (production)", "askpesu-dev", or "local, dev@abc1234"
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 📜 Logs or traceback
+      render: shell
+    validations:
+      required: false
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: 🧠 Additional notes
+    validations:
+      required: false
