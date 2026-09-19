@@ -289,8 +289,13 @@ def backfill(
         missing.extend(pid for pid in chunk if pid not in found)
 
     if missing:
-        Path("missing_points.json").write_text(json.dumps(missing, indent=2))
-        print(f"WARNING: {len(missing)} inserted points could not be read back; ids in missing_points.json")
+        # Beside completed_dir, not in the working directory. In the image the
+        # working directory is /app, which the process (uid 1000) cannot write.
+        # For the command line, whose --completed-dir defaults to `completed`
+        # under the working directory, this is the same place.
+        report = completed_dir.parent / "missing_points.json"
+        report.write_text(json.dumps(missing, indent=2))
+        print(f"WARNING: {len(missing)} inserted points could not be read back; ids in {report}")
         return 1
     print("All inserted points verified present.")
     return 0

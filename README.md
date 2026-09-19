@@ -713,7 +713,7 @@ option to keep the older copy could only ever preserve a staler one.
 Point ids come from the root comment, so a repeat is an overwrite rather than a duplicate, and
 interrupted runs resume: each input file moves to `completed/` only once every document in it is
 stored. After the run, every inserted id is read back and any that are missing are written to
-`missing_points.json`.
+`missing_points.json`, beside the completed directory.
 
 Prefer running the backfill with the listener stopped. Both write by the same id so they
 converge rather than conflict, but there is no reason to pay for the same embedding twice.
