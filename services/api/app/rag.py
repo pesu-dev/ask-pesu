@@ -360,6 +360,24 @@ def describe_sources(docs: list[Document], snippet_chars: int = 200) -> list[dic
     return out
 
 
+def _without_body(text: str) -> str:
+    """A document with the submission body removed: its title, then its comment tree.
+
+    A document is a TITLE line, a CONTENT line holding the submission body, and
+    then the COMMENT TREE. The first two are identical across every document from
+    that post, so the body is what fills the cross-encoder's 512-token window on
+    a long thread, leaving the replies -- the part that answers the question --
+    outside it.
+
+    Text that does not carry the markers is returned unchanged.
+    """
+    head, marker, tail = text.partition("COMMENT TREE:")
+    if not marker:
+        return text
+    title, _, _body = head.partition("\nCONTENT:")
+    return f"{title}\nCONTENT:\n{marker}{tail}"
+
+
 def rank(docs: list[Document]) -> list[Document]:
     """Order documents by how the community received the answer.
 
@@ -386,8 +404,7 @@ def rank(docs: list[Document]) -> list[Document]:
     above genuinely downvoted answers and below genuinely upvoted ones.
 
     Args:
-        docs: Documents that already cleared the relevance cutoff, in
-            cross-encoder order.
+        docs: The documents that will be sent, in relevance order.
 
     Returns:
         The same documents, best first.
@@ -800,8 +817,10 @@ class RetrievalAugmentedGenerator:
            hard?" against a comment tree produces noise. This is also where the
            relevance cutoff is applied, and it is the only place anything is
            discarded for being a poor answer.
-        5. **Rank** by upvotes on the answer. Strictly after the cutoff, so
-           this only reorders documents that already answer the question.
+        5. **Select** the ``top_n`` most relevant of those, and order them by
+           upvotes on the answer. The cutoff decides what is admitted,
+           relevance decides which of the admitted are sent, and upvotes decide
+           the order they are read in.
 
         Args:
             question: The user's question, as asked.
@@ -815,8 +834,7 @@ class RetrievalAugmentedGenerator:
         docs = deduplicate(await self.multiquery.ainvoke(search_query))
 
         docs = await self.rerank(search_query, docs)
-        docs = rank(docs)
-        return search_query, docs[: self.rerank_cfg["top_n"]]
+        return search_query, rank(docs[: self.rerank_cfg["top_n"]])
 
     def format_docs(self, docs: list[Document]) -> str:
         """Flatten retrieved documents into the ``{context}`` block of the answer prompt.
@@ -886,6 +904,8 @@ class RetrievalAugmentedGenerator:
         have that information. That is the intended behaviour -- an admission
         beats an answer invented from weak context.
 
+        Documents are scored without their post body, by :func:`_without_body`.
+
         The model call is a synchronous, CPU-bound torch inference. It runs in a
         worker thread rather than inline, because inline it would block the
         event loop for every other request streaming at the same time, and
@@ -898,16 +918,24 @@ class RetrievalAugmentedGenerator:
             docs: Documents to score.
 
         Returns:
-            The documents that cleared the threshold, best first.
+            The documents that cleared the threshold, best first. With the
+            reranker disabled, every document, in retrieval-score order.
         """
-        if self.cross_encoder is None or not docs:
+        if not docs:
             return docs
+        if self.cross_encoder is None:
+            # Nothing re-scores the shortlist, so the retrieval score is the only
+            # relevance order there is. retrieve() sends the most relevant top_n,
+            # and reads that order from here.
+            return sorted(docs, key=lambda doc: doc.metadata.get("_score", 0.0), reverse=True)
 
         # The cross-encoder's own sigmoid scale, and the only relevance filter
         # in the pipeline. Deliberately not shared with retrieval, which under
         # hybrid has no thresholdable score at all.
         threshold = self.rerank_cfg["score_threshold"]
-        pairs = [[query, doc.page_content] for doc in docs]
+        # Scored without the post body. Scoring only: the answer prompt is still
+        # given the whole document.
+        pairs = [[query, _without_body(doc.page_content)] for doc in docs]
         async with self._rerank_gate:
             scores = await asyncio.to_thread(self.cross_encoder.predict, pairs)
 
