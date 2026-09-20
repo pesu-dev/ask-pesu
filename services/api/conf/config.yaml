@@ -74,8 +74,8 @@ rag:
   rerank:
     # A cross-encoder re-scores the shortlist by reading query and document
     # together, which a vector search cannot do. Disabling it removes the
-    # sentence-transformers and torch load at startup and falls back to ranking
-    # by retrieval score alone -- faster to boot, and not allowed under hybrid,
+    # sentence-transformers and torch load at startup and leaves the retrieval
+    # score to order the shortlist -- faster to boot, and not allowed under hybrid,
     # where the retrieval score is a rank artefact rather than a similarity, so
     # nothing would be judging relevance at all.
     enabled: true
@@ -94,10 +94,9 @@ rag:
     # is to drop the obviously off-topic tail; upvotes decide the order of what
     # survives. Check the effect on real questions before changing it.
     score_threshold: 0.1
-    # Documents that reach the answer prompt.
-    #
-    # Not a filter: everything it drops has already cleared the cutoff. It
-    # bounds how much of the shortlist the model reads, and costs prompt tokens.
+    # Documents that reach the answer prompt, taken in relevance order from
+    # those above the cutoff. Upvotes then order the ones that are sent.
+    # Costs prompt tokens.
     top_n: 20
     # Cross-encoder passes allowed at once. Serialised, because the Spaces have
     # few cores and concurrent torch inferences contend for them rather than

@@ -145,9 +145,9 @@ Anything older than that window comes from [the backfill scripts](#backfilling-h
    both texts together, which a vector search structurally cannot. It scores the query
    retrieval actually used, so a follow-up is judged on its resolved form rather than on "is
    it hard?".
-6. **Ranking** — upvotes on the answer decide the order of what survived. Strictly after the
-   cutoff, so it only reorders documents that already answer the question. The sort is stable, so
-   documents with equal upvotes keep the relevance order they arrived in. The best `top_n` go on.
+6. **Selection and ranking** — the `top_n` most relevant of what survived are sent, and upvotes
+   on the answer decide the order they are read in. The sort is stable, so documents with equal
+   upvotes keep the relevance order they arrived in.
 7. **Generate** — `Qwen/Qwen3-4B-Instruct-2507` via Hugging Face Inference (`nscale` provider),
    streamed token by token, after the retrieved threads have been reported as a `sources` event.
    The prompt is the system rules, then the last `history.answer_turns` turns of conversation,
@@ -163,9 +163,8 @@ place for. The retrieval stages run explicitly: expressed as a chain they yield 
 text and keep their documents inside, which leaves the backend unable to say which threads an
 answer came from except by asking the model to reprint the links.
 
-Step 5 is the **only** filter. `k` bounds how much is retrieved and `top_n` bounds how much the
-model reads, but neither judges whether a document answers the question — the cutoff is the one
-thing that does. If nothing clears the
+Step 5 is the **only** filter. `k` bounds how much is retrieved and `top_n` how much the model
+reads; nothing but the cutoff discards a document for being a poor answer. If nothing clears the
 threshold the answer prompt receives no context and the system prompt makes the model say it
 does not have that information — an admission is better than an answer invented from weak
 context.
@@ -754,16 +753,16 @@ score, which is derived from rank position rather than similarity and lives on a
 enough that any value chosen for a cosine discards everything. The cross-encoder cutoff is the
 real filter. Startup refuses the older `search_kwargs` shape with an error explaining this.
 
-**The cross-encoder filters; endorsement ranks.** That split is measured, not stylistic.
+**The cross-encoder filters and selects; endorsement orders what is sent.**
 
-Its scores barely separate the documents that reach the prompt, so it cannot rank them. It also
-cannot sharply filter: the scores it gives correct answers and irrelevant ones overlap enough
-that raising the gate discards the right ones about as fast as the wrong ones. Its job is to drop
-the obviously off-topic tail, and something else has to choose between the survivors.
+Its scores cannot sharply filter: the scores it gives correct answers and irrelevant ones overlap
+enough that raising the gate discards the right ones about as fast as the wrong ones. The cutoff
+drops the obviously off-topic tail, and relevance order then decides which `top_n` of the
+survivors are sent.
 
-That something is **upvotes on the answer**, read from `root_comment_score`. The plain `score` is
-the **submission's** — identical across every document from one post, so it ranks none of them,
-and it cannot go negative, so a downvoted answer looks like an unrated one.
+The order they are read in is **upvotes on the answer**, read from `root_comment_score`. The
+plain `score` is the **submission's** — identical across every document from one post, so it
+ranks none of them, and it cannot go negative, so a downvoted answer looks like an unrated one.
 
 Documents are sorted on the raw count, with no normalisation and no scale constant. Ordering
 needs neither: sorting is invariant to monotonic transforms, so ranking by `log(score)/log(C)` is
@@ -782,8 +781,8 @@ which is frequently the best result available rather than duplication. The repea
 and body that would make that wasteful is already handled: `format_docs` emits it once per
 thread.
 
-**`rerank.top_n` bounds how much of the shortlist the model reads.** It is not a filter:
-everything it drops has already cleared the cutoff. Raising it costs prompt tokens.
+**`rerank.top_n` is how much of the shortlist the model reads**, taken in relevance order.
+Everything it drops has already cleared the cutoff. Raising it costs prompt tokens.
 
 **There is deliberately no recency term.** Age is not a proxy for usefulness here. r/PESU
 directs repeated questions to existing threads, so its most-referenced answers are old on
