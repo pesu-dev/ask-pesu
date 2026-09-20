@@ -19,8 +19,10 @@ rag:
     # inside <think>...</think>, which the backend splits out into `step` events.
     #
     # temperature: low, because answers must stay close to the retrieved threads.
-    # max_new_tokens: the answer budget; a thinking model spends part of it on
-    #   reasoning, so truncation shows up there first.
+    # max_new_tokens: the budget for one response. The thinking model spends
+    #   part of it reasoning before the answer starts, so its budget is the
+    #   larger of the two; when it runs out mid-reasoning there is no answer at
+    #   all, and the stream reports an error.
     # timeout: seconds to wait on the provider before failing the stream.
 
     primary:
@@ -34,8 +36,8 @@ rag:
       repo_id: "Qwen/Qwen3-4B-Thinking-2507"
       provider: "nscale"
       temperature: 0.3
-      max_new_tokens: 2048
-      timeout: 120
+      max_new_tokens: 4096
+      timeout: 240
   # Retrieval finds candidates. It does not decide relevance -- the reranker
   # below is the only thing that filters.
   retrieval:
@@ -115,7 +117,7 @@ rag:
     # Seconds for the whole of /ask, across retrieval and every LLM call. The
     # per-call `timeout` under llm bounds one provider call; this bounds the
     # request, which makes several.
-    timeout_seconds: 180
+    timeout_seconds: 240
 
   # How much of the conversation each LLM call receives.
   history:
