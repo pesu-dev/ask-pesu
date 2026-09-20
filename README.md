@@ -144,7 +144,8 @@ Anything older than that window comes from [the backfill scripts](#backfilling-h
    a document is discarded for being a poor answer. A cross-encoder reads
    both texts together, which a vector search structurally cannot. It scores the query
    retrieval actually used, so a follow-up is judged on its resolved form rather than on "is
-   it hard?".
+   it hard?". Documents are scored without their post body, so the model's 512-token window
+   holds the title and the replies.
 6. **Selection and ranking** — the `top_n` most relevant of what survived are sent, and upvotes
    on the answer decide the order they are read in. The sort is stable, so documents with equal
    upvotes keep the relevance order they arrived in.
@@ -783,6 +784,11 @@ thread.
 
 **`rerank.top_n` is how much of the shortlist the model reads**, taken in relevance order.
 Everything it drops has already cleared the cutoff. Raising it costs prompt tokens.
+
+**Documents are scored without the post body.** A document is a title, the submission body and
+then one comment tree; the first two are identical across every document from that post, so on a
+long thread the cross-encoder's 512-token window fills with the submission and the replies fall
+outside it. The title is kept, and the answer prompt is still given the whole document.
 
 **There is deliberately no recency term.** Age is not a proxy for usefulness here. r/PESU
 directs repeated questions to existing threads, so its most-referenced answers are old on

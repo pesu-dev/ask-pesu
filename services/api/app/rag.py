@@ -360,6 +360,24 @@ def describe_sources(docs: list[Document], snippet_chars: int = 200) -> list[dic
     return out
 
 
+def _without_body(text: str) -> str:
+    """A document with the submission body removed: its title, then its comment tree.
+
+    A document is a TITLE line, a CONTENT line holding the submission body, and
+    then the COMMENT TREE. The first two are identical across every document from
+    that post, so the body is what fills the cross-encoder's 512-token window on
+    a long thread, leaving the replies -- the part that answers the question --
+    outside it.
+
+    Text that does not carry the markers is returned unchanged.
+    """
+    head, marker, tail = text.partition("COMMENT TREE:")
+    if not marker:
+        return text
+    title, _, _body = head.partition("\nCONTENT:")
+    return f"{title}\nCONTENT:\n{marker}{tail}"
+
+
 def rank(docs: list[Document]) -> list[Document]:
     """Order documents by how the community received the answer.
 
@@ -886,6 +904,8 @@ class RetrievalAugmentedGenerator:
         have that information. That is the intended behaviour -- an admission
         beats an answer invented from weak context.
 
+        Documents are scored without their post body, by :func:`_without_body`.
+
         The model call is a synchronous, CPU-bound torch inference. It runs in a
         worker thread rather than inline, because inline it would block the
         event loop for every other request streaming at the same time, and
@@ -913,7 +933,9 @@ class RetrievalAugmentedGenerator:
         # in the pipeline. Deliberately not shared with retrieval, which under
         # hybrid has no thresholdable score at all.
         threshold = self.rerank_cfg["score_threshold"]
-        pairs = [[query, doc.page_content] for doc in docs]
+        # Scored without the post body. Scoring only: the answer prompt is still
+        # given the whole document.
+        pairs = [[query, _without_body(doc.page_content)] for doc in docs]
         async with self._rerank_gate:
             scores = await asyncio.to_thread(self.cross_encoder.predict, pairs)
 
