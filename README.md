@@ -738,7 +738,7 @@ Runtime behaviour that is *not* part of the collection contract lives in
 | `rerank.enabled` | `true` | Turning it off skips the torch and sentence-transformers load at startup. Not permitted under hybrid |
 | `rerank.model` | `cross-encoder/ms-marco-MiniLM-L6-v2` | The cross-encoder |
 | `rerank.score_threshold` | `0.3` | **The** relevance cutoff, and the only place a document is dropped for being a poor answer. Deliberately permissive; see below |
-| `rerank.top_n` | `6` | Documents that reach the answer prompt. **Not measured** — see below |
+| `rerank.top_n` | `20` | Documents that reach the answer prompt; see below |
 | `rerank.concurrency` | `1` | Cross-encoder passes at once; serialised because two vCPUs thrash |
 | `sources.snippet_chars` | `200` | Preview length in the `sources` event; presentation only |
 | `history.answer_turns` | `4` | Turns of conversation the **answer** prompt receives. Retrieval is not bounded by it. **Not measured** — see below |
@@ -782,9 +782,8 @@ which is frequently the best result available rather than duplication. The repea
 and body that would make that wasteful is already handled: `format_docs` emits it once per
 thread.
 
-**`rerank.top_n` is a guess and is labelled as one in the config** — six is "enough perspectives,
-not a wall of text", and nobody has checked whether four answers as well. It is not a filter:
-everything it drops has already cleared the cutoff.
+**`rerank.top_n` bounds how much of the shortlist the model reads.** It is not a filter:
+everything it drops has already cleared the cutoff. Raising it costs prompt tokens.
 
 **There is deliberately no recency term.** Age is not a proxy for usefulness here. r/PESU
 directs repeated questions to existing threads, so its most-referenced answers are old on

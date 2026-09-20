@@ -94,12 +94,11 @@ rag:
     # is to drop the obviously off-topic tail; upvotes decide the order of what
     # survives. Check the effect on real questions before changing it.
     score_threshold: 0.3
-    # Documents that actually reach the answer prompt.
+    # Documents that reach the answer prompt.
     #
-    # NOT MEASURED. Six is a guess.
-    # Not a filter: everything it drops has already cleared the cutoff, so
-    # raising it costs context and lowers no quality bar.
-    top_n: 6
+    # Not a filter: everything it drops has already cleared the cutoff. It
+    # bounds how much of the shortlist the model reads, and costs prompt tokens.
+    top_n: 20
     # Cross-encoder passes allowed at once. Serialised, because the Spaces have
     # few cores and concurrent torch inferences contend for them rather than
     # overlapping -- letting requests queue is faster than letting them fight.
