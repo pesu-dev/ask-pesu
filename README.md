@@ -737,7 +737,7 @@ Runtime behaviour that is *not* part of the collection contract lives in
 | `retrieval.score_threshold` | `null` | Cosine cutoff, **dense only**. Must stay `null` under hybrid; startup refuses otherwise |
 | `rerank.enabled` | `true` | Turning it off skips the torch and sentence-transformers load at startup. Not permitted under hybrid |
 | `rerank.model` | `cross-encoder/ms-marco-MiniLM-L6-v2` | The cross-encoder |
-| `rerank.score_threshold` | `0.3` | **The** relevance cutoff, and the only place a document is dropped for being a poor answer. Deliberately permissive; see below |
+| `rerank.score_threshold` | `0.1` | **The** relevance cutoff, and the only place a document is dropped for being a poor answer. Deliberately permissive; see below |
 | `rerank.top_n` | `20` | Documents that reach the answer prompt; see below |
 | `rerank.concurrency` | `1` | Cross-encoder passes at once; serialised because two vCPUs thrash |
 | `sources.snippet_chars` | `200` | Preview length in the `sources` event; presentation only |

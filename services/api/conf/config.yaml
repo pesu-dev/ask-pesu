@@ -93,7 +93,7 @@ rag:
     # so it discards correct answers about as fast as irrelevant ones. Its job
     # is to drop the obviously off-topic tail; upvotes decide the order of what
     # survives. Check the effect on real questions before changing it.
-    score_threshold: 0.3
+    score_threshold: 0.1
     # Documents that reach the answer prompt.
     #
     # Not a filter: everything it drops has already cleared the cutoff. It
