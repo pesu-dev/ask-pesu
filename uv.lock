@@ -78,6 +78,7 @@ dependencies = [
 
 [package.optional-dependencies]
 api = [
+    { name = "httpx" },
     { name = "huggingface-hub" },
     { name = "langchain-classic" },
     { name = "pydantic" },
@@ -107,6 +108,7 @@ requires-dist = [
     { name = "anytree", marker = "extra == 'db'", specifier = ">=2.13.0" },
     { name = "fastapi", specifier = ">=0.116.1" },
     { name = "fastembed", marker = "extra == 'db'", specifier = ">=0.8.0" },
+    { name = "httpx", marker = "extra == 'api'", specifier = ">=0.28.1" },
     { name = "huggingface-hub", marker = "extra == 'api'", specifier = ">=1.30.0" },
     { name = "langchain-classic", marker = "extra == 'api'", specifier = ">=1.0.3" },
     { name = "langchain-core", specifier = ">=1.2.19" },

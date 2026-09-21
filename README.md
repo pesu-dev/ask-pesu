@@ -413,6 +413,7 @@ If both copies exist and differ, the loader raises rather than silently preferri
     │   │   ├── app.py        # routes, lifespan, static serving
     │   │   ├── rag.py        # the retrieval + generation pipeline
     │   │   ├── quota.py      # per-model cooldowns
+    │   │   ├── local_llm.py  # the two chat models, served by a local ollama
     │   │   ├── contract.py   # reader side of the collection contract
     │   │   ├── models/       # pydantic request/response schemas
     │   │   └── docs/         # OpenAPI examples, one module per route
@@ -533,6 +534,11 @@ so running either service from anywhere in the repo picks it up. `.env` is gitig
 | `REDDIT_CLIENT_ID` | db | [reddit.com/prefs/apps](https://www.reddit.com/prefs/apps) → create a **script** app; the id is the string under the app name |
 | `REDDIT_CLIENT_SECRET` | db | Same app, the field labelled **secret** |
 | `ENV` | api | Optional. Set to `test` to serve canned responses; see [Running the services](#running-the-services) |
+| `LLM_MODE` | api | Optional. `hf` (the default) answers through Hugging Face Inference; `ollama` answers from a local copy, see [Running the services](#running-the-services) |
+| `OLLAMA_BASE_URL` | api | Required under `LLM_MODE=ollama`. Where the ollama server is |
+| `OLLAMA_PRIMARY_MODEL` | api | Required under `LLM_MODE=ollama`. The ollama tag standing in for `rag.llm.primary` |
+| `OLLAMA_THINKING_MODEL` | api | Required under `LLM_MODE=ollama`. The ollama tag standing in for `rag.llm.thinking` |
+| `OLLAMA_NUM_CTX` | api | Optional. Context window the local models are loaded with; defaults to 16384 |
 | `ASKPESU_CONFIG_PATH` | api | Optional, and normally set for you: `--config` writes it. Overrides the path to `conf/config.yaml` |
 
 **Write values unquoted.** `python-dotenv` strips surrounding quotes but
@@ -593,6 +599,46 @@ mode, and every route still answers in its real shape.
 ENV=test uv run python -m app.app
 ```
 
+**Running the LLM locally.** When the account's included inference credits run out every LLM
+call returns 402, and `ENV=test` is no substitute because its answers are canned. Both
+configured models are open weights published for [ollama](https://ollama.com), and
+`LLM_MODE=ollama` points the pipeline at a local copy of them instead:
+
+```bash
+ollama pull qwen3:4b-instruct-2507-q4_K_M
+ollama pull qwen3:4b-thinking-2507-q4_K_M
+
+LLM_MODE=ollama \
+OLLAMA_BASE_URL=http://localhost:11434 \
+OLLAMA_PRIMARY_MODEL=qwen3:4b-instruct-2507-q4_K_M \
+OLLAMA_THINKING_MODEL=qwen3:4b-thinking-2507-q4_K_M \
+uv run python -m app.app
+```
+
+Only the LLM moves: Qdrant, the embeddings, the reranker, the ranking and every prompt are the
+real ones, so what runs is the pipeline itself. Thinking mode included — ollama returns a
+thinking model's reasoning in its own field, and `app/local_llm.py` puts it back inline so the
+same `step` events reach the client.
+
+The ollama tags are quantised copies rather than the weights the provider serves, so answers are
+not identical to production's. What carries across is the effect of a change — a prompt, a
+retrieval setting, a config value — measured against the same corpus, not an absolute quality
+number.
+
+Startup fails with a message naming the fix if the server is not running or a model was never
+pulled. `HF_TOKEN` is still required: `services/api` checks for it before it builds anything,
+whichever side the answers come from.
+
+`OLLAMA_NUM_CTX` is the context window the models are loaded with, 16384 by default. It has to
+hold the system prompt, the retrieved threads and the answer budget together: ollama refuses a
+prompt longer than its window rather than answering part of one, and the `error` event carries
+its message naming both sizes. Lower it if the model does not fit in VRAM at that size; the
+overflow then runs on the CPU, which is slower.
+
+Generation is slower than the provider, and `rag.limits.timeout_seconds` bounds the whole
+request regardless of where the tokens come from. Raise it locally if answers are cut off with
+the timeout error.
+
 ### DB listener
 
 ```bash
@@ -633,6 +679,24 @@ docker run --rm -p 7860:7860 --env-file .env ask-pesu
 Substitute `db` for `api` for the listener. Both images install the **CPU build of torch** from
 PyTorch's own index, which is what keeps them from ballooning. Both run as uid 1000,
 matching how Hugging Face Spaces run containers.
+
+**With a local ollama.** `localhost` inside a container is the container, and ollama listens on
+the host's loopback only — so neither `localhost:11434` nor the bridge gateway reaches it, and
+both fail at startup with `which is not answering`. Share the host's network instead, which also
+publishes the port, so `-p` is not needed:
+
+```bash
+docker run --rm --network host --env-file .env \
+  -e LLM_MODE=ollama \
+  -e OLLAMA_BASE_URL=http://localhost:11434 \
+  -e OLLAMA_PRIMARY_MODEL=qwen3:4b-instruct-2507-q4_K_M \
+  -e OLLAMA_THINKING_MODEL=qwen3:4b-thinking-2507-q4_K_M \
+  ask-pesu
+```
+
+`--network host` is Linux only. Elsewhere the container has to reach the host some other way,
+which means binding ollama beyond loopback with `OLLAMA_HOST=0.0.0.0` and addressing it as
+`host.docker.internal`. NOT TESTED; the recipe above is.
 
 ## Backfilling history
 
@@ -729,7 +793,7 @@ Runtime behaviour that is *not* part of the collection contract lives in
 |---|---|---|
 | `llm.primary.repo_id` | `Qwen/Qwen3-4B-Instruct-2507` | Answers in normal mode; query rewriting and multi-query expansion in **both** modes |
 | `llm.thinking.repo_id` | `Qwen/Qwen3-4B-Thinking-2507` | Answers in thinking mode only |
-| `llm.*.provider` | `nscale` | Routes the Inference call to a third-party host rather than HF's own hardware |
+| `llm.*.provider` | `nscale` | Routes the Inference call to a third-party host rather than HF's own hardware. With `llm.*.repo_id`, the only keys here that `LLM_MODE=ollama` replaces |
 | `llm.*.temperature` | `0.3` | Sampling temperature; low, to stay close to retrieved threads |
 | `llm.primary.max_new_tokens` | `2048` | Generation cap for one response |
 | `llm.thinking.max_new_tokens` | `4096` | The same cap, shared between reasoning and answer, so it is the larger of the two |
@@ -895,6 +959,9 @@ alternative — answering from the wrong data — is worse than not answering.
 | A payload's keys drift from the contract | The db's listener stops and `/health` returns 503 |
 | Reddit or network error in the listener | Treated as transient; the stream is re-entered |
 | Provider quota exhausted mid-answer | An `error` event, then a 24-hour cooldown for that model |
+| `LLM_MODE` is neither `hf` nor `ollama`, or a variable `ollama` needs is unset | The api refuses to start before binding a port, naming the mode or the variable |
+| `LLM_MODE=ollama`, but the server is unreachable or a model was never pulled | The api refuses to start, naming the URL it tried or the model to pull |
+| A prompt is longer than `OLLAMA_NUM_CTX` | ollama refuses it; the `error` event names the prompt and window sizes |
 | Nothing clears the relevance threshold | The model says it does not have that information |
 | Frontend not built | The api warns, serves every API route, and returns 503 from `/` |
 

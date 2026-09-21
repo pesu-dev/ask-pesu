@@ -391,7 +391,8 @@ async def rewrite_query(payload: AskRequestModel) -> ShortenQueryModel:
     try:
         return ShortenQueryModel(query=await rag.shorten_query(payload.query))
     except Exception as error:
-        refusal = quota_refusal(error)
+        # Not classified when the models are local, as in rag.generate().
+        refusal = quota_refusal(error) if rag.local is None else None
         if refusal is None:
             raise
         # A 402 waits for the billing period to roll over, which is knowable
