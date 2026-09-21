@@ -1018,13 +1018,23 @@ class RetrievalAugmentedGenerator:
 
         return pending, phase, events
 
-    def _flush_pending(self, pending: str, phase: str) -> list[dict]:
-        """Emit whatever is left once the stream ends.
+    def _flush_pending(self, pending: str, phase: str, answered: bool) -> list[dict]:
+        """Emit whatever is left once the stream ends, and report an empty answer.
 
         Still being in ``PHASE_THINKING`` means the block never closed, which in
         practice means ``max_new_tokens`` ran out during reasoning. There is no
         answer in that case, and the buffer holds the tail of the reasoning, so
         it goes out as a step and the stream reports an error.
+
+        A run that closed its reasoning and then stopped has no answer either,
+        and nothing else reports it: the client receives sources, the reasoning
+        steps and ``done``, and shows an answer that never arrives.
+
+        Args:
+            pending: Whatever is still buffered when the stream ends.
+            phase: The phase the stream ended in.
+            answered: Whether any answer token carrying more than whitespace
+                has been emitted.
         """
         if phase == PHASE_THINKING:
             logging.warning("</think> never arrived; the answer budget ran out during reasoning.")
@@ -1039,7 +1049,18 @@ class RetrievalAugmentedGenerator:
                 }
             )
             return events
-        return [{"type": "token", "content": pending}] if pending else []
+
+        if pending:
+            return [{"type": "token", "content": pending}]
+        if not answered:
+            logging.warning("The stream ended without an answer.")
+            return [
+                {
+                    "type": "error",
+                    "content": "The model returned no answer. Please ask again.",
+                }
+            ]
+        return []
 
     async def generate(
         self,
@@ -1112,6 +1133,7 @@ class RetrievalAugmentedGenerator:
         phase = PHASE_START
         pending = ""
         token_count = 0
+        answered = False
 
         try:
             # One deadline over the whole request; the per-call `timeout` in
@@ -1146,16 +1168,19 @@ class RetrievalAugmentedGenerator:
                     # Normal mode has no reasoning to separate, so chunks pass
                     # straight through as answer tokens.
                     if not thinking:
+                        answered = answered or bool(chunk.strip())
                         yield json.dumps({"type": "token", "content": chunk}) + "\n"
                         continue
 
                     pending, phase, events = self._process_thinking_chunk(chunk, pending, phase)
                     for event in events:
+                        answered = answered or (event["type"] == "token" and bool(event["content"].strip()))
                         yield json.dumps(event) + "\n"
 
-                # Not guarded on `pending`: a reasoning block that never closed has
-                # an error to report whether or not anything is still buffered.
-                for event in self._flush_pending(pending, phase):
+                # Not guarded on `pending`: a stream that never closed its
+                # reasoning, or that produced no answer at all, has an error to
+                # report whether or not anything is still buffered.
+                for event in self._flush_pending(pending, phase, answered):
                     yield json.dumps(event) + "\n"
                 logging.info(f"Stream complete. Total chunks: {token_count}")
         except TimeoutError:

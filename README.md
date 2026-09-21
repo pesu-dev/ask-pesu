@@ -197,9 +197,11 @@ Two properties worth knowing:
   before it. The opening tag is decided the same way: until enough has arrived to tell whether
   the stream opens with `<think>`, nothing is emitted, so a model that emits no reasoning block
   streams as an answer rather than as reasoning.
-- **Thinking mode can end without an answer.** If `max_new_tokens` runs out while the model is
-  still reasoning, `</think>` never arrives. The buffered tail is reported as `step`, not as a
-  one-word answer, and an `error` event says the budget was spent on reasoning.
+- **A stream can end without an answer.** If `max_new_tokens` runs out while the model is still
+  reasoning, `</think>` never arrives: the buffered tail is reported as `step`, not as a one-word
+  answer, and an `error` event says the budget was spent on reasoning. A model that closes its
+  reasoning and then stops, or that returns nothing at all, is reported as an `error` too, so a
+  client is never left waiting on an answer that is not coming.
 
 - **Citations are exact.** `sources` carries the documents retrieval actually selected. The
   system prompt explicitly tells the model *not* to print a source list, so a citation no longer
@@ -729,8 +731,10 @@ Runtime behaviour that is *not* part of the collection contract lives in
 | `llm.thinking.repo_id` | `Qwen/Qwen3-4B-Thinking-2507` | Answers in thinking mode only |
 | `llm.*.provider` | `nscale` | Routes the Inference call to a third-party host rather than HF's own hardware |
 | `llm.*.temperature` | `0.3` | Sampling temperature; low, to stay close to retrieved threads |
-| `llm.*.max_new_tokens` | `2048` | Generation cap. A thinking model spends part of it on reasoning |
-| `llm.*.timeout` | `120` | Seconds to wait on the provider before failing the stream |
+| `llm.primary.max_new_tokens` | `2048` | Generation cap for one response |
+| `llm.thinking.max_new_tokens` | `4096` | The same cap, shared between reasoning and answer, so it is the larger of the two |
+| `llm.primary.timeout` | `120` | Seconds to wait on the provider before failing the stream |
+| `llm.thinking.timeout` | `240` | The same, and longer because its budget is larger. Equal to `limits.timeout_seconds`, so the request budget is what stops a slow thinking call |
 | `retrieval.mode` | `hybrid` | `dense` is vector search alone; `hybrid` also queries the BM25 sparse vector and lets Qdrant fuse the two |
 | `retrieval.query_expansions` | `3` | Alternative phrasings written per question; the original is searched too, so `query_expansions + 1` searches run |
 | `retrieval.k` | `15` | Documents **per phrasing**. With `query_expansions` it sets the candidate pool, and so the cross-encoder work paid before the first token |
@@ -743,7 +747,7 @@ Runtime behaviour that is *not* part of the collection contract lives in
 | `sources.snippet_chars` | `200` | Preview length in the `sources` event; presentation only |
 | `history.answer_turns` | `4` | Turns of conversation the **answer** prompt receives. Retrieval is not bounded by it. **Not measured** — see below |
 | `limits.history_turns` | `50` | Turns a request may carry. Beyond this the **oldest are dropped**, not the request refused. **Not measured** |
-| `limits.timeout_seconds` | `180` | Budget for the whole of `/ask`, across retrieval and every LLM call |
+| `limits.timeout_seconds` | `240` | Budget for the whole of `/ask`, across retrieval and every LLM call |
 | `prompts.*` | — | System, answer and query-rewrite prompts |
 
 **On the two thresholds.** There is deliberately only one that filters. A retrieval-side cutoff
