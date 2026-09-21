@@ -8,8 +8,9 @@
 
 rag:
   llm:
-    # Two models, both reached through Hugging Face Inference. `provider` routes
-    # the call to a third-party host rather than HF's own hardware.
+    # Two models, normally both reached through Hugging Face Inference, where
+    # `provider` routes the call to a third-party host rather than HF's own
+    # hardware.
     #
     # `primary` answers in normal mode AND does every retrieval-side LLM call in
     # both modes -- question rewriting and multi-query expansion -- so thinking
@@ -17,6 +18,11 @@ rag:
     #
     # `thinking` only ever writes the final answer, and emits its reasoning
     # inside <think>...</think>, which the backend splits out into `step` events.
+    #
+    # `repo_id` and `provider` are the only two values here that a local run
+    # replaces: under LLM_MODE=ollama the environment names two ollama models to
+    # serve these two instead, and everything below still applies to them.
+    # See app/local_llm.py.
     #
     # temperature: low, because answers must stay close to the retrieved threads.
     # max_new_tokens: the budget for one response. The thinking model spends

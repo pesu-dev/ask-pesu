@@ -58,6 +58,9 @@ api = [
     "pytz>=2025.2",
     "langchain-classic>=1.0.3",
     "huggingface-hub>=1.30.0",
+    # app/local_llm.py posts to ollama with it. It would arrive transitively
+    # from langchain-core either way, but this service imports it directly.
+    "httpx>=0.28.1",
 ]
 # The writer: Reddit ingestion, and the BM25 sparse embeddings the collection's
 # `sparse` vector needs. fastembed pulls onnxruntime, which is why the db image

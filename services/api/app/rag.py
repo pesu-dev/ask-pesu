@@ -523,6 +523,10 @@ class RetrievalAugmentedGenerator:
         # nothing.
         self._validate_config()
 
+        # Above the embedding model, not below it: under LLM_MODE=ollama this
+        # reaches the server, and neither side needs anything built later.
+        self._build_llms()
+
         self.embedding = HuggingFaceEmbeddings(model_name=self.contract.model)
         contract_mod.validate_embedding(self.contract, self.embedding)
 
@@ -556,34 +560,6 @@ class RetrievalAugmentedGenerator:
             **sparse_kwargs,
         )
         logging.info(f"Retrieval mode: {mode}")
-
-        # Two chat models, both streaming. `provider` routes the call through a
-        # third-party inference provider (nscale) rather than HF's own hardware.
-        # Primary LLM — used for normal mode AND question rewriting in all modes
-        self.llm_primary = ChatHuggingFace(
-            llm=HuggingFaceEndpoint(
-                repo_id=self.config["rag"]["llm"]["primary"]["repo_id"],
-                provider=self.config["rag"]["llm"]["primary"]["provider"],
-                huggingfacehub_api_token=os.getenv("HF_TOKEN"),
-                temperature=self.config["rag"]["llm"]["primary"]["temperature"],
-                max_new_tokens=self.config["rag"]["llm"]["primary"]["max_new_tokens"],
-                timeout=self.config["rag"]["llm"]["primary"]["timeout"],
-                streaming=True,
-            ),
-        )
-
-        # Thinking LLM — ONLY used for final answer generation in thinking mode
-        self.llm_thinking = ChatHuggingFace(
-            llm=HuggingFaceEndpoint(
-                repo_id=self.config["rag"]["llm"]["thinking"]["repo_id"],
-                provider=self.config["rag"]["llm"]["thinking"]["provider"],
-                huggingfacehub_api_token=os.getenv("HF_TOKEN"),
-                temperature=self.config["rag"]["llm"]["thinking"]["temperature"],
-                max_new_tokens=self.config["rag"]["llm"]["thinking"]["max_new_tokens"],
-                timeout=self.config["rag"]["llm"]["thinking"]["timeout"],
-                streaming=True,
-            )
-        )
 
         # Answer prompt: system rules (answer only from context, do not
         # reprint the sources, refuse off-topic questions), then the recent
@@ -662,6 +638,65 @@ class RetrievalAugmentedGenerator:
         # This is the only LCEL left, and streaming is the reason it stays.
         self._answer_primary = self.prompt | self.llm_primary | StrOutputParser()
         self._answer_thinking = self.prompt | self.llm_thinking | StrOutputParser()
+
+    def _build_llms(self) -> None:
+        """Build the two chat models every chain in this class is assembled from.
+
+        `llm_primary` answers in normal mode and makes every retrieval-side call
+        in both modes; `llm_thinking` only ever writes the final answer in
+        thinking mode.
+
+        Normally both are Hugging Face Inference endpoints. Under
+        LLM_MODE=ollama they are local copies served by ollama instead, which is
+        what makes the pipeline runnable with no inference credits. Either way
+        they are streaming chat models carrying the temperature, token budget
+        and deadline from the same block of config.yaml, so the chains are built
+        the same way and nothing downstream knows which it got.
+
+        Sets :attr:`local`, :attr:`llm_primary` and :attr:`llm_thinking`.
+        """
+        # Imported here, not at the top: app/local_llm.py imports this module's
+        # <think> markers, and by now this module has finished loading.
+        from app.local_llm import OllamaChat, local_config, require_models
+
+        self.local = local_config()
+        if self.local is None:
+            llm_cfg = self.config["rag"]["llm"]
+            primary, thinking = llm_cfg["primary"]["repo_id"], llm_cfg["thinking"]["repo_id"]
+            logging.info(f"Hugging Face Inference: {primary} and {thinking}.")
+        else:
+            # A 404 naming the model at startup, rather than mid-answer. Logs
+            # the line above's counterpart.
+            require_models(self.local)
+
+        models = {}
+        for key in ("primary", "thinking"):
+            cfg = self.config["rag"]["llm"][key]
+            if self.local is None:
+                models[key] = ChatHuggingFace(
+                    llm=HuggingFaceEndpoint(
+                        repo_id=cfg["repo_id"],
+                        provider=cfg["provider"],
+                        huggingfacehub_api_token=os.getenv("HF_TOKEN"),
+                        temperature=cfg["temperature"],
+                        max_new_tokens=cfg["max_new_tokens"],
+                        timeout=cfg["timeout"],
+                        streaming=True,
+                    )
+                )
+            else:
+                # LocalConfig names its two models after these same config keys.
+                models[key] = OllamaChat(
+                    base_url=self.local.base_url,
+                    model=getattr(self.local, key),
+                    temperature=cfg["temperature"],
+                    num_predict=cfg["max_new_tokens"],
+                    num_ctx=self.local.num_ctx,
+                    timeout=cfg["timeout"],
+                )
+
+        self.llm_primary = models["primary"]
+        self.llm_thinking = models["thinking"]
 
     def _multi_query_prompt(self) -> PromptTemplate:
         """Build the prompt that writes the alternative phrasings.
@@ -1197,7 +1232,9 @@ class RetrievalAugmentedGenerator:
             )
         except Exception as e:
             logging.error(f"Error in generate(): {str(e)}", exc_info=True)
-            refusal = quota_refusal(e)
+            # A local endpoint has no budget to exhaust, and its failures can
+            # carry words quota_refusal matches on.
+            refusal = quota_refusal(e) if self.local is None else None
             if on_quota_exceeded is not None and refusal is not None:
                 # Tell the caller to start a cooldown so subsequent requests are
                 # rejected up front instead of failing mid-stream. A 402 waits
