@@ -78,7 +78,7 @@ def load(collection: str | None = None) -> Contract:
         raise ContractViolationError(
             "QDRANT_COLLECTION is not set. It has no default because the wrong collection is "
             "read and written silently rather than failing; set it to the one this service "
-            "should use (ask-pesu-prod for the deployed services, ask-pesu-dev for local work)."
+            "should use (ask-pesu-prod for the deployed services and for local work)."
         )
     collection_config = yaml.safe_load(contract_path().read_text())["collection"]
     dense = collection_config["dense"]

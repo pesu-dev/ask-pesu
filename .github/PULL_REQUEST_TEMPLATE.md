@@ -30,7 +30,7 @@ There is no Python test suite; both services validate the collection, the embedd
 - [ ] `uv run pre-commit run --all-files`
 - [ ] `uv run python scripts/check_duplication.py`
 - [ ] `npm run typecheck` and `npm test`, in `services/api/frontend/` — for frontend changes
-- [ ] Ran the service locally against `ask-pesu-dev`
+- [ ] Ran the service locally against `ask-pesu-prod`
 - [ ] Checked the UI with `ENV=test`, which needs no Qdrant, token or quota
 - [ ] Built and booted the image, vendoring the shared files first as in the README's [Docker](https://github.com/pesu-dev/ask-pesu/blob/dev/README.md#docker) section
 - [ ] For retrieval or prompt changes: compared answers before and after on real questions
