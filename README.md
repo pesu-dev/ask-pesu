@@ -296,9 +296,10 @@ it and both api Spaces read it, which means the dev api answers from exactly the
 production has — the only way a staging reader can tell you anything useful about a promotion.
 The api is a strict reader, so sharing carries no risk of one environment corrupting the other.
 
-`ask-pesu-dev` is the second collection, and it is **not** a deployed environment. It exists so
-that running the listener locally, or the CI container smoke tests, cannot write into the live
-index. Point local work at it; point deployed services at `ask-pesu-prod`.
+Local development uses `ask-pesu-prod` as well. Contributors are given read-only keys, so a
+local api answers from exactly the data production has, and a local listener cannot write. The
+CI smoke test for the db starts a real listener, so it writes to its own collection,
+`ask-pesu-ci`, and never to `ask-pesu-prod`.
 
 | | Value |
 |---|---|
@@ -340,7 +341,7 @@ path. To create one by hand in Qdrant Cloud instead:
 
 | Field | Value |
 |---|---|
-| Collection name | `ask-pesu-prod` for the deployed services, `ask-pesu-dev` for local work |
+| Collection name | `ask-pesu-prod`; `ask-pesu-ci` for the CI smoke test of the db |
 | Dense vector name | `dense` |
 | Dimension | `768` |
 | Metric | `Cosine` |
@@ -529,7 +530,7 @@ so running either service from anywhere in the repo picks it up. `.env` is gitig
 |---|---|---|
 | `QDRANT_URL` | api, db | Qdrant Cloud → your cluster → Overview → Endpoint |
 | `QDRANT_API_KEY` | api, db | Qdrant Cloud → your cluster → API keys. Must cover the collection below — a JWT scoped elsewhere returns 403. The db needs write access, and manage access if the collection does not exist yet |
-| `QDRANT_COLLECTION` | api, db | `ask-pesu-dev` locally; `ask-pesu-prod` on all three Spaces. Required; there is deliberately no default |
+| `QDRANT_COLLECTION` | api, db | `ask-pesu-prod`, locally and on all three Spaces. Contributors' keys are read-only. Required; there is deliberately no default |
 | `HF_TOKEN` | api | [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens) — a **Read** token suffices |
 | `REDDIT_CLIENT_ID` | db | [reddit.com/prefs/apps](https://www.reddit.com/prefs/apps) → create a **script** app; the id is the string under the app name |
 | `REDDIT_CLIENT_SECRET` | db | Same app, the field labelled **secret** |
@@ -1048,8 +1049,8 @@ subtree split are written once rather than once per deploy target.
 **Required repository secrets:** `HF_TOKEN` (with write scope, to push to the Spaces). The
 container smoke tests in `docker.yaml` additionally use `QDRANT_URL`, `QDRANT_API_KEY`,
 `REDDIT_CLIENT_ID` and `REDDIT_CLIENT_SECRET`, and the optional variable
-`QDRANT_COLLECTION_CI` (defaulting to `ask-pesu-dev`, so the smoke tests never write to the
-collection the deployed services use).
+`QDRANT_COLLECTION_CI` for the db smoke test (defaulting to `ask-pesu-ci`, so CI never writes to
+the collection the deployed services use). The api smoke test reads `ask-pesu-prod`.
 
 ## Deployment
 
@@ -1097,8 +1098,9 @@ the right rhythm for a component whose restarts cost data.
 Two consequences, worth internalising rather than discovering:
 
 - **A `services/db` change merged into `dev` is running nowhere.** It ships on the next
-  production dispatch, together with whatever else has accumulated. Test writer changes locally
-  against `ask-pesu-dev`, and use `populate_db.py --dry-run` before a real backfill.
+  production dispatch, together with whatever else has accumulated. Test writer changes against
+  a collection of your own, which needs a write key, and use `populate_db.py --dry-run` before a
+  real backfill.
 - **Writer changes reach production unobserved**, because there is no staging writer for them to
   be observed on. What stands in for that is review — `services/db/app/` and
   `services/db/scripts/` require owner review in [`CODEOWNERS`](.github/CODEOWNERS) — and the
@@ -1131,7 +1133,7 @@ README's frontmatter, but hardware does not — a Space converted from another S
 assigned in its settings.
 
 All three take the **same** collection. Each verifies the shape of whatever it is pointed at,
-but none can detect that another was pointed somewhere else — an api left on `ask-pesu-dev`
+but none can detect that another was pointed somewhere else — an api left on another collection
 would start happily and simply never see anything the writer stores. The db's key needs write
 access — and manage access if the collection does not exist yet, since it creates one — while
 the two api keys need only read.

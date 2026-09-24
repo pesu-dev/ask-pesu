@@ -16,14 +16,14 @@ collection:
   # What this file fixes is the SHAPE.
   #
   # The deployed services all use ONE collection, ask-pesu-prod: a single db
-  # Space writes it, and both api Spaces read it. ask-pesu-dev exists for local
-  # development and for the CI container smoke tests, which start a real
-  # listener and must not write into the live index.
+  # Space writes it, and both api Spaces read it. Local development reads it
+  # too, with a read-only key. The CI smoke test for the db starts a real
+  # listener, so it writes to its own collection, ask-pesu-ci.
   #
   # Every service must be pointed at the collection it is meant to use. Each
   # verifies the shape of whatever it is given, but none can tell that another
-  # was pointed somewhere else -- an api on ask-pesu-dev would start happily and
-  # simply never see what the writer stores.
+  # was pointed somewhere else -- an api on a different collection would start
+  # happily and simply never see what the writer stores.
 
   dense:
     model: "Alibaba-NLP/gte-modernbert-base"
