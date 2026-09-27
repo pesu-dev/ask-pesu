@@ -296,10 +296,11 @@ it and both api Spaces read it, which means the dev api answers from exactly the
 production has — the only way a staging reader can tell you anything useful about a promotion.
 The api is a strict reader, so sharing carries no risk of one environment corrupting the other.
 
-Local development uses `ask-pesu-prod` as well. Contributors are given read-only keys, so a
-local api answers from exactly the data production has, and a local listener cannot write. The
-CI smoke test for the db starts a real listener, so it writes to its own collection,
-`ask-pesu-ci`, and never to `ask-pesu-prod`.
+Local development reads `ask-pesu-prod` as well. Contributors are given a read-only key to it,
+so a local api answers from exactly the data production has. Work that has to write, such as
+running a listener or a backfill, uses `ask-pesu-dev` with a read-write key that the codeowners
+give out on request. CI reads and writes `ask-pesu-dev`. Nothing but a deployment ever writes to
+`ask-pesu-prod`.
 
 | | Value |
 |---|---|
@@ -341,7 +342,7 @@ path. To create one by hand in Qdrant Cloud instead:
 
 | Field | Value |
 |---|---|
-| Collection name | `ask-pesu-prod`; `ask-pesu-ci` for the CI smoke test of the db |
+| Collection name | `ask-pesu-prod` for deployments; `ask-pesu-dev` for CI and local writes |
 | Dense vector name | `dense` |
 | Dimension | `768` |
 | Metric | `Cosine` |
@@ -530,7 +531,7 @@ so running either service from anywhere in the repo picks it up. `.env` is gitig
 |---|---|---|
 | `QDRANT_URL` | api, db | Qdrant Cloud → your cluster → Overview → Endpoint |
 | `QDRANT_API_KEY` | api, db | Qdrant Cloud → your cluster → API keys. Must cover the collection below — a JWT scoped elsewhere returns 403. The db needs write access, and manage access if the collection does not exist yet |
-| `QDRANT_COLLECTION` | api, db | `ask-pesu-prod`, locally and on all three Spaces. Contributors' keys are read-only. Required; there is deliberately no default |
+| `QDRANT_COLLECTION` | api, db | `ask-pesu-prod` on all three Spaces and for local reads (read-only key); `ask-pesu-dev` in CI and for local writes (read-write key from the codeowners). Required; there is deliberately no default |
 | `HF_TOKEN` | api | [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens) — a **Read** token suffices |
 | `REDDIT_CLIENT_ID` | db | [reddit.com/prefs/apps](https://www.reddit.com/prefs/apps) → create a **script** app; the id is the string under the app name |
 | `REDDIT_CLIENT_SECRET` | db | Same app, the field labelled **secret** |
@@ -1048,9 +1049,8 @@ subtree split are written once rather than once per deploy target.
 
 **Required repository secrets:** `HF_TOKEN` (with write scope, to push to the Spaces). The
 container smoke tests in `docker.yaml` additionally use `QDRANT_URL`, `QDRANT_API_KEY`,
-`REDDIT_CLIENT_ID` and `REDDIT_CLIENT_SECRET`, and the optional variable
-`QDRANT_COLLECTION_CI` for the db smoke test (defaulting to `ask-pesu-ci`, so CI never writes to
-the collection the deployed services use). The api smoke test reads `ask-pesu-prod`.
+`REDDIT_CLIENT_ID` and `REDDIT_CLIENT_SECRET`. Both smoke tests use `ask-pesu-dev`, so
+`QDRANT_API_KEY` there is a read-write key to `ask-pesu-dev`, never one to `ask-pesu-prod`.
 
 ## Deployment
 
@@ -1099,7 +1099,7 @@ Two consequences, worth internalising rather than discovering:
 
 - **A `services/db` change merged into `dev` is running nowhere.** It ships on the next
   production dispatch, together with whatever else has accumulated. Test writer changes against
-  a collection of your own, which needs a write key, and use `populate_db.py --dry-run` before a
+  `ask-pesu-dev`, with a read-write key from the codeowners, and use `populate_db.py --dry-run` before a
   real backfill.
 - **Writer changes reach production unobserved**, because there is no staging writer for them to
   be observed on. What stands in for that is review — `services/db/app/` and

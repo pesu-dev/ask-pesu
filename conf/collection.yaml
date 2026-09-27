@@ -17,8 +17,8 @@ collection:
   #
   # The deployed services all use ONE collection, ask-pesu-prod: a single db
   # Space writes it, and both api Spaces read it. Local development reads it
-  # too, with a read-only key. The CI smoke test for the db starts a real
-  # listener, so it writes to its own collection, ask-pesu-ci.
+  # with a read-only key. Anything else that writes -- CI, or a contributor
+  # testing a writer -- uses ask-pesu-dev.
   #
   # Every service must be pointed at the collection it is meant to use. Each
   # verifies the shape of whatever it is given, but none can tell that another
