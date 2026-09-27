@@ -1099,8 +1099,8 @@ Two consequences, worth internalising rather than discovering:
 
 - **A `services/db` change merged into `dev` is running nowhere.** It ships on the next
   production dispatch, together with whatever else has accumulated. Test writer changes against
-  `ask-pesu-dev`, with a read-write key from the codeowners, and use `populate_db.py --dry-run` before a
-  real backfill.
+  `ask-pesu-dev`, with a read-write key from the codeowners, and use `populate_db.py --dry-run`
+  before a real backfill.
 - **Writer changes reach production unobserved**, because there is no staging writer for them to
   be observed on. What stands in for that is review — `services/db/app/` and
   `services/db/scripts/` require owner review in [`CODEOWNERS`](.github/CODEOWNERS) — and the
