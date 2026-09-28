@@ -13,8 +13,8 @@ name: Deploy to Production
 # often; and because its stream opens with skip_existing=True, every restart
 # permanently drops the r/PESU comments posted while it was down. Promotions are
 # infrequent and deliberate, which is the right rhythm for a component whose
-# restarts cost data. The cost accepted in exchange is real and documented in the
-# README: a services/db change merged to `dev` runs nowhere until someone
+# restarts cost data. The cost accepted in exchange is real and documented in
+# docs/ci-cd.md: a services/db change merged to `dev` runs nowhere until someone
 # promotes, so writer changes reach production unobserved.
 #
 # Both services deploy on every promotion, regardless of what changed. (There is

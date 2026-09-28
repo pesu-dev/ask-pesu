@@ -4,7 +4,7 @@ This repository holds two services: **AskPESU** (`services/api`), which answers 
 **AskPESU DB** (`services/db`), which fills the search index it answers from.
 
 This file is the short path from a clone to a merged pull request. It links into the
-[README](../README.md) rather than restating it.
+[documentation](../docs/README.md) rather than restating it.
 
 By taking part you agree to the [Code of Conduct](CODE_OF_CONDUCT.md).
 
@@ -20,7 +20,7 @@ cp .env.example .env          # then fill it in
 **Install dependencies with `uv sync` only.** It installs both services' libraries, the linting
 tools, and torch from PyTorch's CPU index rather than the CUDA build from PyPI. Do not install
 `requirements.txt` by hand — it is a compiled artifact for the Space images, which have neither
-uv nor a lockfile. See [Dependencies](../README.md#dependencies).
+uv nor a lockfile. See [Dependencies](../docs/development.md#dependencies).
 
 Run everything through `uv run`, which finds the environment from any directory in the repo:
 
@@ -33,7 +33,7 @@ You need [uv](https://docs.astral.sh/uv/getting-started/installation/) and, for 
 Node.js 24. uv fetches Python itself.
 
 The required environment variables, and where each value comes from, are in
-[Environment variables](../README.md#environment-variables). Write the values **unquoted**. For
+[Environment variables](../docs/configuration.md#environment-variables). Write the values **unquoted**. For
 frontend work, set `ENV=test`: it serves canned responses and needs no Qdrant, no `HF_TOKEN` and
 no inference quota.
 
@@ -52,14 +52,14 @@ no inference quota.
 There is no Python test suite. Both services validate the live collection, the embedding model
 and every payload before doing any work, so CI checks the structural invariants a running service
 cannot see, and typechecks and tests the frontend. See
-[Continuous integration](../README.md#continuous-integration).
+[Continuous integration](../docs/ci-cd.md#continuous-integration).
 
 ## Shared files and contracts
 
 1. **Shared files are authored once, at the repository root.** `conf/collection.yaml`,
    `requirements.txt`, `LICENSE` and `.env.example` are copied into each service at deploy time,
    because a `git subtree split` ships only `services/<name>/`. A second committed copy fails CI.
-   See [Why builds copy shared files](../README.md#why-builds-copy-shared-files).
+   See [Shared files and vendoring](../docs/collection-contract.md#shared-files-and-vendoring).
 2. **Editing a dependency means recompiling `requirements.txt`**, with the exact command in
    `pyproject.toml`. Keep `--group cpu`: without it torch resolves to the CUDA build and both images
    grow by an order of magnitude. CI recompiles and fails on any difference.
@@ -70,7 +70,7 @@ cannot see, and typechecks and tests the frontend. See
 4. **Anything that would make already-stored vectors unreadable belongs in
    `conf/collection.yaml`**, not in `services/api/conf/config.yaml`. Prompts, model ids and
    retrieval knobs are configuration; the embedding model and vector shape are a contract between
-   the writer and the reader. See [The collection contract](../README.md#the-collection-contract).
+   the writer and the reader. See [The collection contract](../docs/collection-contract.md).
 
 ## Comments and documentation
 
