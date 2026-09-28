@@ -146,6 +146,9 @@ rag:
   # The three prompts the pipeline uses. `{question}`, `{context}`, `{input}` and
   # `{chat_history}` are filled in by app/rag.py; renaming one breaks the chain.
   prompts:
+    # Returned directly when reranking rejects every thread, and inserted into
+    # the system prompt below for cases where retrieved context is insufficient.
+    no_context_answer: "I'm sorry, I don't have that information."
     # Writes the alternative phrasings the multi-query step searches with.
     # `{count}` is filled in from rag.retrieval.query_expansions and `{question}`
     # by the retriever.
@@ -197,7 +200,7 @@ rag:
       Everything else -- definitions, rules, how things work -- does not go out of date this way.
       State it without dates or caveats about age, and do not set an answer aside because its thread is old.
 
-      If the context does not contain the answer, respond with "I'm sorry, I don't have that information."
+      If the context does not contain the answer, respond with "{no_context_answer}"
       If asked anything unrelated to PES University, politely decline.
     answer_prompt: |
       Question: {question}

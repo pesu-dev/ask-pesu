@@ -51,4 +51,4 @@ keep their own.
 | `/ask` exceeds `limits.timeout_seconds` | An `error` event, then `done` |
 | The thinking model spends its budget before finishing its reasoning | The reasoning so far as `step` events, then an `error` event |
 | A prompt is longer than `OLLAMA_NUM_CTX` | ollama refuses it; the `error` event gives both sizes |
-| Nothing clears the reranker's cutoff | The model says it does not have that information |
+| Nothing clears the reranker's cutoff | The api returns the configured no-context answer without calling the model |

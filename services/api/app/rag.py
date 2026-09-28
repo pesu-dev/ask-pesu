@@ -510,6 +510,7 @@ class RetrievalAugmentedGenerator:
         self.sources_cfg = self.config["rag"]["sources"]
         self.history_cfg = self.config["rag"]["history"]
         self.limits_cfg = self.config["rag"]["limits"]
+        self.prompts_cfg = self.config["rag"]["prompts"]
 
         # The collection name, embedding model and vector geometry are contracted
         # with services/db, not configured per service. Everything is checked
@@ -574,17 +575,17 @@ class RetrievalAugmentedGenerator:
         # The context sits in the final turn, after the history.
         self.prompt = ChatPromptTemplate.from_messages(
             [
-                ("system", self.config["rag"]["prompts"]["system_prompt"]),
+                ("system", self.prompts_cfg["system_prompt"]),
                 MessagesPlaceholder("chat_history"),
-                ("human", self.config["rag"]["prompts"]["answer_prompt"]),
+                ("human", self.prompts_cfg["answer_prompt"]),
             ]
-        )
+        ).partial(no_context_answer=self.prompts_cfg["no_context_answer"])
 
         # Rewrite prompt: turns a possibly-elliptical follow-up plus history into
         # one standalone query. {input} is the raw question.
         self.frame_qn_prompt = ChatPromptTemplate.from_messages(
             [
-                ("system", self.config["rag"]["prompts"]["rewrite_prompt"]),
+                ("system", self.prompts_cfg["rewrite_prompt"]),
                 ("human", "{input}"),
             ]
         )
@@ -712,7 +713,7 @@ class RetrievalAugmentedGenerator:
         Returns:
             A prompt template taking ``question``.
         """
-        template = self.config["rag"]["prompts"]["multi_query_prompt"]
+        template = self.prompts_cfg["multi_query_prompt"]
         return PromptTemplate(
             input_variables=["question"],
             template=template.replace("{count}", str(self.retrieval_cfg["query_expansions"])),
@@ -1190,6 +1191,20 @@ class RetrievalAugmentedGenerator:
                 # can distinguish "no sources" from "sources not sent yet".
                 sources = describe_sources(docs, self.sources_cfg["snippet_chars"])
                 yield json.dumps({"type": "sources", "sources": sources}) + "\n"
+
+                if not docs:
+                    logging.info("No thread cleared the cutoff for this question; answered without calling the model.")
+                    yield (
+                        json.dumps(
+                            {
+                                "type": "token",
+                                "content": self.prompts_cfg["no_context_answer"],
+                            }
+                        )
+                        + "\n"
+                    )
+                    yield json.dumps({"type": "done"}) + "\n"
+                    return
 
                 async for chunk in answer_chain.astream(
                     {
