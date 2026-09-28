@@ -48,5 +48,6 @@ services/db/README.md @aditeyabaral
 
 ## Documentation and Legal
 /README.md @aditeyabaral
+/docs/ @aditeyabaral
 # One copy, vendored into each service tree at deploy time.
 /LICENSE @aditeyabaral
