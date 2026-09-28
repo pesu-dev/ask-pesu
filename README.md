@@ -23,16 +23,9 @@ flowchart LR
     contract -.- api
 ```
 
-The db service indexes each Reddit comment thread, together with the post it belongs to, as one
-document. For each question, the api service:
-
-1. rewrites follow-up questions into standalone ones;
-2. writes a few alternative phrasings;
-3. runs a hybrid dense and keyword search in Qdrant for each phrasing;
-4. reranks the results with a cross-encoder;
-5. streams an answer from a Qwen3 model, together with the threads it drew on.
-
-Both services validate the collection's shape against `conf/collection.yaml` when they start.
+The db service indexes r/PESU threads into Qdrant. The api service searches them for each question
+and streams back an answer, with the threads it drew on. See [Architecture](docs/architecture.md)
+and [The answering pipeline](docs/pipeline.md) for the details.
 
 ## Quick start
 
