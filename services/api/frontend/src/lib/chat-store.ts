@@ -34,7 +34,8 @@ export interface Conversation {
 }
 
 export function createId(): string {
-  return Math.random().toString(36).substring(2, 15);
+  // The deployed app uses HTTPS and local development uses localhost, both secure contexts.
+  return crypto.randomUUID();
 }
 
 export function createConversation(title: string = "New Chat"): Conversation {
