@@ -127,6 +127,18 @@ rag:
 
   # How much of the conversation each LLM call receives.
   history:
+    # Turns of conversation the REWRITE prompt is given, most recent last.
+    # This is separate from limits.history_turns: the client-side request cap
+    # protects the endpoint, while this cap keeps the rewrite input readable.
+    #
+    # NOT MEASURED. Eight is a guess.
+    rewrite_turns: 8
+    # Maximum characters retained from each previous assistant answer in the
+    # REWRITE prompt. User questions are kept whole because they carry the
+    # referent the model needs to resolve.
+    #
+    # NOT MEASURED. Two thousand is a guess.
+    rewrite_answer_chars: 2000
     # Turns of conversation the ANSWER prompt is given, most recent last. One
     # turn is a question and its answer.
     #

@@ -212,6 +212,33 @@ def preserve_acronyms(rewritten: str, question: str, fallback: str = "") -> str:
     return f"{rewritten} {' '.join(missing)}" if missing else rewritten
 
 
+def rewrite_transcript(messages: list, max_turns: int, max_answer_chars: int) -> str:
+    """Render recent chat history as a compact transcript for question rewriting.
+
+    LangChain message ``repr`` values include metadata and escaped newlines,
+    which makes a follow-up harder to resolve and spends tokens on fields the
+    model cannot use. The answer chain still receives the original messages;
+    this formatting is only for the rewrite call.
+    """
+    turns: list[tuple[str, str]] = []
+    user_text: str | None = None
+    for message in messages:
+        if isinstance(message, HumanMessage):
+            if user_text is not None:
+                turns.append((user_text, ""))
+            user_text = str(message.content)
+        elif isinstance(message, AIMessage) and user_text is not None:
+            turns.append((user_text, str(message.content)))
+            user_text = None
+    if user_text is not None:
+        turns.append((user_text, ""))
+
+    lines = []
+    for question, answer in turns[-max_turns:]:
+        lines.append(f"User: {question}\nAssistant: {answer[:max_answer_chars]}")
+    return "\n\n".join(lines)
+
+
 def deduplicate(docs: list[Document]) -> list[Document]:
     """Collapse documents that are the same stored point, keeping the best score.
 
@@ -744,6 +771,23 @@ class RetrievalAugmentedGenerator:
                 f"request would carry an unbounded conversation."
             )
 
+        rewrite_turns = self.history_cfg["rewrite_turns"]
+        if not isinstance(rewrite_turns, int) or isinstance(rewrite_turns, bool) or rewrite_turns < 1:
+            raise ValueError(
+                f"conf/config.yaml: rag.history.rewrite_turns must be a positive integer, not {rewrite_turns!r}."
+            )
+
+        rewrite_answer_chars = self.history_cfg["rewrite_answer_chars"]
+        if (
+            not isinstance(rewrite_answer_chars, int)
+            or isinstance(rewrite_answer_chars, bool)
+            or rewrite_answer_chars < 1
+        ):
+            raise ValueError(
+                "conf/config.yaml: rag.history.rewrite_answer_chars must be a positive integer, "
+                f"not {rewrite_answer_chars!r}."
+            )
+
         timeout_seconds = self.limits_cfg["timeout_seconds"]
         if not isinstance(timeout_seconds, int | float) or isinstance(timeout_seconds, bool) or timeout_seconds <= 0:
             raise ValueError(
@@ -831,7 +875,16 @@ class RetrievalAugmentedGenerator:
         """
         if not chat_history:
             return question
-        rewritten = await self._rewrite_chain.ainvoke({"input": question, "chat_history": chat_history})
+        rewritten = await self._rewrite_chain.ainvoke(
+            {
+                "input": question,
+                "chat_history": rewrite_transcript(
+                    chat_history,
+                    self.history_cfg["rewrite_turns"],
+                    self.history_cfg["rewrite_answer_chars"],
+                ),
+            }
+        )
         # The turn being resolved against. The most recent one only: the rewrite
         # prompt prefers the most recent topic, so reaching further back would
         # put tokens from an abandoned one into the query.
