@@ -19,3 +19,14 @@ repos:
       - id: check-yaml
       - id: check-toml
       - id: debug-statements
+
+  - repo: local
+    hooks:
+      # Relative links, and links to this repository on GitHub, in every tracked
+      # Markdown file must point at a file and heading that exist.
+      - id: check-links
+        name: check markdown links
+        entry: python scripts/check_links.py
+        language: python
+        pass_filenames: false
+        always_run: true
