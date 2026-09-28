@@ -535,6 +535,7 @@ so running either service from anywhere in the repo picks it up. `.env` is gitig
 | `HF_TOKEN` | api | [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens) — a **Read** token suffices |
 | `REDDIT_CLIENT_ID` | db | [reddit.com/prefs/apps](https://www.reddit.com/prefs/apps) → create a **script** app; the id is the string under the app name |
 | `REDDIT_CLIENT_SECRET` | db | Same app, the field labelled **secret** |
+| `REDDIT_USERNAME` | db | The Reddit username that owns that script app, without `/u/`; required for the API User-Agent |
 | `ENV` | api | Optional. Set to `test` to serve canned responses; see [Running the services](#running-the-services) |
 | `LLM_MODE` | api | Optional. `hf` (the default) answers through Hugging Face Inference; `ollama` answers from a local copy, see [Running the services](#running-the-services) |
 | `OLLAMA_BASE_URL` | api | Required under `LLM_MODE=ollama`. Where the ollama server is |
@@ -1049,7 +1050,8 @@ subtree split are written once rather than once per deploy target.
 
 **Required repository secrets:** `HF_TOKEN` (with write scope, to push to the Spaces). The
 container smoke tests in `docker.yaml` additionally use `QDRANT_URL`, `QDRANT_API_KEY`,
-`REDDIT_CLIENT_ID` and `REDDIT_CLIENT_SECRET`. Both smoke tests use `ask-pesu-dev`, so
+`REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET` and the repository variable `REDDIT_USERNAME`.
+Both smoke tests use `ask-pesu-dev`, so
 `QDRANT_API_KEY` there is a read-write key to `ask-pesu-dev`, never one to `ask-pesu-prod`.
 
 ## Deployment
@@ -1126,7 +1128,7 @@ names in [Environment variables](#environment-variables):
 |---|---|---|
 | `askpesu` | `HF_TOKEN`, `QDRANT_URL`, `QDRANT_API_KEY` | `ask-pesu-prod` |
 | `askpesu-dev` | `HF_TOKEN`, `QDRANT_URL`, `QDRANT_API_KEY` | `ask-pesu-prod` |
-| `askpesu-db` | `QDRANT_URL`, `QDRANT_API_KEY`, `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET` | `ask-pesu-prod` |
+| `askpesu-db` | `QDRANT_URL`, `QDRANT_API_KEY`, `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET`, `REDDIT_USERNAME` | `ask-pesu-prod` |
 
 All three are **Docker** SDK Spaces with hardware allocated. The SDK comes from each service
 README's frontmatter, but hardware does not — a Space converted from another SDK needs it

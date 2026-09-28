@@ -77,6 +77,7 @@ CATCH_UP_COMMENTS = 100
 
 client_id = os.getenv("REDDIT_CLIENT_ID")
 client_secret = os.getenv("REDDIT_CLIENT_SECRET")
+reddit_username = os.getenv("REDDIT_USERNAME", "").strip()
 qdrant_url = os.getenv("QDRANT_URL")
 qdrant_api_key = os.getenv("QDRANT_API_KEY")
 
@@ -352,11 +353,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             "REDDIT_CLIENT_ID and REDDIT_CLIENT_SECRET must both be set. Create a 'script' app "
             "at https://www.reddit.com/prefs/apps."
         )
+    if not reddit_username:
+        raise RuntimeError("REDDIT_USERNAME must be set to the account that owns the Reddit API app.")
 
     reddit = praw.Reddit(
         client_id=client_id,
         client_secret=client_secret,
-        user_agent="langchain-reddit-loader",
+        user_agent=f"linux:askpesu-db:v{app.version} (by /u/{reddit_username})",
     )
     subreddit = reddit.subreddit("PESU")
 

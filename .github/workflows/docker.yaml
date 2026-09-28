@@ -90,6 +90,7 @@ jobs:
           docker run --name ask-pesu-db -d -p 7860:7860 \
             -e REDDIT_CLIENT_ID="${{ secrets.REDDIT_CLIENT_ID }}" \
             -e REDDIT_CLIENT_SECRET="${{ secrets.REDDIT_CLIENT_SECRET }}" \
+            -e REDDIT_USERNAME="${{ vars.REDDIT_USERNAME }}" \
             -e QDRANT_URL="${{ secrets.QDRANT_URL }}" \
             -e QDRANT_API_KEY="${{ secrets.QDRANT_API_KEY }}" \
             -e QDRANT_COLLECTION="ask-pesu-dev" \

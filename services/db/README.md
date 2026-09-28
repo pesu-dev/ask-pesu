@@ -64,8 +64,10 @@ There is no interface to speak of: `/` is a status page and `/health` reports
 whether the listener is still running.
 
 **Configuration.** `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET`, `QDRANT_URL`,
-`QDRANT_API_KEY` and `QDRANT_COLLECTION` are set as Space secrets. Startup fails
-immediately if the Reddit credentials are missing or rejected.
+`QDRANT_API_KEY` and `QDRANT_COLLECTION` are set as Space secrets. Set
+`REDDIT_USERNAME` to the account that owns the Reddit API app in the Space
+settings. Startup fails immediately if the Reddit credentials or username are
+missing, or if the credentials are rejected.
 
 **Source.** This Space is deployed from the
 [ask-pesu monorepo](https://github.com/pesu-dev/ask-pesu) - it is the
