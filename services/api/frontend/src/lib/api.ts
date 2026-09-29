@@ -220,14 +220,15 @@ export async function askStream({
 export function extractSources(content: string): { cleanContent: string; sources: Source[] } {
   const sources: Source[] = [];
 
-  // First, extract from **Sources:** section if it exists
+  // Only a trailing Sources heading marks citations; links in the answer body
+  // can be part of the answer itself.
   const sourcesSectionMatch = content.match(
-    /\n*\*?\*?Sources?\*?\*?:?\s*\n+([\s\S]*?)$/i
+    /(?:^|\n)[ \t]*\*{0,2}Sources?:?\*{0,2}:?[ \t]*\r?\n([\s\S]*)$/i
   );
 
   if (sourcesSectionMatch) {
     const sourcesText = sourcesSectionMatch[1];
-    const markdownMatches = sourcesText.matchAll(/\[-•*]?\s*\[([^\]]+)\]\((https?:\/\/[^\)]+)\)/g);
+    const markdownMatches = sourcesText.matchAll(/[-•*]?\s*\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g);
     for (const match of markdownMatches) {
       const [, linkText, url] = match;
       sources.push({
@@ -243,9 +244,10 @@ export function extractSources(content: string): { cleanContent: string; sources
   // such lines were guaranteed to be citations; the system prompt asks for no
   // source list, so a link inside a genuine list is part of the answer and has
   // to survive.
-  const cleanContent = content
-    .replace(/\n*\*?\*?Sources?\*?\*?:?\s*\n+([\s\S]*)$/i, "")
-    .trim();
+  const cleanContent = (sourcesSectionMatch
+    ? content.slice(0, sourcesSectionMatch.index)
+    : content
+  ).trim();
 
   return { cleanContent, sources };
 }
