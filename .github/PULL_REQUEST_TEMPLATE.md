@@ -32,7 +32,7 @@ There is no Python test suite; both services validate the collection, the embedd
 - [ ] `npm run typecheck` and `npm test`, in `services/api/frontend/` — for frontend changes
 - [ ] Ran the service locally against `ask-pesu-prod`, or `ask-pesu-dev` if it writes
 - [ ] Checked the UI with `ENV=test`, which needs no Qdrant, token or quota
-- [ ] Built and booted the image, vendoring the shared files first as in the README's [Docker](https://github.com/pesu-dev/ask-pesu/blob/dev/README.md#docker) section
+- [ ] Built and booted the image, vendoring the shared files first as in [Docker](https://github.com/pesu-dev/ask-pesu/blob/dev/docs/development.md#docker)
 - [ ] For retrieval or prompt changes: compared answers before and after on real questions
 
 ## ✅ Checklist
@@ -40,7 +40,7 @@ There is no Python test suite; both services validate the collection, the embedd
 - [ ] Follows [CONTRIBUTING.md](https://github.com/pesu-dev/ask-pesu/blob/dev/.github/CONTRIBUTING.md)
 - [ ] Self-reviewed the diff
 - [ ] Comments describe what the code does, not why it is right — see [CONTRIBUTING.md](https://github.com/pesu-dev/ask-pesu/blob/dev/.github/CONTRIBUTING.md#comments-and-documentation)
-- [ ] Updated the README where behaviour or configuration changed
+- [ ] Updated the docs in `docs/` where behaviour or configuration changed
 - [ ] Recompiled `requirements.txt` if `pyproject.toml` changed, with the command in its header
 - [ ] Changed both sides of any pair `check_duplication.py` guards — contract loaders, payload keys, stream event names, `rag.*` config keys
 - [ ] No second committed copy of a shared root file (`conf/collection.yaml`, `requirements.txt`, `LICENSE`, `.env.example`)
