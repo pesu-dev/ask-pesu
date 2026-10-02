@@ -26,7 +26,7 @@ import datetime
 import json
 import logging
 import os
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -56,7 +56,7 @@ DEFAULT_CONFIG_PATH = "conf/config.yaml"
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Build the RAG pipeline before the server accepts traffic.
 
     Everything expensive or fallible happens here rather than per request:
