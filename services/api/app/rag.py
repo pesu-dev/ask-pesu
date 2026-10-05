@@ -55,6 +55,7 @@ import math
 import os
 import re
 from collections.abc import AsyncGenerator, Callable
+from typing import Any, Protocol
 
 import yaml
 from dotenv import load_dotenv
@@ -177,6 +178,51 @@ def credits_reset_at() -> datetime.datetime | None:
 # prompt's.
 ACRONYM = re.compile(r"\b[A-Z][A-Z0-9]+\b")
 
+MASK = "[masked]"
+
+
+class ToxicityScorer(Protocol):
+    """Scores source-snippet candidates for toxic language."""
+
+    def scores(self, texts: list[str]) -> list[float]:
+        """Return one toxicity score per input text."""
+
+
+class DetoxifyModel(Protocol):
+    """Small typed surface used from Detoxify."""
+
+    def predict(self, text: str | list[str]) -> dict[str, Any]:
+        """Return Detoxify label scores."""
+
+
+class DetoxifyToxicityScorer:
+    """Lazy Detoxify wrapper for source-snippet scoring."""
+
+    def __init__(self, model_name: str, threshold: float, device: str = "cpu") -> None:
+        """Store Detoxify settings without loading model weights yet."""
+        self.model_name = model_name
+        self.threshold = threshold
+        self.device = device
+        self._model: DetoxifyModel | None = None
+
+    def scores(self, texts: list[str]) -> list[float]:
+        """Score text with Detoxify; loading and inference failures propagate."""
+        if not texts:
+            return []
+        results = self._model_instance().predict(texts)
+        scores = [float(value) for value in results["toxicity"]]
+        if len(scores) != len(texts) or any(not math.isfinite(score) or not 0 <= score <= 1 for score in scores):
+            raise ValueError("Detoxify must return one finite toxicity score between 0 and 1 per text")
+        return scores
+
+    def _model_instance(self) -> DetoxifyModel:
+        """Load the Detoxify model only when source snippets need it."""
+        if self._model is None:
+            from detoxify import Detoxify
+
+            self._model = Detoxify(self.model_name, device=self.device)
+        return self._model
+
 
 def preserve_acronyms(rewritten: str, question: str, fallback: str = "") -> str:
     """Put back any acronym the rewrite expanded away instead of keeping.
@@ -210,6 +256,48 @@ def preserve_acronyms(rewritten: str, question: str, fallback: str = "") -> str:
         if token not in present and token not in missing:
             missing.append(token)
     return f"{rewritten} {' '.join(missing)}" if missing else rewritten
+
+
+def _snippet_candidates(text: str) -> list[str]:
+    """Split source text into passages worth considering for a clean preview."""
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    candidates = [" ".join(part.split()) for part in re.split(r"\n{2,}|\n(?=[A-Za-z0-9_ -]+:)", normalized)]
+    candidates = [candidate for candidate in candidates if candidate]
+    return candidates or [" ".join(text.split())]
+
+
+def source_snippet(
+    text: str,
+    snippet_chars: int,
+    scorer: ToxicityScorer,
+    toxicity_threshold: float,
+) -> str:
+    """Choose a low-toxicity passage or mask it using only classifier scores."""
+    if snippet_chars <= 0:
+        return ""
+    candidates = _snippet_candidates(text)
+    toxicity_scores = scorer.scores(candidates)
+    # Ties prefer passages long enough to fill the preview, then source order.
+    scored = list(zip(candidates, toxicity_scores, strict=True))
+    scored.sort(
+        key=lambda item: (
+            item[1],
+            len(item[0]) < snippet_chars,
+        )
+    )
+    candidate, toxicity = scored[0]
+    if toxicity >= toxicity_threshold:
+        return MASK[:snippet_chars]
+    return candidate[:snippet_chars]
+
+
+def source_toxicity_scorer(config: dict) -> DetoxifyToxicityScorer:
+    """Build the scorer configured for source-card snippets."""
+    return DetoxifyToxicityScorer(
+        model_name=config.get("model", "original"),
+        threshold=config.get("threshold", 0.9),
+        device=config.get("device", "cpu"),
+    )
 
 
 def deduplicate(docs: list[Document]) -> list[Document]:
@@ -311,7 +399,12 @@ def _heading(doc: Document) -> str:
     return f"{permalink} (posted {month})\n" if month else f"{permalink}\n"
 
 
-def describe_sources(docs: list[Document], snippet_chars: int = 200) -> list[dict]:
+def describe_sources(
+    docs: list[Document],
+    snippet_chars: int,
+    scorer: ToxicityScorer,
+    toxicity_threshold: float,
+) -> list[dict]:
     """Turn retrieved documents into the citations the stream reports.
 
     These are the threads retrieval actually selected, which is the whole point:
@@ -330,6 +423,9 @@ def describe_sources(docs: list[Document], snippet_chars: int = 200) -> list[dic
     Args:
         docs: Documents in final rank order.
         snippet_chars: How much of the discussion to include as a preview.
+        scorer: Required toxicity scorer for choosing a clean preview passage.
+        toxicity_threshold: Score at or above which a passage is masked when no
+            cleaner passage exists. Scoring failures propagate to the caller.
 
     Returns:
         One dict per distinct thread, in rank order.
@@ -348,7 +444,7 @@ def describe_sources(docs: list[Document], snippet_chars: int = 200) -> list[dic
         # Prefer the discussion, fall back to whatever followed the title, and
         # finally to the raw document -- an empty preview is worse than a rough
         # one.
-        snippet = " ".join((tree or rest or doc.page_content).split())[:snippet_chars]
+        snippet = source_snippet(tree or rest or doc.page_content, snippet_chars, scorer, toxicity_threshold)
         out.append(
             {
                 "permalink": permalink,
@@ -508,8 +604,10 @@ class RetrievalAugmentedGenerator:
         self.retrieval_cfg = self.config["rag"]["retrieval"]
         self.rerank_cfg = self.config["rag"]["rerank"]
         self.sources_cfg = self.config["rag"]["sources"]
+        self.source_toxicity_settings = self.sources_cfg["toxicity"]
         self.history_cfg = self.config["rag"]["history"]
         self.limits_cfg = self.config["rag"]["limits"]
+        self.source_toxicity = source_toxicity_scorer(self.source_toxicity_settings)
 
         # The collection name, embedding model and vector geometry are contracted
         # with services/db, not configured per service. Everything is checked
@@ -750,6 +848,18 @@ class RetrievalAugmentedGenerator:
                 f"conf/config.yaml: rag.limits.timeout_seconds must be a positive number, not "
                 f"{timeout_seconds!r}. Zero or less expires before retrieval starts, so every "
                 f"request answers with a timeout error."
+            )
+
+        snippet_chars = self.sources_cfg["snippet_chars"]
+        if not isinstance(snippet_chars, int) or isinstance(snippet_chars, bool) or snippet_chars < 0:
+            raise ValueError(
+                f"conf/config.yaml: rag.sources.snippet_chars must be a non-negative integer, not {snippet_chars!r}."
+            )
+
+        threshold = self.source_toxicity_settings.get("threshold", 0.9)
+        if not isinstance(threshold, int | float) or isinstance(threshold, bool) or not 0 <= threshold <= 1:
+            raise ValueError(
+                f"conf/config.yaml: rag.sources.toxicity.threshold must be between 0 and 1, not {threshold!r}."
             )
 
     def _validate_config(self) -> None:
@@ -1188,7 +1298,12 @@ class RetrievalAugmentedGenerator:
                 # Before the first token, so a client can render citations while the
                 # answer is still being written. Emitted even when empty, so the UI
                 # can distinguish "no sources" from "sources not sent yet".
-                sources = describe_sources(docs, self.sources_cfg["snippet_chars"])
+                sources = describe_sources(
+                    docs,
+                    self.sources_cfg["snippet_chars"],
+                    self.source_toxicity,
+                    self.source_toxicity.threshold,
+                )
                 yield json.dumps({"type": "sources", "sources": sources}) + "\n"
 
                 async for chunk in answer_chain.astream(

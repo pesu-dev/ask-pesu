@@ -97,7 +97,10 @@ keys still apply.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `sources.snippet_chars` | `200` | Length of the preview in each `sources` entry. Display only |
+| `sources.snippet_chars` | `200` | Length of the cleaned preview in each `sources` entry. Display only |
+| `sources.toxicity.model` | `original` | Detoxify model name passed to `Detoxify(...)` |
+| `sources.toxicity.device` | `cpu` | Device passed to Detoxify |
+| `sources.toxicity.threshold` | `0.9` | High-toxicity cutoff for avoiding or suppressing a source-preview passage |
 | `prompts.system_prompt` | — | The answer's system prompt |
 | `prompts.answer_prompt` | — | The final user turn: `{question}` and `{context}` |
 | `prompts.rewrite_prompt` | — | Rewrites a follow-up into a standalone question; takes `{chat_history}` |

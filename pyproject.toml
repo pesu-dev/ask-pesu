@@ -58,6 +58,7 @@ api = [
     "pytz>=2025.2",
     "langchain-classic>=1.0.3",
     "huggingface-hub>=1.30.0",
+    "detoxify>=0.5.2",
     # app/local_llm.py posts to ollama with it. It would arrive transitively
     # from langchain-core either way, but this service imports it directly.
     "httpx>=0.28.1",

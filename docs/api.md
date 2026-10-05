@@ -123,7 +123,10 @@ Each entry in `sources` describes one post:
 - **`permalink`**: the Reddit discussion. For a link post this is the discussion, not the linked
   article.
 - **`title`**: the post's title, or the permalink if the document has no title line.
-- **`snippet`**: the start of the comment tree, `sources.snippet_chars` characters long.
+- **`snippet`**: a preview from the comment tree, at most `sources.snippet_chars` characters long.
+  The API uses only Detoxify to select the lowest-toxicity passage. If its score meets or exceeds
+  `sources.toxicity.threshold`, the whole preview becomes `[masked]` (subject to the character limit).
+  Model-loading or inference failures fail the request; there is no word-list or unscored fallback.
 - **`created_utc`**: when the post was made, as a Unix timestamp, or `null`. This is the post's
   time, not the reply's.
 
