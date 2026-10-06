@@ -29,6 +29,8 @@ cloudpickle==3.1.2
     # via joblib
 defusedxml==0.7.1
     # via praw
+detoxify==0.5.2
+    # via ask-pesu (pyproject.toml)
 distro==1.9.0
     # via langsmith
 fastapi==0.141.1
@@ -218,6 +220,8 @@ scipy==1.18.1
     #   sentence-transformers
 sentence-transformers==6.0.1
     # via ask-pesu (pyproject.toml)
+sentencepiece==0.2.2
+    # via detoxify
 setuptools==84.0.0
     # via torch
 shellingham==1.5.4
@@ -243,6 +247,7 @@ tokenizers==0.23.2
 torch==2.14.0+cpu
     # via
     #   ask-pesu (pyproject.toml:cpu)
+    #   detoxify
     #   sentence-transformers
 tqdm==4.70.0
     # via
@@ -251,7 +256,9 @@ tqdm==4.70.0
     #   sentence-transformers
     #   transformers
 transformers==5.16.1
-    # via sentence-transformers
+    # via
+    #   detoxify
+    #   sentence-transformers
 truststore==0.10.4
     # via
     #   httpcore2
