@@ -142,6 +142,13 @@ rag:
     # Characters of the discussion shown as a preview under each title.
     # Presentation only -- it changes nothing the model reads and nothing ranks.
     snippet_chars: 200
+    # Detoxify scores candidate passages before one is shown in a source card.
+    # The threshold is deliberately high: ordinary criticism should still be
+    # shown, while extreme abusive passages are avoided or suppressed.
+    toxicity:
+      model: "original"
+      device: "cpu"
+      threshold: 0.9
 
   # The three prompts the pipeline uses. `{question}`, `{context}`, `{input}` and
   # `{chat_history}` are filled in by app/rag.py; renaming one breaks the chain.
@@ -196,6 +203,10 @@ rag:
 
       Everything else -- definitions, rules, how things work -- does not go out of date this way.
       State it without dates or caveats about age, and do not set an answer aside because its thread is old.
+
+      Threads may contain profanity, insults or slurs. Preserve the substance, including strong criticism,
+      but do not quote, paraphrase or imitate abusive wording. For example, keep "the hostel is terrible"
+      as criticism, but remove the profanity or insult around it.
 
       If the context does not contain the answer, respond with "I'm sorry, I don't have that information."
       If asked anything unrelated to PES University, politely decline.
